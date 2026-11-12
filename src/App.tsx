@@ -3056,8 +3056,9 @@ function Home({
                   avec l’adresse IP et l’adresse matérielle ci-dessous.
                 </li>
                 <li>
-                  Enregistre. Une fois le bail confirmé, l’adresse reste
-                  attribuée à ce Pi. Reviens ici et actualise pour contrôler.
+                  Enregistre le bail et vérifie sa présence dans l’application
+                  Free. Ici, « Actualiser » relit l’IP active, mais ne peut pas
+                  vérifier l’état du bail dans la Freebox.
                 </li>
               </ol>
               <div className="pi-network-values">
@@ -3111,7 +3112,7 @@ function Home({
             </details>
           ) : (
             <p className="pi-network-note">
-              Actualise l’état du Pi pour vérifier son adresse et afficher les
+              Actualise l’état du Pi pour relire son adresse et afficher les
               informations nécessaires à sa réservation dans la Freebox.
             </p>
           )}

@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.21
+# Monde Ensemble 0.18.22
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -92,7 +92,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Le paquet Windows x64 0.18.21 a été produit par compilation croisée depuis Mac, mais doit encore être lancé sur Windows pour valider son fonctionnement réel. La préparation d’un support Pi doit être vérifiée avec une carte/SSD de test et un Raspberry Pi physique ; le paquet ARM64 Linux ne valide pas Raspberry Pi OS Lite ni son premier démarrage.
+Le paquet Windows x64 est produit par compilation croisée depuis Mac, mais doit encore être lancé sur Windows pour valider son fonctionnement réel. La préparation d’un support Pi doit être vérifiée avec une carte/SSD de test et un Raspberry Pi physique ; le paquet ARM64 Linux ne valide pas Raspberry Pi OS Lite ni son premier démarrage.
 
 ## Principes de sécurité
 

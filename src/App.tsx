@@ -1400,7 +1400,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.5
+          MONDE ENSEMBLE <span>·</span> 0.18.6
         </div>
       </aside>
 
@@ -3284,15 +3284,16 @@ function Compatibility({
         <span>!</span>
         <p>
           <strong>
-            Les mises à jour coordonnées sont disponibles pour les serveurs Pi
+            Les mises à jour coordonnées protègent les serveurs locaux et Pi
             gérés.
           </strong>
           <br />
-          Après arrêt, le bouton « Démarrer » vérifie Java, Bedrock, Paper,
-          Geyser et Floodgate. Il applique le groupe uniquement si le profil est
-          géré, sauvegardé et vérifié au redémarrage; sinon il conserve la
-          version présente. La mise à jour des serveurs locaux Mac/Windows n’est
-          pas encore prise en charge.
+          Au prochain démarrage, l’application vérifie ensemble Java, Bedrock,
+          Paper, Geyser et Floodgate. Elle ne met à jour qu’un profil reconnu,
+          compatible et sauvegardable, puis vérifie que le serveur redémarre.
+          Si un contrôle échoue, la copie précédente reste intacte et le serveur
+          garde la version actuelle. Le bouton « Vérifier une mise à jour sûre »
+          affiche les versions sans rien modifier.
         </p>
       </div>
       <div className="source-note">

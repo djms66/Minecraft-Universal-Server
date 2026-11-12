@@ -10,7 +10,7 @@ use mdns_sd::{ServiceDaemon, ServiceEvent};
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
+use sha2::{Digest, Sha256, Sha512};
 use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
@@ -207,6 +207,15 @@ pub struct PaperPluginSuggestion {
 }
 
 #[derive(Serialize)]
+pub struct PaperPluginInstallResult {
+    pub server_path: String,
+    pub backup_path: String,
+    pub plugin_name: String,
+    pub plugin_version: String,
+    pub sha512: String,
+}
+
+#[derive(Serialize)]
 pub struct PiWhitelistStatus {
     pub enabled: bool,
     pub entries: String,
@@ -296,6 +305,19 @@ struct RemoveDirectoryOnDrop(PathBuf);
 impl Drop for RemoveDirectoryOnDrop {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+struct RemoveDirectoryUnlessKept {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl Drop for RemoveDirectoryUnlessKept {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = fs::remove_dir_all(&self.path);
+        }
     }
 }
 
@@ -402,7 +424,7 @@ pub fn search_paper_plugins(
     let client = client()?;
     let facets = serde_json::to_string(&[
         vec![format!("versions:{minecraft_version}")],
-        vec!["project_type:plugin".to_string()],
+        vec!["all_project_types:plugin".to_string()],
     ])
     .map_err(|error| error.to_string())?;
     let response: serde_json::Value = client
@@ -434,7 +456,11 @@ pub fn search_paper_plugins(
         if project_id.len() > 64 || !project_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
             continue;
         }
-        if hit.get("project_type").and_then(serde_json::Value::as_str) != Some("plugin") {
+        if !hit
+            .get("all_project_types")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|types| types.iter().any(|kind| kind.as_str() == Some("plugin")))
+        {
             continue;
         }
         let versions: Vec<serde_json::Value> = client
@@ -526,6 +552,363 @@ pub fn search_paper_plugins(
         }
     }
     Ok(suggestions)
+}
+
+/// Adds a Modrinth plugin to a complete sibling copy of a stopped, managed
+/// local server. The original folder is never changed. Only exact-version,
+/// listed Paper releases without required dependencies are accepted.
+pub fn install_paper_plugin_copy(
+    server_dir: &Path,
+    project_id: &str,
+    version_number: &str,
+    progress: impl Fn(&str, u8),
+) -> Result<PaperPluginInstallResult, String> {
+    if project_id.is_empty()
+        || project_id.len() > 64
+        || !project_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || version_number.is_empty()
+        || version_number.len() > 80
+        || version_number.chars().any(char::is_control)
+    {
+        return Err("Le plugin sélectionné n’a pas une référence valide.".into());
+    }
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier de serveur local enregistré est introuvable.".to_string())?;
+    let profile = local_profile(&server_dir)?;
+    require_local_rcon(&profile)?;
+    if rcon_command(&profile, "list").is_ok() {
+        return Err("Arrête le serveur depuis son tableau de bord avant d’ajouter un plugin. Les joueurs et le monde restent connectés.".into());
+    }
+    let java_port = profile
+        .get("java_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .unwrap_or_default();
+    let bedrock_port = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .unwrap_or_default();
+    if java_port == 0
+        || bedrock_port == 0
+        || !tcp_port_available(java_port)
+        || !tcp_port_available(bedrock_port)
+        || !udp_port_available(bedrock_port)
+    {
+        return Err(
+            "Un port Minecraft est actif. L’installation est bloquée sans toucher au serveur."
+                .into(),
+        );
+    }
+    let minecraft_version = profile
+        .get("minecraft_java")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "La version Java du serveur est inconnue; ajout bloqué.".to_string())?
+        .to_string();
+    let valid_version = Regex::new(r"^\d+\.\d+(?:\.\d+)?$").unwrap();
+    if !valid_version.is_match(&minecraft_version) {
+        return Err("La version Java du serveur n’est pas reconnue; ajout bloqué.".into());
+    }
+
+    let plugins_dir = server_dir.join("plugins");
+    let managed = profile
+        .get("managed_plugins")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let managed_files: HashSet<String> = managed
+        .iter()
+        .filter_map(|entry| entry.get("filename")?.as_str().map(str::to_string))
+        .collect();
+    for entry in &managed {
+        let filename = entry
+            .get("filename")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                "Le profil des plugins gérés est incomplet; le serveur reste intact.".to_string()
+            })?;
+        if !valid_plugin_filename(filename) {
+            return Err("Le profil contient un nom de plugin invalide; ajout bloqué sans modifier le serveur.".into());
+        }
+    }
+    for entry in fs::read_dir(&plugins_dir).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        if entry.file_type().map_err(io_error)?.is_file()
+            && entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jar")
+        {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            if !matches!(
+                filename.as_str(),
+                "Geyser-Spigot.jar" | "Floodgate-Spigot.jar"
+            ) && !managed_files.contains(&filename)
+            {
+                return Err(format!(
+                    "Le dossier contient déjà le plugin non géré {filename}; il reste intact et l’ajout est bloqué."
+                ));
+            }
+        }
+    }
+    for entry in &managed {
+        let filename = entry
+            .get("filename")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                "Le profil des plugins gérés est incomplet; le serveur reste intact.".to_string()
+            })?;
+        let expected = entry
+            .get("sha512")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| {
+                "L’empreinte d’un plugin géré manque; le serveur reste intact.".to_string()
+            })?;
+        if hash_file_sha512(&plugins_dir.join(filename)).as_deref() != Some(expected) {
+            return Err(format!(
+                "Le plugin {filename} a changé depuis son installation; ajout bloqué pour protéger ce serveur."
+            ));
+        }
+    }
+
+    progress("Vérification de la version exacte du plugin…", 5);
+    let client = client()?;
+    let versions: Vec<serde_json::Value> = client
+        .get(format!(
+            "https://api.modrinth.com/v2/project/{project_id}/version"
+        ))
+        .query(&[
+            ("loaders", "[\"paper\"]"),
+            (
+                "game_versions",
+                format!("[\"{minecraft_version}\"]").as_str(),
+            ),
+            ("include_changelog", "false"),
+        ])
+        .send()
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(network_error)?
+        .json()
+        .map_err(|error| format!("Réponse de version Modrinth illisible : {error}"))?;
+    let version = versions
+        .into_iter()
+        .find(|version| {
+            version.get("version_number").and_then(serde_json::Value::as_str)
+                == Some(version_number)
+                && version.get("status").and_then(serde_json::Value::as_str) == Some("listed")
+                && version.get("version_type").and_then(serde_json::Value::as_str) == Some("release")
+                && version.get("loaders").and_then(serde_json::Value::as_array).is_some_and(|items| items.iter().any(|item| item.as_str() == Some("paper")))
+                && version.get("game_versions").and_then(serde_json::Value::as_array).is_some_and(|items| items.iter().any(|item| item.as_str() == Some(minecraft_version.as_str())))
+                && matches!(version.get("environment").and_then(serde_json::Value::as_str), Some("server_only" | "server_only_client_optional" | "dedicated_server_only"))
+        })
+        .ok_or_else(|| "Le catalogue ne confirme plus cette version exacte de Paper/Minecraft. Aucun fichier n’a été modifié.".to_string())?;
+    if version
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|dependencies| {
+            dependencies.iter().any(|dependency| {
+                dependency
+                    .get("dependency_type")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("required")
+            })
+        })
+    {
+        return Err("Cette version réclame une dépendance obligatoire qui n’est pas encore gérée par l’application; aucun fichier n’a été modifié.".into());
+    }
+    let files = version
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Le catalogue n’a pas fourni le fichier du plugin.".to_string())?;
+    let file = files
+        .iter()
+        .find(|file| file.get("primary").and_then(serde_json::Value::as_bool) == Some(true))
+        .or_else(|| files.first())
+        .ok_or_else(|| "Le catalogue n’a pas fourni de fichier principal.".to_string())?;
+    let filename = file
+        .get("filename")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Le nom du fichier du plugin est invalide.".to_string())?;
+    let url = file
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .filter(|url| url.starts_with("https://cdn.modrinth.com/"))
+        .ok_or_else(|| "Le lien de téléchargement Modrinth n’est pas vérifiable.".to_string())?;
+    let expected_sha512 = file
+        .get("hashes")
+        .and_then(|hashes| hashes.get("sha512"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|hash| hash.len() == 128 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| "Le catalogue ne fournit pas d’empreinte SHA-512 valide.".to_string())?;
+    let size = file
+        .get("size")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    if !valid_plugin_filename(filename) || size == 0 || size > 100 * 1024 * 1024 {
+        return Err("Le fichier proposé n’est pas un plugin JAR de taille sûre; aucun fichier n’a été modifié.".into());
+    }
+    let destination_name = filename.to_string();
+    if managed_files.contains(&destination_name) || plugins_dir.join(&destination_name).exists() {
+        return Err("Un fichier porte déjà ce nom. Le serveur reste intact; aucun remplacement n’est autorisé.".into());
+    }
+
+    let parent = server_dir
+        .parent()
+        .ok_or_else(|| "Le dossier serveur n’a pas d’emplacement de copie valide.".to_string())?;
+    let source_size = folder_size(&server_dir)?;
+    let free = fs2::available_space(parent).map_err(io_error)?;
+    if free
+        < source_size
+            .saturating_mul(2)
+            .saturating_add(size)
+            .saturating_add(512 * 1024 * 1024)
+    {
+        return Err("L’espace libre ne suffit pas pour garder l’original, une sauvegarde et une nouvelle copie complète. Aucun fichier n’a été modifié.".into());
+    }
+    let id = Uuid::new_v4().simple().to_string();
+    let backup_path = parent
+        .join("sauvegardes-monde-ensemble")
+        .join(format!("avant-plugin-{id}.tar.gz"));
+    progress("Sauvegarde complète avant ajout…", 12);
+    create_backup(&server_dir, &backup_path, true, |step, percent| {
+        progress(step, 12 + percent.saturating_mul(20) / 100)
+    })?;
+
+    progress("Téléchargement et contrôle SHA-512…", 35);
+    let response = client
+        .get(url)
+        .send()
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(network_error)?;
+    if !response.url().scheme().eq("https")
+        || !response
+            .url()
+            .host_str()
+            .is_some_and(|host| host == "cdn.modrinth.com")
+    {
+        return Err("Le téléchargement a été redirigé hors du CDN officiel Modrinth; aucun plugin installé.".into());
+    }
+    if response
+        .content_length()
+        .is_some_and(|length| length > size)
+    {
+        return Err("Le téléchargement dépasse la taille annoncée; aucun plugin installé.".into());
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    response
+        .take(size.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() as u64 != size {
+        return Err(
+            "La taille téléchargée ne correspond pas au catalogue; aucun plugin installé.".into(),
+        );
+    }
+    let actual_sha512 = format!("{:x}", Sha512::digest(&bytes));
+    if !actual_sha512.eq_ignore_ascii_case(expected_sha512) {
+        return Err("Le contrôle SHA-512 du plugin a échoué; aucun plugin installé.".into());
+    }
+    let jar = zip::ZipArchive::new(io::Cursor::new(bytes.as_slice())).map_err(|_| {
+        "Le fichier téléchargé n’est pas une archive JAR valide; aucun plugin installé.".to_string()
+    })?;
+    if !jar
+        .file_names()
+        .any(|name| name == "plugin.yml" || name == "paper-plugin.yml")
+    {
+        return Err(
+            "Le JAR ne contient pas de déclaration Paper reconnue; aucun plugin installé.".into(),
+        );
+    }
+
+    progress("Préparation d’une nouvelle copie du serveur…", 62);
+    let staging = parent.join(format!(".Monde-Ensemble-{id}.preparing"));
+    fs::create_dir(&staging).map_err(io_error)?;
+    let _cleanup_staging = RemoveDirectoryOnDrop(staging.clone());
+    copy_server_tree(&server_dir, &staging, &progress)?;
+    if hash_regular_file(&server_dir.join("monde-ensemble-profile.json"))
+        != hash_regular_file(&staging.join("monde-ensemble-profile.json"))
+        || hash_regular_file(&server_dir.join("paper.jar"))
+            != hash_regular_file(&staging.join("paper.jar"))
+    {
+        return Err("Le serveur a changé pendant la préparation; la copie candidate est annulée et l’original reste intact.".into());
+    }
+    let staged_plugin = staging.join("plugins").join(&destination_name);
+    let mut plugin_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staged_plugin)
+        .map_err(io_error)?;
+    plugin_file.write_all(&bytes).map_err(io_error)?;
+    plugin_file.sync_all().map_err(io_error)?;
+    let staged_hash = hash_file_sha512(&staged_plugin)
+        .ok_or_else(|| "Le contrôle du plugin dans la nouvelle copie a échoué.".to_string())?;
+    if !staged_hash.eq_ignore_ascii_case(expected_sha512) {
+        return Err(
+            "Le contrôle du plugin dans la nouvelle copie a échoué; l’original reste intact."
+                .into(),
+        );
+    }
+    let mut next_profile = profile;
+    let object = next_profile
+        .as_object_mut()
+        .ok_or_else(|| "Le profil serveur est invalide.".to_string())?;
+    let mut next_managed = managed;
+    next_managed.push(serde_json::json!({
+        "project_id": project_id,
+        "version": version_number,
+        "filename": destination_name,
+        "sha512": actual_sha512,
+        "minecraft_java": minecraft_version,
+        "installed_at": Utc::now().to_rfc3339()
+    }));
+    object.insert(
+        "managed_plugins".into(),
+        serde_json::Value::Array(next_managed),
+    );
+    fs::write(
+        staging.join("monde-ensemble-profile.json"),
+        serde_json::to_vec_pretty(&next_profile).map_err(|error| error.to_string())?,
+    )
+    .map_err(io_error)?;
+    if staging.join("serveur.pid").exists() {
+        fs::remove_file(staging.join("serveur.pid")).map_err(io_error)?;
+    }
+    let published = parent.join(format!("Monde-Ensemble-avec-plugin-{id}"));
+    fs::create_dir(&published).map_err(|error| {
+        format!("Impossible de réserver un nouveau dossier candidat sans écraser un dossier existant : {error}")
+    })?;
+    let mut cleanup_published = RemoveDirectoryUnlessKept {
+        path: published.clone(),
+        keep: false,
+    };
+    for entry in fs::read_dir(&staging).map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let target = published.join(entry.file_name());
+        fs::rename(entry.path(), target).map_err(|error| {
+            format!("La copie candidate n’a pas pu être publiée entièrement; l’original reste intact : {error}")
+        })?;
+    }
+    fs::set_permissions(
+        &published,
+        fs::metadata(&server_dir).map_err(io_error)?.permissions(),
+    )
+    .map_err(io_error)?;
+    fs::remove_dir(&staging).map_err(io_error)?;
+    cleanup_published.keep = true;
+    progress(
+        "Copie candidate publiée; le serveur d’origine reste intact.",
+        100,
+    );
+    Ok(PaperPluginInstallResult {
+        server_path: published.display().to_string(),
+        backup_path: backup_path.display().to_string(),
+        plugin_name: destination_name,
+        plugin_version: version_number.to_string(),
+        sha512: actual_sha512,
+    })
 }
 
 fn flatten_pi_os_entries(
@@ -4560,7 +4943,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.15.0")
+        .user_agent("MondeEnsemble/0.16.0")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()
@@ -4608,6 +4991,20 @@ fn hash_regular_file(path: &Path) -> Option<String> {
         .ok()
         .filter(|metadata| metadata.file_type().is_file())
         .and_then(|_| hash_file(path).ok())
+}
+
+fn hash_file_sha512(path: &Path) -> Option<String> {
+    let mut file = File::open(path).ok()?;
+    let mut hasher = Sha512::new();
+    let mut buffer = [0u8; 128 * 1024];
+    loop {
+        let count = file.read(&mut buffer).ok()?;
+        if count == 0 {
+            break;
+        }
+        hasher.update(&buffer[..count]);
+    }
+    Some(format!("{:x}", hasher.finalize()))
 }
 
 fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value) -> bool {
@@ -4680,6 +5077,14 @@ fn safe_version(value: &str) -> bool {
         && value
             .chars()
             .all(|ch| ch.is_ascii_digit() || ch == '.' || ch == '-')
+}
+
+fn valid_plugin_filename(value: &str) -> bool {
+    value.ends_with(".jar")
+        && value.len() <= 160
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-+ ".contains(&byte))
 }
 
 fn network_error(error: reqwest::Error) -> String {

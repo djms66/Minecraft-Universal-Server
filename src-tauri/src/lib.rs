@@ -566,6 +566,30 @@ async fn search_paper_plugins(
 }
 
 #[tauri::command]
+async fn install_paper_plugin_copy(
+    server_path: String,
+    project_id: String,
+    version_number: String,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::PaperPluginInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::install_paper_plugin_copy(
+            std::path::Path::new(&server_path),
+            &project_id,
+            &version_number,
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn get_pi_os_recommendation() -> Result<engine::PiOsRecommendation, String> {
     tauri::async_runtime::spawn_blocking(engine::pi_os_recommendation)
         .await
@@ -938,6 +962,7 @@ pub fn run() {
             prepare_pi_sd,
             get_compatibility,
             search_paper_plugins,
+            install_paper_plugin_copy,
             get_pi_os_recommendation,
             create_server,
             inspect_local_server,

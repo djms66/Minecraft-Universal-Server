@@ -51,6 +51,13 @@ type PaperPluginSuggestion = {
   project_url: string;
   required_dependencies: number;
 };
+type PaperPluginInstallResult = {
+  server_path: string;
+  backup_path: string;
+  plugin_name: string;
+  plugin_version: string;
+  sha512: string;
+};
 type DiscoveredPi = { host: string; address: string; model: string };
 type PiBootTarget = {
   id: string;
@@ -85,7 +92,7 @@ type PiInstallation = {
   serverFolder: string;
   address: string;
 };
-type LocalInstallation = { serverPath: string };
+type LocalInstallation = { serverPath: string; previousServerPath?: string };
 type LocalStartResult = { server_path: string; message: string };
 type LocalServerStatus = {
   running: boolean;
@@ -190,6 +197,9 @@ function App() {
     });
   const [localServerStatus, setLocalServerStatus] =
     useState<LocalServerStatus | null>(null);
+  const [pluginInstallError, setPluginInstallError] = useState("");
+  const [pluginInstallResult, setPluginInstallResult] =
+    useState<PaperPluginInstallResult | null>(null);
   const [localWhitelistStatus, setLocalWhitelistStatus] =
     useState<LocalWhitelistStatus | null>(null);
   const [localPlayerName, setLocalPlayerName] = useState("");
@@ -891,7 +901,10 @@ function App() {
         progress: progressChannel(),
       });
       if (result.server_path !== localInstallation.serverPath) {
-        setLocalInstallation({ serverPath: result.server_path });
+        setLocalInstallation({
+          serverPath: result.server_path,
+          previousServerPath: localInstallation.previousServerPath,
+        });
       }
       setLocalActionMessage(result.message);
       setLocalServerStatus(
@@ -903,6 +916,86 @@ function App() {
       setLocalStatusError(String(error));
     } finally {
       setOperationProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const installPaperPlugin = async (
+    projectId: string,
+    versionNumber: string,
+  ) => {
+    if (!localInstallation || localServerStatus?.running) return;
+    setBusy(true);
+    setPluginInstallError("");
+    setPluginInstallResult(null);
+    setOperationProgress({
+      step: "Sauvegarde et préparation d’une copie avec le plugin…",
+      percent: 2,
+    });
+    try {
+      const result = await invoke<PaperPluginInstallResult>(
+        "install_paper_plugin_copy",
+        {
+          serverPath: localInstallation.serverPath,
+          projectId,
+          versionNumber,
+          progress: progressChannel(),
+        },
+      );
+      setPluginInstallResult(result);
+      setLocalInstallation({
+        serverPath: result.server_path,
+        previousServerPath:
+          localInstallation.previousServerPath || localInstallation.serverPath,
+      });
+      setLocalServerStatus(
+        await invoke<LocalServerStatus>("inspect_local_server", {
+          serverPath: result.server_path,
+        }),
+      );
+    } catch (error) {
+      setPluginInstallError(String(error));
+    } finally {
+      setOperationProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const restorePreviousLocalCopy = async () => {
+    if (!localInstallation?.previousServerPath || localServerStatus?.running)
+      return;
+    setBusy(true);
+    const candidate = localInstallation.serverPath;
+    const previous = localInstallation.previousServerPath;
+    try {
+      const candidateStatus = await invoke<LocalServerStatus>(
+        "inspect_local_server",
+        { serverPath: candidate },
+      );
+      if (candidateStatus.running) {
+        setLocalServerStatus(candidateStatus);
+        setLocalStatusError(
+          "Arrête d’abord le serveur candidat avant de revenir à la copie précédente.",
+        );
+        return;
+      }
+      const status = await invoke<LocalServerStatus>("inspect_local_server", {
+        serverPath: previous,
+      });
+      setLocalInstallation({
+        serverPath: previous,
+        previousServerPath: candidate,
+      });
+      setLocalServerStatus(status);
+      setLocalStatusError("");
+      setLocalActionMessage(
+        "Le dossier précédent est de nouveau sélectionné. L’autre copie reste conservée.",
+      );
+    } catch (error) {
+      setLocalStatusError(
+        `Le dossier précédent n’est pas accessible : ${error}`,
+      );
+    } finally {
       setBusy(false);
     }
   };
@@ -1108,7 +1201,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.15.0
+          MONDE ENSEMBLE <span>·</span> 0.16.0
         </div>
       </aside>
 
@@ -1703,6 +1796,16 @@ function App() {
               piUpdateCheck={piUpdateCheck}
               piUpdateError={piUpdateError}
               busy={busy || checkingPiUpdate}
+              onInstallPlugin={installPaperPlugin}
+              pluginInstallError={pluginInstallError}
+              pluginInstallResult={pluginInstallResult}
+              canInstallPlugin={Boolean(
+                localInstallation &&
+                !localServerStatus?.running &&
+                localServerStatus?.minecraft_java,
+              )}
+              onRestorePreviousLocal={restorePreviousLocalCopy}
+              progress={operationProgress}
               onRefresh={() => refreshPiStatus(true)}
               onCheckUpdates={checkPiUpdate}
             />
@@ -3183,6 +3286,12 @@ function Advanced({
   piUpdateCheck,
   piUpdateError,
   busy,
+  onInstallPlugin,
+  pluginInstallError,
+  pluginInstallResult,
+  canInstallPlugin,
+  onRestorePreviousLocal,
+  progress,
   onRefresh,
   onCheckUpdates,
 }: {
@@ -3194,6 +3303,12 @@ function Advanced({
   piUpdateCheck: PiUpdateCheck | null;
   piUpdateError: string;
   busy: boolean;
+  onInstallPlugin: (projectId: string, versionNumber: string) => void;
+  pluginInstallError: string;
+  pluginInstallResult: PaperPluginInstallResult | null;
+  canInstallPlugin: boolean;
+  onRestorePreviousLocal: () => void;
+  progress: ProgressMessage | null;
   onRefresh: () => void;
   onCheckUpdates: () => void;
 }) {
@@ -3203,8 +3318,7 @@ function Advanced({
   >([]);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginError, setPluginError] = useState("");
-  const pluginMinecraftVersion =
-    localServerStatus?.minecraft_java || piServerStatus?.minecraft_java || "";
+  const pluginMinecraftVersion = localServerStatus?.minecraft_java || "";
   const searchPlugins = async () => {
     setPluginLoading(true);
     setPluginError("");
@@ -3361,12 +3475,13 @@ function Advanced({
         </div>
       )}
       <section className="operation-card advanced-log-card">
-        <div className="eyebrow">CATALOGUE PRUDENT · PAPER</div>
-        <h3>Extensions annoncées compatibles</h3>
+        <div className="eyebrow">PLUGINS PAPER · COPIE LOCALE</div>
+        <h3>Ajouter sans toucher à l’original</h3>
         <p className="path-note">
-          Recherche parmi les plugins Modrinth dont une version publiée cible
-          exactement Minecraft Java {pluginMinecraftVersion || "—"} et Paper.
-          Cette consultation ne modifie pas le serveur.
+          Recherche les plugins annoncés pour Minecraft Java{" "}
+          {pluginMinecraftVersion || "—"} et Paper. L’ajout crée une sauvegarde
+          puis une copie complète distincte. Il faut démarrer cette copie pour
+          vérifier le plugin.
         </p>
         <div className="pi-actions">
           <input
@@ -3392,9 +3507,13 @@ function Advanced({
             {pluginLoading ? "Recherche…" : "Chercher"}
           </button>
         </div>
+        {progress && (
+          <OperationStatus progress={progress} result={null} error="" />
+        )}
         {!pluginMinecraftVersion && (
           <p className="path-note">
-            Ouvre d’abord le tableau du serveur pour charger sa version.
+            Ouvre le tableau d’un serveur local géré pour charger sa version.
+            L’ajout Pi sera pris en charge dans une prochaine étape.
           </p>
         )}
         {pluginError && <p className="pi-error">{pluginError}</p>}
@@ -3415,6 +3534,21 @@ function Advanced({
                       dépendance(s) obligatoire(s).
                     </small>
                   )}
+                  <button
+                    className="button secondary"
+                    onClick={() =>
+                      onInstallPlugin(plugin.project_id, plugin.version)
+                    }
+                    disabled={
+                      !canInstallPlugin ||
+                      busy ||
+                      plugin.required_dependencies > 0
+                    }
+                  >
+                    {plugin.required_dependencies > 0
+                      ? "Dépendance obligatoire non gérée"
+                      : "Préparer une copie avec ce plugin"}
+                  </button>
                 </div>
                 <a href={plugin.project_url} target="_blank" rel="noreferrer">
                   Détails
@@ -3428,11 +3562,46 @@ function Advanced({
             Aucun résultat affiché avant une recherche.
           </p>
         )}
+        {pluginInstallError && (
+          <p className="pi-error" role="alert">
+            {pluginInstallError}
+          </p>
+        )}
+        {pluginInstallResult && (
+          <div className="pi-update-check ready" aria-live="polite">
+            <strong>Copie candidate créée et contrôlée</strong>
+            <span>
+              {pluginInstallResult.plugin_name} · version{" "}
+              {pluginInstallResult.plugin_version}
+            </span>
+            <span>
+              Le serveur utilise maintenant cette nouvelle copie. Démarre-la
+              depuis « Mon monde » pour vérifier son lancement. L’original et sa
+              sauvegarde restent conservés.
+            </span>
+            <span>Sauvegarde : {pluginInstallResult.backup_path}</span>
+          </div>
+        )}
+        {localInstallation?.previousServerPath && (
+          <div className="pi-actions">
+            <button
+              className="button secondary"
+              onClick={onRestorePreviousLocal}
+              disabled={busy || Boolean(localServerStatus?.running)}
+            >
+              Revenir à la copie précédente
+            </button>
+            <small>
+              L’autre copie est conservée. Arrête d’abord le serveur candidat
+              s’il est démarré.
+            </small>
+          </div>
+        )}
         <p className="path-note">
-          Une version marquée compatible par son éditeur ne garantit pas son
-          comportement avec Geyser, les joueurs Bedrock ou les consoles.
-          L’installation automatique n’est pas activée tant que les dépendances
-          et le retour arrière après démarrage ne sont pas entièrement gérés.
+          La compatibilité déclarée ne garantit pas le comportement avec Geyser,
+          les joueurs Bedrock ou les consoles. Un plugin tiers peut empêcher le
+          démarrage; dans ce cas l’original reste disponible. Les mises à jour
+          automatiques restent bloquées tant que ce plugin est présent.
         </p>
       </section>
       <div className="notice amber">

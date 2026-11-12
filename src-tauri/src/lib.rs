@@ -1,7 +1,9 @@
 use serde::Serialize;
 use std::process::Command;
+use tauri::Manager;
 
 mod engine;
+mod pi_imager;
 
 /// Hardware and operating-system facts used to choose a safe installation path.
 #[derive(Serialize)]
@@ -98,6 +100,15 @@ async fn discover_pi(username: String) -> Result<Vec<engine::DiscoveredPi>, Stri
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn discover_new_pi(expected_hostname: String) -> Result<Vec<engine::DiscoveredPi>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::discover_new_pi("minecraft", &expected_hostname)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 /// Lists likely removable SD/USB media while excluding the host's system disk.
 /// The actual imaging step must repeat these safety checks immediately before
 /// it writes, and must keep Raspberry Pi Imager's system-drive protection on.
@@ -112,6 +123,79 @@ fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                 .into(),
         ),
     }
+}
+
+#[tauri::command]
+async fn prepare_pi_sd(
+    app: tauri::AppHandle,
+    target_id: String,
+    target_name: String,
+    target_size_bytes: u64,
+    image_url: String,
+    image_sha256: String,
+    wifi_ssid: String,
+    wifi_password: String,
+    wifi_country: String,
+    confirm_erase: bool,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<pi_imager::PiFlashResult, String> {
+    if !confirm_erase {
+        return Err("Confirme l’effacement du support sélectionné pour continuer. Aucun support n’a été modifié.".into());
+    }
+    let app_data = app.path().app_data_dir().map_err(|error| {
+        format!("Le dossier sécurisé de l’application est inaccessible : {error}")
+    })?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let current_recommendation = engine::pi_os_recommendation()?;
+        if image_url != current_recommendation.image_url
+            || image_sha256 != current_recommendation.download_sha256
+        {
+            return Err("Le catalogue Raspberry Pi a changé depuis l’affichage. Actualise la recommandation avant d’écrire la carte.".into());
+        }
+        let targets = discover_pi_boot_targets()?;
+        let target = targets
+            .into_iter()
+            .find(|target| {
+                target.id == target_id
+                    && target.name == target_name
+                    && target.size_bytes == target_size_bytes
+            })
+            .ok_or_else(|| "Le support a changé ou n’est plus détecté. Relance la détection avant de continuer.".to_string())?;
+        let required_bytes = ((current_recommendation.image_size_gb
+            + current_recommendation.initial_server_storage_gb)
+            .ceil()
+            * 1_000_000_000.0) as u64;
+        if target.size_bytes < required_bytes {
+            return Err(format!(
+                "{} ne laisse pas assez de place. Il faut au moins {} Go. Aucun support n’a été modifié.",
+                target.name,
+                required_bytes.div_ceil(1_000_000_000)
+            ));
+        }
+        let target_device = match std::env::consts::OS {
+            "macos" => format!("/dev/{}", target.id),
+            "windows" => format!(r"\\.\{}", target.id),
+            "linux" => target.id.clone(),
+            _ => return Err("Ce système ne peut pas préparer le support Raspberry Pi.".into()),
+        };
+        pi_imager::flash_pi_os(
+            &app_data,
+            &target_device,
+            &image_url,
+            &image_sha256,
+            &wifi_ssid,
+            &wifi_password,
+            &wifi_country,
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
@@ -599,7 +683,9 @@ pub fn run() {
             inspect_system,
             probe_ssh,
             discover_pi,
+            discover_new_pi,
             discover_pi_boot_targets,
+            prepare_pi_sd,
             get_compatibility,
             get_pi_os_recommendation,
             create_server,

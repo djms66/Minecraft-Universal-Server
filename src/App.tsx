@@ -47,6 +47,12 @@ type PiOsRecommendation = {
   initial_server_storage_gb: number;
   checked_at: string;
 };
+type PiFlashResult = {
+  detail: string;
+  log_path: string;
+  imager_version: string;
+  hostname: string;
+};
 type PiInstallation = {
   host: string;
   username: string;
@@ -88,6 +94,10 @@ function App() {
   const [piBootTargets, setPiBootTargets] = useState<PiBootTarget[]>([]);
   const [piBootScanState, setPiBootScanState] = useState<"idle" | "scanning" | "done">("idle");
   const [piBootScanError, setPiBootScanError] = useState("");
+  const [piWifiSsid, setPiWifiSsid] = useState("");
+  const [piWifiPassword, setPiWifiPassword] = useState("");
+  const [piWifiCountry, setPiWifiCountry] = useState("FR");
+  const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
   const [piOsRecommendation, setPiOsRecommendation] = useState<PiOsRecommendation | null>(null);
   const [piOsLoading, setPiOsLoading] = useState(false);
   const [piOsError, setPiOsError] = useState("");
@@ -314,13 +324,53 @@ function App() {
     }
   };
 
-  const installPi = async () => {
+  const flashPiOs = async (device: PiBootTarget) => {
+    if (!piOsRecommendation) return;
+    const minimumGb = Math.ceil(
+      piOsRecommendation.image_size_gb +
+        piOsRecommendation.initial_server_storage_gb,
+    );
+    if (device.size_bytes < minimumGb * 1_000_000_000) {
+      setOperationError(`Ce support est trop petit. Prévois au moins ${minimumGb} Go.`);
+      return;
+    }
+    const confirmed = window.confirm(
+      `Le support « ${device.name} » (${device.size}) va être entièrement effacé pour préparer le Raspberry Pi. Les autres disques ne seront pas ciblés. Continuer ?`,
+    );
+    if (!confirmed) return;
+    resetOperation();
+    setPiFlashResult(null);
+    setBusy(true);
+    try {
+      const result = await invoke<PiFlashResult>("prepare_pi_sd", {
+        targetId: device.id,
+        targetName: device.name,
+        targetSizeBytes: device.size_bytes,
+        imageUrl: piOsRecommendation.image_url,
+        imageSha256: piOsRecommendation.download_sha256,
+        wifiSsid: piWifiSsid,
+        wifiPassword: piWifiPassword,
+        wifiCountry: piWifiCountry,
+        confirmErase: true,
+        progress: progressChannel(),
+      });
+      setPiFlashResult(result);
+      setPiWifiPassword("");
+    } catch (error) {
+      setOperationError(String(error));
+      setPiWifiPassword("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const installPiAt = async (host: string, username: string) => {
     resetOperation();
     setBusy(true);
     try {
       const result = await invoke<OperationResult>("install_pi", {
-        host: piHost,
-        username: piUser,
+        host,
+        username,
         acceptEula: piEulaAccepted,
         progress: progressChannel(),
       });
@@ -330,30 +380,88 @@ function App() {
       )?.[0];
       const address = result.detail.match(/(?:\d{1,3}\.){3}\d{1,3}/)?.[0];
       if (serverFolder && address) {
-          const installation = {
-          host: piHost,
-          username: piUser,
+        const installation = {
+          host,
+          username,
           serverFolder,
           address,
-          };
-          setPiInstallation(installation);
-          try {
-            const status = await invoke<PiServerStatus>("inspect_pi_server", {
-              host: installation.host,
-              username: installation.username,
-              serverFolder: installation.serverFolder,
-            });
-            setPiServerStatus(status);
-            setPiStatusError("");
-          } catch (error) {
-            setPiStatusError(
-              `Le serveur est installé, mais son tableau de bord n’a pas pu être actualisé : ${String(error)}`,
-            );
-          }
+        };
+        setPiInstallation(installation);
+        try {
+          const status = await invoke<PiServerStatus>("inspect_pi_server", {
+            host: installation.host,
+            username: installation.username,
+            serverFolder: installation.serverFolder,
+          });
+          setPiServerStatus(status);
+          setPiStatusError("");
+        } catch (error) {
+          setPiStatusError(
+            `Le serveur est installé, mais son tableau de bord n’a pas pu être actualisé : ${String(error)}`,
+          );
+        }
       }
     } catch (error) {
       setOperationError(String(error));
     } finally {
+      setBusy(false);
+    }
+  };
+
+  const installPi = async () => installPiAt(piHost, piUser);
+
+  const finishNewPi = async () => {
+    if (!piFlashResult) return;
+    if (!piEulaAccepted) {
+      setOperationError("Accepte d’abord le contrat de licence Minecraft pour installer le serveur.");
+      return;
+    }
+    resetOperation();
+    setBusy(true);
+    setOperationProgress({ step: "Recherche du Pi sur le réseau local…", percent: 8 });
+    try {
+      let device: DiscoveredPi | undefined;
+      let lastError = "";
+      for (let attempt = 0; attempt < 12; attempt += 1) {
+        setOperationProgress({
+          step:
+            attempt === 0
+              ? "Recherche du Pi préparé sur le réseau local…"
+              : `Premier démarrage du Pi… recherche ${attempt + 1}/12`,
+          percent: 8,
+        });
+        try {
+          const found = await invoke<DiscoveredPi[]>("discover_new_pi", {
+            expectedHostname: piFlashResult.hostname,
+          });
+          if (found.length > 1) {
+            throw new Error("Plusieurs Raspberry Pi préparés répondent. Éteins les autres Pi puis réessaie.");
+          }
+          if (found.length === 1) {
+            device = found[0];
+            break;
+          }
+        } catch (error) {
+          lastError = String(error);
+          if (lastError.includes("Plusieurs Raspberry Pi préparés")) throw error;
+        }
+        if (attempt < 11) {
+          await new Promise((resolve) => window.setTimeout(resolve, 5000));
+        }
+      }
+      if (!device) {
+        throw new Error(
+          `Le Pi n’a pas encore rejoint le réseau. Vérifie qu’il est allumé et relié au même routeur, puis réessaie. ${lastError}`,
+        );
+      }
+      setPiHost(device.host);
+      setPiUser("minecraft");
+      setPiVerified(true);
+      setConnection(`${device.model} · trouvé sur le réseau · accès sécurisé confirmé`);
+      setBusy(false);
+      await installPiAt(device.host, "minecraft");
+    } catch (error) {
+      setOperationError(String(error));
       setBusy(false);
     }
   };
@@ -479,7 +587,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.6.3
+          MONDE ENSEMBLE <span>·</span> 0.6.4
         </div>
       </aside>
 
@@ -730,10 +838,11 @@ function App() {
                     </div>
                     <section className="pi-first-boot" aria-labelledby="pi-fresh-title">
                       <div className="eyebrow">PRÉPARATION D’UN PI NEUF</div>
-                      <h4 id="pi-fresh-title">Vérifier la carte SD ou le SSD</h4>
+                      <h4 id="pi-fresh-title">Préparer le Raspberry Pi depuis cette application</h4>
                       <p>
-                        Branche le support du Raspberry Pi à cet ordinateur, puis
-                        lance la détection. Cette vérification ne modifie aucun disque.
+                        Branche sa carte SD ou son SSD à cet ordinateur, puis lance
+                        la détection. L’application choisira le système compatible et
+                        vérifiera le support avant de l’effacer.
                       </p>
                       <button
                         className="button secondary"
@@ -743,6 +852,58 @@ function App() {
                         {piBootScanState === "scanning" ? "Recherche des supports…" : "Détecter la carte SD ou le SSD"}
                       </button>
                       {piBootScanError && <p className="pi-error">{piBootScanError}</p>}
+                      <div className="pi-wireless-fields">
+                        <div>
+                          <label htmlFor="pi-wifi-ssid">Réseau Wi-Fi (facultatif)</label>
+                          <input
+                            id="pi-wifi-ssid"
+                            value={piWifiSsid}
+                            onChange={(event) => setPiWifiSsid(event.target.value)}
+                            autoComplete="off"
+                            placeholder="Vide si le Pi sera relié par câble"
+                            disabled={busy || Boolean(piFlashResult)}
+                          />
+                        </div>
+                        {piWifiSsid && (
+                          <>
+                            <small className="pi-wifi-note">Le mot de passe sert à connecter le Pi au premier démarrage ; il est effacé du support après cette configuration. Pour éviter de l’écrire sur la carte, utilise plutôt un câble réseau.</small>
+                            <div>
+                              <label htmlFor="pi-wifi-password">Mot de passe Wi-Fi</label>
+                              <input
+                                id="pi-wifi-password"
+                                type="password"
+                                value={piWifiPassword}
+                                onChange={(event) => setPiWifiPassword(event.target.value)}
+                                autoComplete="new-password"
+                                disabled={busy || Boolean(piFlashResult)}
+                              />
+                            </div>
+                            <div>
+                              <label htmlFor="pi-wifi-country">Pays du réseau Wi-Fi</label>
+                              <select
+                                id="pi-wifi-country"
+                                value={piWifiCountry}
+                                onChange={(event) => setPiWifiCountry(event.target.value)}
+                                disabled={busy || Boolean(piFlashResult)}
+                              >
+                                <option value="FR">France</option>
+                                <option value="BE">Belgique</option>
+                                <option value="CH">Suisse</option>
+                                <option value="CA">Canada</option>
+                                <option value="US">États-Unis</option>
+                                <option value="GB">Royaume-Uni</option>
+                                <option value="DE">Allemagne</option>
+                                <option value="ES">Espagne</option>
+                                <option value="IT">Italie</option>
+                                <option value="NL">Pays-Bas</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
+                        {!piWifiSsid && (
+                          <small>Sans Wi-Fi ici, branche le Pi au routeur avec un câble réseau lors du premier démarrage.</small>
+                        )}
+                      </div>
                       {piBootScanState === "done" && piBootTargets.length === 0 && (
                         <p className="pi-help">Aucun support externe compatible n’a été détecté. Vérifie son branchement puis relance la recherche.</p>
                       )}
@@ -765,6 +926,15 @@ function App() {
                                     : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go`}
                                 </em>
                               )}
+                              {piOsRecommendation && device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb) * 1_000_000_000 && (
+                                <button
+                                  className="button secondary pi-flash-button"
+                                  onClick={() => flashPiOs(device)}
+                                  disabled={busy || Boolean(piFlashResult) || !piOsRecommendation.download_sha256}
+                                >
+                                  {busy ? "Préparation en cours…" : "Effacer et préparer ce support"}
+                                </button>
+                              )}
                             </li>
                           ))}
                         </ul>
@@ -774,12 +944,24 @@ function App() {
                           Il faut environ {Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go pour le système et l’espace initial du serveur. Une carte microSD de 16 Go suffit au profil initial; 32 Go laisse plus de place au monde. Un SSD USB dépend du modèle du Pi.
                         </p>
                       )}
-                      <p className="pi-help">
-                        Cette vérification ne prépare pas encore le système. Le
-                        parcours complet doit aussi écrire Raspberry Pi OS, démarrer
-                        le Pi puis contrôler le serveur. L’écriture efface le support
-                        choisi et nécessitera une confirmation explicite.
-                      </p>
+                      {(operationProgress || operationError) && (
+                        <OperationStatus progress={operationProgress} result={null} error={operationError} />
+                      )}
+                      {piFlashResult && (
+                        <div className="pi-flash-success" aria-live="polite">
+                          <strong>Carte prête · vérification terminée</strong>
+                          <p>{piFlashResult.detail}</p>
+                          <p>Le premier démarrage peut prendre quelques minutes. Laisse le Pi branché au même routeur et allumé ; l’application le recherchera automatiquement avant d’installer le serveur.</p>
+                          <button
+                            className="button primary"
+                            onClick={finishNewPi}
+                            disabled={busy || !piEulaAccepted}
+                          >
+                            {busy ? "Recherche automatique du Pi…" : "Le Pi est allumé · terminer l’installation"}
+                          </button>
+                          <small>Outil officiel Raspberry Pi Imager {piFlashResult.imager_version} · journal : {piFlashResult.log_path}</small>
+                        </div>
+                      )}
                     </section>
                   </div>
                 )}

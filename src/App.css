@@ -1203,6 +1203,41 @@ button {
 .pi-first-boot p {
   margin: 8px 0 0;
 }
+.pi-wireless-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr 0.65fr;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 10px;
+  border: 1px solid #e5e9e1;
+  border-radius: 4px;
+  background: #f8faf6;
+}
+.pi-wireless-fields > div {
+  display: grid;
+  align-content: start;
+  gap: 5px;
+}
+.pi-wireless-fields label {
+  color: #52624f;
+  font-size: 9px;
+  font-weight: 700;
+}
+.pi-wireless-fields input,
+.pi-wireless-fields select {
+  width: 100%;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid #dce2d8;
+  border-radius: 3px;
+  background: #fff;
+  color: #344134;
+  font: inherit;
+}
+.pi-wireless-fields small {
+  grid-column: 1 / -1;
+  color: #71806f;
+}
 .pi-first-boot .button {
   margin-top: 10px;
 }
@@ -1215,6 +1250,7 @@ button {
 }
 .pi-storage-list li {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: center;
   gap: 12px;
@@ -1246,10 +1282,37 @@ button {
 .pi-storage-list .storage-small {
   color: #a24e37;
 }
+.pi-storage-list .pi-flash-button {
+  margin: 0;
+  padding: 7px 9px;
+  font-size: 8px;
+}
 .pi-storage-guidance {
   padding-top: 9px;
   border-top: 1px solid #e5e9e1;
   color: #71806f;
+}
+.pi-flash-success {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #b9cfac;
+  border-radius: 4px;
+  background: #f0f7ed;
+  color: #526b4c;
+}
+.pi-flash-success strong {
+  color: #2f4f2d;
+}
+.pi-flash-success p,
+.pi-flash-success small {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.pi-flash-success small {
+  font-size: 8px;
+  opacity: 0.8;
 }
 .error-text {
   font-size: 10px;

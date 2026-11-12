@@ -600,6 +600,26 @@ pub fn install_remote_pi(
 /// Uses local DNS-SD to find SSH devices and confirms Raspberry Pi identity
 /// without writing to any device. A configured SSH key is required.
 pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
+    discover_pi_internal(username, None)
+}
+
+/// Finds only the Pi provisioned by the first-boot card workflow. Its SSH
+/// host key is accepted on first contact only for the unique hostname written
+/// to that card; ordinary Pi discovery keeps strict host-key checking.
+pub fn discover_new_pi(
+    username: &str,
+    expected_hostname: &str,
+) -> Result<Vec<DiscoveredPi>, String> {
+    if !expected_hostname.starts_with("monde-ensemble-") || !valid_remote_name(expected_hostname) {
+        return Err("Le nom sécurisé du Pi préparé n’est pas reconnu.".into());
+    }
+    discover_pi_internal(username, Some(expected_hostname))
+}
+
+fn discover_pi_internal(
+    username: &str,
+    expected_hostname: Option<&str>,
+) -> Result<Vec<DiscoveredPi>, String> {
     if !valid_remote_name(username) {
         return Err("Saisis le nom du compte du Pi pour le retrouver automatiquement.".into());
     }
@@ -614,6 +634,12 @@ pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
         match receiver.recv_timeout(Duration::from_millis(250)) {
             Ok(ServiceEvent::ServiceResolved(service)) if service.get_port() == 22 => {
                 let host = service.get_hostname().trim_end_matches('.').to_string();
+                let hostname_without_local = host.strip_suffix(".local").unwrap_or(&host);
+                if expected_hostname
+                    .is_some_and(|expected| !hostname_without_local.eq_ignore_ascii_case(expected))
+                {
+                    continue;
+                }
                 for address in service.get_addresses_v4() {
                     candidates
                         .entry(host.clone())
@@ -633,15 +659,23 @@ pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
     let mut targets = Vec::new();
     for (host, address) in candidates {
         targets.push((host, address.clone()));
-        targets.push((address.clone(), address));
+        if expected_hostname.is_none() {
+            targets.push((address.clone(), address));
+        }
     }
     targets.sort();
     targets.dedup();
+    let accept_new_host_key = expected_hostname.is_some();
     for (host, address) in targets.into_iter().take(12) {
         let sender = sender.clone();
         let username = username.to_string();
         std::thread::spawn(move || {
-            let result = run_ssh_timeout(&format!("{username}@{host}"), REMOTE_PROBE_COMMAND, 3);
+            let result = run_ssh_timeout_policy(
+                &format!("{username}@{host}"),
+                REMOTE_PROBE_COMMAND,
+                3,
+                accept_new_host_key,
+            );
             let _ = sender.send((host, address, result));
         });
     }
@@ -841,6 +875,20 @@ fn run_ssh_timeout(
     command: &str,
     timeout_seconds: u8,
 ) -> Result<String, String> {
+    run_ssh_timeout_policy(destination, command, timeout_seconds, false)
+}
+
+fn run_ssh_timeout_policy(
+    destination: &str,
+    command: &str,
+    timeout_seconds: u8,
+    accept_new_host_key: bool,
+) -> Result<String, String> {
+    let host_key_policy = if accept_new_host_key {
+        "StrictHostKeyChecking=accept-new"
+    } else {
+        "StrictHostKeyChecking=yes"
+    };
     let output = Command::new("ssh")
         .args([
             "-o",
@@ -848,7 +896,7 @@ fn run_ssh_timeout(
             "-o",
             &format!("ConnectTimeout={timeout_seconds}"),
             "-o",
-            "StrictHostKeyChecking=yes",
+            host_key_policy,
             "-o",
             "PasswordAuthentication=no",
             destination,

@@ -63,6 +63,15 @@ jobs:
       - name: Install JavaScript dependencies
         run: npm ci
 
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Run safety and compatibility tests
+        run: cargo test --manifest-path src-tauri/Cargo.toml --lib
+
+      - name: Build the beginner interface
+        run: npm run build
+
       - name: Build native installer
         run: npx tauri build --bundles ${{ matrix.bundle }}
 

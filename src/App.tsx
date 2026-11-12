@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
+import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
@@ -14,6 +15,17 @@ type SystemInfo = {
   desktop: boolean;
 };
 type Page = "home" | "install" | "compat" | "backup" | "advanced";
+type CompatibilityReport = {
+  paper_version: string;
+  geyser_version: string;
+  floodgate_version: string;
+  bedrock_versions: string;
+  java_version: string;
+  checked_at: string;
+  source: string;
+};
+type ProgressMessage = { step: string; percent: number };
+type OperationResult = { path: string; detail: string; sha256: string | null };
 
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "home", label: "Mon monde", icon: "▦" },
@@ -32,12 +44,122 @@ function App() {
   const [piUser, setPiUser] = useState("");
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
+  const [compatibility, setCompatibility] =
+    useState<CompatibilityReport | null>(null);
+  const [compatibilityError, setCompatibilityError] = useState("");
+  const [eulaAccepted, setEulaAccepted] = useState(false);
+  const [destination, setDestination] = useState("");
+  const [backupSource, setBackupSource] = useState("");
+  const [backupOutput, setBackupOutput] = useState("");
+  const [backupStopped, setBackupStopped] = useState(false);
+  const [restoreArchive, setRestoreArchive] = useState("");
+  const [restoreDestination, setRestoreDestination] = useState("");
+  const [operationProgress, setOperationProgress] =
+    useState<ProgressMessage | null>(null);
+  const [operationResult, setOperationResult] =
+    useState<OperationResult | null>(null);
+  const [operationError, setOperationError] = useState("");
 
   useEffect(() => {
     invoke<SystemInfo>("inspect_system")
       .then(setSystem)
       .catch((e) => setSystemError(String(e)));
   }, []);
+
+  useEffect(() => {
+    if (page !== "compat" && page !== "install") return;
+    setCompatibilityError("");
+    invoke<CompatibilityReport>("get_compatibility")
+      .then(setCompatibility)
+      .catch((e) => setCompatibilityError(String(e)));
+  }, [page]);
+
+  const progressChannel = () => {
+    const channel = new Channel<ProgressMessage>();
+    channel.onmessage = setOperationProgress;
+    return channel;
+  };
+
+  const selectFolder = async (setPath: (path: string) => void) => {
+    const selected = await open({ directory: true, multiple: false });
+    if (typeof selected === "string") setPath(selected);
+  };
+
+  const selectArchive = async () => {
+    const selected = await open({
+      directory: false,
+      multiple: false,
+      filters: [{ name: "Sauvegarde Monde Ensemble", extensions: ["gz"] }],
+    });
+    if (typeof selected === "string") setRestoreArchive(selected);
+  };
+
+  const resetOperation = () => {
+    setOperationError("");
+    setOperationResult(null);
+    setOperationProgress(null);
+  };
+
+  const createServer = async () => {
+    resetOperation();
+    setBusy(true);
+    try {
+      const result = await invoke<OperationResult>("create_server", {
+        destinationRoot: destination,
+        acceptEula: eulaAccepted,
+        memoryGb: system?.memory_gb ?? null,
+        progress: progressChannel(),
+      });
+      setOperationResult(result);
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const createBackup = async () => {
+    resetOperation();
+    setBusy(true);
+    try {
+      const output =
+        backupOutput ||
+        (await save({
+          defaultPath: "Monde-Ensemble-Sauvegarde.tar.gz",
+          filters: [{ name: "Archive compressée", extensions: ["gz"] }],
+        }));
+      if (!output) return;
+      setBackupOutput(output);
+      const result = await invoke<OperationResult>("backup_server", {
+        source: backupSource,
+        outputFile: output,
+        serverStopped: backupStopped,
+        progress: progressChannel(),
+      });
+      setOperationResult(result);
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restoreWorld = async () => {
+    resetOperation();
+    setBusy(true);
+    try {
+      const result = await invoke<OperationResult>("restore_server", {
+        archive: restoreArchive,
+        destinationRoot: restoreDestination,
+        progress: progressChannel(),
+      });
+      setOperationResult(result);
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const testPi = async () => {
     setBusy(true);
@@ -61,7 +183,7 @@ function App() {
     advanced: "Réglages avancés",
   };
   const pageIntro: Record<Page, string> = {
-    home: "Cette préversion explique le parcours et contrôle les appareils; elle ne modifie pas encore le serveur.",
+    home: "Prépare un serveur neuf, protège ton monde dans une archive et restaure-le sans écraser l’original.",
     install:
       "On vérifie d’abord la machine, puis on prépare une installation adaptée.",
     compat:
@@ -113,12 +235,12 @@ function App() {
         <div className="server-mini">
           <span className="status-dot" />
           <div>
-            <strong>Mode vérification</strong>
-            <small>Aucune écriture sur le serveur</small>
+            <strong>Installations protégées</strong>
+            <small>Le serveur actuel n’est jamais remplacé</small>
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.2
+          MONDE ENSEMBLE <span>·</span> 0.3.0
         </div>
       </aside>
 
@@ -128,7 +250,7 @@ function App() {
             MONDE ENSEMBLE <span>/</span> {pageTitle[page].toUpperCase()}
           </div>
           <div className="top-status">
-            <span>LECTURE SEULE · VERSION DE TRAVAIL</span>
+            <span>AUCUN ÉCRASEMENT · COPIE NEUVE</span>
             <div className="beginner-pill">
               <span>✦</span> MODE {advanced ? "AVANCÉ" : "DÉBUTANT"}
             </div>
@@ -199,7 +321,22 @@ function App() {
                   </button>
                 </div>
                 {target === "this" ? (
-                  <SystemPanel system={system} error={systemError} />
+                  <>
+                    <SystemPanel system={system} error={systemError} />
+                    <LocalInstallPanel
+                      compatibility={compatibility}
+                      compatibilityError={compatibilityError}
+                      destination={destination}
+                      eulaAccepted={eulaAccepted}
+                      setEulaAccepted={setEulaAccepted}
+                      busy={busy}
+                      progress={operationProgress}
+                      result={operationResult}
+                      error={operationError}
+                      onChooseFolder={() => selectFolder(setDestination)}
+                      onInstall={createServer}
+                    />
+                  </>
                 ) : (
                   <div className="pi-panel">
                     <h3>Tu pars de zéro sur le Raspberry Pi ?</h3>
@@ -263,10 +400,10 @@ function App() {
                 <div className="notice safe">
                   <span>✓</span>
                   <p>
-                    <strong>Rien n’est modifié à cette étape.</strong>
+                    <strong>Le serveur actuel reste intact.</strong>
                     <br />
-                    L’application mesure la machine et vérifie l’espace
-                    disponible avant de préparer quoi que ce soit.
+                    Une installation neuve est créée dans un dossier distinct;
+                    la restauration ne remplace pas l’original.
                   </p>
                 </div>
               </div>
@@ -303,8 +440,28 @@ function App() {
               </aside>
             </section>
           )}
-          {page === "compat" && <Compatibility />}
-          {page === "backup" && <Backups />}
+          {page === "compat" && (
+            <Compatibility report={compatibility} error={compatibilityError} />
+          )}
+          {page === "backup" && (
+            <Backups
+              source={backupSource}
+              output={backupOutput}
+              stopped={backupStopped}
+              setStopped={setBackupStopped}
+              archive={restoreArchive}
+              destination={restoreDestination}
+              busy={busy}
+              progress={operationProgress}
+              result={operationResult}
+              error={operationError}
+              onChooseSource={() => selectFolder(setBackupSource)}
+              onChooseArchive={selectArchive}
+              onChooseDestination={() => selectFolder(setRestoreDestination)}
+              onBackup={createBackup}
+              onRestore={restoreWorld}
+            />
+          )}
           {page === "advanced" && <Advanced system={system} />}
         </section>
         <footer className="footer">
@@ -382,6 +539,136 @@ function SystemPanel({
     </div>
   );
 }
+
+function LocalInstallPanel({
+  compatibility,
+  compatibilityError,
+  destination,
+  eulaAccepted,
+  setEulaAccepted,
+  busy,
+  progress,
+  result,
+  error,
+  onChooseFolder,
+  onInstall,
+}: {
+  compatibility: CompatibilityReport | null;
+  compatibilityError: string;
+  destination: string;
+  eulaAccepted: boolean;
+  setEulaAccepted: (accepted: boolean) => void;
+  busy: boolean;
+  progress: ProgressMessage | null;
+  result: OperationResult | null;
+  error: string;
+  onChooseFolder: () => void;
+  onInstall: () => void;
+}) {
+  return (
+    <div className="action-panel">
+      <div className="panel-head">
+        <div>
+          <div className="eyebrow">ÉTAPE 2 · NOUVELLE INSTALLATION</div>
+          <h3>Un serveur propre</h3>
+        </div>
+        <span className="detect-tag">PAPER + GEYSER</span>
+      </div>
+      <p className="action-description">
+        Prépare un nouveau serveur Paper avec Geyser et Floodgate, à côté des
+        dossiers existants. Cette étape crée un monde vide; pour garder des
+        constructions, restaure d’abord une sauvegarde dans l’onglet «
+        Sauvegardes ».
+      </p>
+      <div className="release-grid">
+        <ReleaseItem
+          label="MINECRAFT JAVA"
+          value={compatibility?.java_version ?? "Vérification…"}
+        />
+        <ReleaseItem
+          label="MINECRAFT BEDROCK"
+          value={compatibility?.bedrock_versions ?? "Vérification…"}
+        />
+        <ReleaseItem
+          label="PAPER"
+          value={compatibility?.paper_version ?? "Vérification…"}
+        />
+        <ReleaseItem
+          label="GEYSER / FLOODGATE"
+          value={
+            compatibility
+              ? `${compatibility.geyser_version} / ${compatibility.floodgate_version}`
+              : "Vérification…"
+          }
+        />
+      </div>
+      {compatibilityError && (
+        <div className="inline-error">
+          Les catalogues officiels sont injoignables. L’installation est bloquée
+          : aucune version récente ne sera choisie à l’aveugle.
+        </div>
+      )}
+      <div className="folder-choice">
+        <div>
+          <strong>Où créer le nouveau serveur ?</strong>
+          <small>{destination || "Choisis un dossier de destination"}</small>
+        </div>
+        <button className="button secondary" onClick={onChooseFolder}>
+          Choisir un dossier
+        </button>
+      </div>
+      <label className="eula-choice">
+        <input
+          type="checkbox"
+          checked={eulaAccepted}
+          onChange={(event) => setEulaAccepted(event.target.checked)}
+        />
+        <span>
+          J’accepte le contrat de licence Minecraft pour ce nouveau serveur.
+        </span>
+      </label>
+      <button
+        className="button primary action-button"
+        onClick={onInstall}
+        disabled={busy || !destination || !eulaAccepted || !compatibility}
+      >
+        {busy ? "Préparation en cours…" : "Créer le nouveau serveur"}
+      </button>
+      {progress && (
+        <div className="operation-progress">
+          <div className="progress-head">
+            <span>{progress.step}</span>
+            <b>{progress.percent}%</b>
+          </div>
+          <div className="progress-track">
+            <i style={{ width: `${progress.percent}%` }} />
+          </div>
+        </div>
+      )}
+      {error && <div className="inline-error">{error}</div>}
+      {result && (
+        <div className="operation-success">
+          <strong>Serveur préparé · {result.detail}</strong>
+          <small>{result.path}</small>
+          <span>
+            Le serveur actuel est resté intact. Cette copie n’a pas été
+            démarrée.
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ReleaseItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="release-item">
+      <small>{label}</small>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function Spec({
   label,
   value,
@@ -426,9 +713,9 @@ function Home({
             <span>Sans perdre ton monde.</span>
           </h2>
           <p>
-            Un serveur Java peut aussi accueillir les joueurs Bedrock. Cette
-            première version prépare le parcours et vérifie les machines; elle
-            n’installe ni ne met encore à jour le serveur.
+            Un serveur Java peut aussi accueillir les joueurs Bedrock. Prépare
+            une installation neuve, puis sauvegarde ou restaure ton monde dans
+            un autre dossier.
           </p>
           <div className="hero-actions">
             <button className="button primary" onClick={onInstall}>
@@ -514,10 +801,12 @@ function Home({
         <div className="safety-note">
           <span>✳</span>
           <p>
-            <strong>Cette version ne change rien au serveur.</strong>
+            <strong>
+              L’installation ne remplace jamais le serveur actuel.
+            </strong>
             <br />
-            Elle détecte la machine, explique les règles et vérifie un accès SSH
-            existant.
+            Elle crée une nouvelle copie; les mises à jour du serveur existant
+            restent bloquées tant que leur compatibilité n’est pas vérifiée.
           </p>
         </div>
       </div>
@@ -525,7 +814,13 @@ function Home({
   );
 }
 
-function Compatibility() {
+function Compatibility({
+  report,
+  error,
+}: {
+  report: CompatibilityReport | null;
+  error: string;
+}) {
   const rows = [
     ["PC / Mac Java", "Oui", "Serveur Java"],
     ["Windows Bedrock", "Oui", "Par le pont Geyser"],
@@ -563,8 +858,9 @@ function Compatibility() {
           </strong>
           <p>
             Les appareils Bedrock peuvent rejoindre le même monde grâce à Geyser
-            et Floodgate. Cette version explique le principe; le contrôle des
-            versions et extensions sera activé dans le moteur serveur.
+            et Floodgate. Les versions affichées ci-dessous viennent des
+            catalogues officiels consultés à cet instant; elles ne prouvent pas
+            la compatibilité de tous les plugins ou packs de ton ancien monde.
           </p>
         </div>
       </div>
@@ -586,27 +882,58 @@ function Compatibility() {
           </div>
         ))}
       </div>
+      <div className="release-summary">
+        <div className="eyebrow">DERNIER CONTRÔLE DES CATALOGUES</div>
+        {report ? (
+          <>
+            <div className="release-grid">
+              <ReleaseItem label="PAPER" value={report.paper_version} />
+              <ReleaseItem label="GEYSER" value={report.geyser_version} />
+              <ReleaseItem label="FLOODGATE" value={report.floodgate_version} />
+              <ReleaseItem
+                label="CLIENTS BEDROCK"
+                value={report.bedrock_versions}
+              />
+            </div>
+            <small>
+              {report.source} · vérifié{" "}
+              {new Date(report.checked_at).toLocaleString("fr-FR")}
+            </small>
+          </>
+        ) : error ? (
+          <p className="inline-error">
+            Vérification impossible. Toute installation qui dépend des versions
+            récentes reste bloquée.
+          </p>
+        ) : (
+          <p>Lecture des versions officielles…</p>
+        )}
+      </div>
       <div className="terracotta-note">
         <div className="terracotta-mark">!</div>
         <div>
           <div className="eyebrow">ERREUR TERRACOTTA · IPAD</div>
           <strong>Bedrock 1.26.62 · InitialConnection-149</strong>
           <p>
-            L’erreur seule ne révèle pas sa cause. Le dernier relevé connu du
-            serveur indiquait Paper 26.2 et Geyser sur le port 19133 avec
-            RakNet; ces informations doivent être relues avant toute correction.
-            Cette préversion n’accède pas aux journaux et n’a rien modifié.
+            L’erreur InitialConnection-149 seule ne permet pas d’identifier la
+            cause. Ce panneau ne lit pas encore les journaux du serveur existant
+            et ne prétend donc pas l’avoir corrigé. Pour l’installation neuve,
+            l’application affiche et règle les versions et ports utilisés.
           </p>
         </div>
       </div>
       <div className="notice amber">
         <span>!</span>
         <p>
-          <strong>Les mises à jour groupées sont le but du moteur.</strong>
+          <strong>
+            Les mises à jour du serveur existant ne sont pas encore activées.
+          </strong>
           <br />
-          Avant d’activer une mise à jour, il devra confirmer que la passerelle
-          Bedrock et chaque extension installée sont prêtes. Si une pièce
-          manque, il gardera la version actuelle.
+          Cette version prépare une installation neuve et protège les copies par
+          sauvegarde/restauration. Elle ne remplace pas Paper ni les extensions
+          du monde en service. Pour éviter une perte de monde ou de plugins, une
+          mise à jour n’est proposée que lorsque le contrôle de compatibilité
+          complet sera disponible.
         </p>
       </div>
       <div className="source-note">
@@ -618,7 +945,39 @@ function Compatibility() {
   );
 }
 
-function Backups() {
+function Backups({
+  source,
+  output,
+  stopped,
+  setStopped,
+  archive,
+  destination,
+  busy,
+  progress,
+  result,
+  error,
+  onChooseSource,
+  onChooseArchive,
+  onChooseDestination,
+  onBackup,
+  onRestore,
+}: {
+  source: string;
+  output: string;
+  stopped: boolean;
+  setStopped: (stopped: boolean) => void;
+  archive: string;
+  destination: string;
+  busy: boolean;
+  progress: ProgressMessage | null;
+  result: OperationResult | null;
+  error: string;
+  onChooseSource: () => void;
+  onChooseArchive: () => void;
+  onChooseDestination: () => void;
+  onBackup: () => void;
+  onRestore: () => void;
+}) {
   return (
     <div className="content-column">
       <div className="backup-hero">
@@ -632,55 +991,117 @@ function Backups() {
           </p>
         </div>
       </div>
-      <div className="notice amber">
-        <span>i</span>
+      <div className="operation-card">
+        <div className="eyebrow">01 · SAUVEGARDER</div>
+        <h3>Créer une copie complète</h3>
         <p>
-          <strong>Dans cette version, ces étapes sont des explications.</strong>
-          <br />
-          Aucune sauvegarde ni restauration n’est lancée. Le moteur de copie
-          sécurisée reste à construire.
+          Arrête le serveur avant la copie. L’archive contient les mondes,
+          réglages, plugins et données disponibles dans ce dossier.
         </p>
+        <div className="folder-choice">
+          <div>
+            <strong>Dossier du serveur</strong>
+            <small>{source || "Choisis le dossier Paper du serveur"}</small>
+          </div>
+          <button className="button secondary" onClick={onChooseSource}>
+            Choisir
+          </button>
+        </div>
+        <label className="eula-choice">
+          <input
+            type="checkbox"
+            checked={stopped}
+            onChange={(event) => setStopped(event.target.checked)}
+          />
+          <span>J’ai arrêté le serveur avant de commencer la sauvegarde.</span>
+        </label>
+        <button
+          className="button primary action-button"
+          disabled={busy || !source || !stopped}
+          onClick={onBackup}
+        >
+          {busy ? "Sauvegarde en cours…" : "Créer et vérifier la sauvegarde"}
+        </button>
+        {output && <small className="path-note">Destination : {output}</small>}
       </div>
-      <div className="backup-options">
-        <div className="backup-option">
-          <span>01</span>
+      <div className="operation-card">
+        <div className="eyebrow">02 · RESTAURER</div>
+        <h3>Reprendre un monde sauvegardé</h3>
+        <p>
+          La restauration crée une nouvelle copie dans un dossier distinct. Elle
+          ne déplace ni n’écrase la sauvegarde ni le serveur existant.
+        </p>
+        <div className="folder-choice">
           <div>
-            <strong>Créer une sauvegarde</strong>
-            <small>
-              Le serveur devra s’arrêter proprement avant la copie du monde et
-              de ses réglages.
-            </small>
+            <strong>Archive à restaurer</strong>
+            <small>{archive || "Choisis une archive .tar.gz"}</small>
           </div>
-          <b>À construire</b>
+          <button className="button secondary" onClick={onChooseArchive}>
+            Choisir
+          </button>
         </div>
-        <div className="backup-option">
-          <span>02</span>
+        <div className="folder-choice">
           <div>
-            <strong>Déplacer vers un autre appareil</strong>
-            <small>
-              Mac, PC ou Raspberry Pi : contrôler le disque choisi et son espace
-              libre avant le transfert.
-            </small>
+            <strong>Emplacement de la nouvelle copie</strong>
+            <small>{destination || "Choisis un dossier de destination"}</small>
           </div>
-          <b>À construire</b>
+          <button className="button secondary" onClick={onChooseDestination}>
+            Choisir
+          </button>
         </div>
-        <div className="backup-option">
-          <span>03</span>
-          <div>
-            <strong>Restaurer après réinstallation</strong>
-            <small>
-              Préparer la nouvelle copie à côté de l’ancien serveur; demander
-              une vérification avant la bascule.
-            </small>
-          </div>
-          <b>À construire</b>
-        </div>
+        <button
+          className="button primary action-button"
+          disabled={busy || !archive || !destination}
+          onClick={onRestore}
+        >
+          {busy ? "Vérification en cours…" : "Vérifier et restaurer"}
+        </button>
       </div>
+      {progress && (
+        <OperationStatus progress={progress} result={result} error={error} />
+      )}
+      {!progress && (result || error) && (
+        <OperationStatus progress={null} result={result} error={error} />
+      )}
       <div className="source-note">
-        Les réglages et données propres à certaines extensions peuvent se
-        trouver hors des fichiers du monde. La sauvegarde complète devra les
-        inclure et signaler les composants sous licence.
+        L’archive complète peut contenir des extensions sous licence. Monde
+        Ensemble copie les fichiers sélectionnés; il ne récupère ni ne remplace
+        les licences des extensions.
       </div>
+    </div>
+  );
+}
+
+function OperationStatus({
+  progress,
+  result,
+  error,
+}: {
+  progress: ProgressMessage | null;
+  result: OperationResult | null;
+  error: string;
+}) {
+  return (
+    <div className={error ? "inline-error" : "operation-success"}>
+      {progress && (
+        <>
+          <div className="progress-head">
+            <span>{progress.step}</span>
+            <b>{progress.percent}%</b>
+          </div>
+          <div className="progress-track">
+            <i style={{ width: `${progress.percent}%` }} />
+          </div>
+        </>
+      )}
+      {error && <p>{error}</p>}
+      {result && (
+        <>
+          <strong>{result.detail}</strong>
+          <small>{result.path}</small>
+          {result.sha256 && <small>SHA-256 : {result.sha256}</small>}
+        </>
+      )}
     </div>
   );
 }

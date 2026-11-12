@@ -1,6 +1,8 @@
 use serde::Serialize;
 use std::process::Command;
 
+mod engine;
+
 /// Hardware and operating-system facts used to choose a safe installation path.
 #[derive(Serialize)]
 struct SystemInfo {
@@ -220,11 +222,96 @@ fn desktop_available() -> bool {
     }
 }
 
+#[tauri::command]
+async fn get_compatibility() -> Result<engine::CompatibilityReport, String> {
+    tauri::async_runtime::spawn_blocking(engine::compatibility)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn create_server(
+    destination_root: String,
+    accept_eula: bool,
+    memory_gb: Option<f64>,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::install_local(
+            std::path::Path::new(&destination_root),
+            accept_eula,
+            memory_gb,
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn backup_server(
+    source: String,
+    output_file: String,
+    server_stopped: bool,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::create_backup(
+            std::path::Path::new(&source),
+            std::path::Path::new(&output_file),
+            server_stopped,
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn restore_server(
+    archive: String,
+    destination_root: String,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::restore_backup(
+            std::path::Path::new(&archive),
+            std::path::Path::new(&destination_root),
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![inspect_system, probe_ssh])
+        .plugin(tauri_plugin_dialog::init())
+        .invoke_handler(tauri::generate_handler![
+            inspect_system,
+            probe_ssh,
+            get_compatibility,
+            create_server,
+            backup_server,
+            restore_server
+        ])
         .run(tauri::generate_context!())
         .expect("failed to run Monde Ensemble");
 }

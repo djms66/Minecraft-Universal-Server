@@ -2416,6 +2416,17 @@ function Home({
   onCompat: () => void;
   onBackup: () => void;
 }) {
+  const [copiedAddress, setCopiedAddress] = useState("");
+
+  const copyAddress = async (value: string, label: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopiedAddress(`${label} copié.`);
+    } catch {
+      setCopiedAddress("Copie indisponible. Recopie l’adresse affichée.");
+    }
+  };
+
   return (
     <>
       {localInstallation && (
@@ -2463,6 +2474,19 @@ function Home({
                 {localServerStatus?.java_port || "—"}
               </strong>
               <span>Minecraft → Multijoueur → Ajouter un serveur</span>
+              <button
+                className="address-copy"
+                type="button"
+                disabled={!localServerStatus?.address}
+                onClick={() =>
+                  copyAddress(
+                    `${localServerStatus?.address}:${localServerStatus?.java_port || 25565}`,
+                    "Adresse Java",
+                  )
+                }
+              >
+                Copier l’adresse Java
+              </button>
             </div>
             <div>
               <small>TÉLÉPHONE · TABLETTE · BEDROCK</small>
@@ -2471,8 +2495,26 @@ function Home({
                 Port : {localServerStatus?.bedrock_port || "—"} · Ajouter un
                 serveur
               </span>
+              <button
+                className="address-copy"
+                type="button"
+                disabled={!localServerStatus?.address}
+                onClick={() =>
+                  copyAddress(
+                    localServerStatus?.address || "",
+                    "Adresse Bedrock",
+                  )
+                }
+              >
+                Copier l’IP Bedrock
+              </button>
             </div>
           </div>
+          {copiedAddress && (
+            <p className="address-copy-feedback" role="status">
+              {copiedAddress}
+            </p>
+          )}
           <div className="pi-version-line">
             <strong>Version exacte installée</strong>
             <span>
@@ -2768,6 +2810,19 @@ function Home({
                 {piServerStatus?.java_port || 25565}
               </strong>
               <span>Dans Minecraft : Multijoueur → Ajouter un serveur</span>
+              <button
+                className="address-copy"
+                type="button"
+                disabled={!piServerStatus?.address && !piInstallation.address}
+                onClick={() =>
+                  copyAddress(
+                    `${piServerStatus?.address || piInstallation.address}:${piServerStatus?.java_port || 25565}`,
+                    "Adresse Java",
+                  )
+                }
+              >
+                Copier l’adresse Java
+              </button>
             </div>
             <div>
               <small>TÉLÉPHONE · TABLETTE · BEDROCK</small>
@@ -2778,8 +2833,26 @@ function Home({
                 Port : {piServerStatus?.bedrock_port || 19132} · Ajouter un
                 serveur
               </span>
+              <button
+                className="address-copy"
+                type="button"
+                disabled={!piServerStatus?.address && !piInstallation.address}
+                onClick={() =>
+                  copyAddress(
+                    piServerStatus?.address || piInstallation.address,
+                    "Adresse Bedrock",
+                  )
+                }
+              >
+                Copier l’IP Bedrock
+              </button>
             </div>
           </div>
+          {copiedAddress && (
+            <p className="address-copy-feedback" role="status">
+              {copiedAddress}
+            </p>
+          )}
           <div className="pi-version-line">
             <strong>Version exacte installée</strong>
             <span>

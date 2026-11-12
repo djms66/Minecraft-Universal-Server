@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.19
+# Monde Ensemble 0.18.20
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -8,7 +8,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;
 - démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done » et vérifie les ports Java TCP, Bedrock TCP (signalement NetherNet) et Bedrock UDP avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
-- mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de les démarrer ou de les arrêter proprement avec le contrôle RCON limité à la boucle locale ;
+- mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de copier l’adresse Java complète ou l’IP Bedrock depuis le tableau de bord ; les boutons démarrent ou arrêtent le serveur proprement avec le contrôle RCON limité à la boucle locale ;
 - permet d’ajouter ou de retirer des comptes Java et des gamertags Bedrock de la liste d’accès d’un serveur local, puis de l’activer après avoir vérifié qu’elle contient au moins un joueur ; l’application n’ouvre pas temporairement la liste pour laisser entrer un Bedrock inconnu ;
 - compare à la demande les versions locales aux catalogues officiels et bloque la validation d’une mise à jour si des mods, extensions, packs, liens, configuration Geyser modifiée ou runtime incompatible sont détectés ; ce contrôle est en lecture seule ; enregistre aussi les empreintes SHA-256 du Paper, de Geyser et de Floodgate ; pour un ancien profil sans empreinte, vérifie le build installé auprès des catalogues officiels avant d’autoriser la mise à jour ;
 - en mode avancé, recherche dans Modrinth les plugins Paper déclarés pour la version Java exacte ; sur un serveur local ou Pi arrêté, crée une sauvegarde et une nouvelle copie avec un plugin publié sans dépendance obligatoire, vérifie son SHA-512 et permet de revenir à l’ancienne copie ;
@@ -30,7 +30,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - distingue la compatibilité de l’image de celle du serveur : un Pi 4 ou 5 doit avoir au moins 2 Go de mémoire ; le Pi 3 standard n’est pas adapté à ce profil ;
 - vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
 - transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
-- affiche l’adresse et les ports à saisir dans Minecraft, ainsi que le chemin du dossier et des journaux sur le Pi.
+- affiche l’adresse et les ports à saisir dans Minecraft, avec le chemin du dossier et des journaux sur le Pi.
 - conserve le Pi installé dans l’application, revérifie son état et ses versions Minecraft à l’ouverture, affiche les dernières lignes du journal et peut relancer uniquement cette installation si ses ports sont libres ; l’installation ajoute aussi une tâche de redémarrage automatique si le service de planification du Pi est actif.
 - quand un serveur Pi géré est arrêté puis relancé depuis l’application, compare les catalogues Java/Bedrock et les builds Paper/Geyser/Floodgate ; si le profil est propre et que le runtime Java reste compatible, télécharge les trois fichiers contrôlés, archive le serveur complet, met le groupe à jour et vérifie le redémarrage ; en cas d’échec, restaure l’archive précédente ; chaque sauvegarde reste conservée sur le Pi.
 - permet d’arrêter proprement ce serveur Pi depuis son tableau de bord ; le processus n’est jamais forcé à quitter s’il ne s’arrête pas correctement.

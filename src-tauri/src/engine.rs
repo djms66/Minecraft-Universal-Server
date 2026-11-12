@@ -6009,7 +6009,7 @@ fn unpack_runtime(archive_path: &Path, destination: PathBuf) -> Result<(), Strin
             item.unpack(destination_path).map_err(io_error)?;
         }
     }
-    let java = WalkDir::new(&destination)
+    let _java = WalkDir::new(&destination)
         .into_iter()
         .filter_map(Result::ok)
         .find(|entry| {
@@ -6020,9 +6020,9 @@ fn unpack_runtime(archive_path: &Path, destination: PathBuf) -> Result<(), Strin
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let mut permissions = fs::metadata(java.path()).map_err(io_error)?.permissions();
+        let mut permissions = fs::metadata(_java.path()).map_err(io_error)?.permissions();
         permissions.set_mode(permissions.mode() | 0o111);
-        fs::set_permissions(java.path(), permissions).map_err(io_error)?;
+        fs::set_permissions(_java.path(), permissions).map_err(io_error)?;
     }
     Ok(())
 }

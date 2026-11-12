@@ -1861,6 +1861,32 @@ button {
   color: #c6c9c0;
   font-size: 12px;
 }
+.address-copy {
+  align-self: flex-start;
+  margin-top: 3px;
+  padding: 7px 10px;
+  color: #e9e8de;
+  background: #41463e;
+  border: 1px solid #68705f;
+  border-radius: 3px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.address-copy:hover:not(:disabled) {
+  color: #263027;
+  background: #c3e879;
+  border-color: #c3e879;
+}
+.address-copy:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.address-copy-feedback {
+  margin: 10px 0 0;
+  color: #bfe2a5;
+  font-size: 12px;
+}
 .pi-version-line {
   display: flex;
   flex-wrap: wrap;

@@ -33,7 +33,7 @@ const BEDROCK_DEFAULT_PORT: u16 = 19132;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
-const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; printf '\nIP='; hostname -I | awk '{print $1}'; for p in 25565 25566 19132 19133; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
+const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; printf '\nIP='; hostname -I | awk '{print $1}'; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
 
 fn available_game_port(primary: u16, alternate: u16, udp: bool) -> Result<u16, String> {
     let can_bind = |port| {
@@ -188,6 +188,12 @@ pub struct LocalStartResult {
 
 #[derive(Serialize)]
 pub struct LocalWhitelistStatus {
+    pub enabled: bool,
+    pub entries: String,
+}
+
+#[derive(Serialize)]
+pub struct PiWhitelistStatus {
     pub enabled: bool,
     pub entries: String,
 }
@@ -467,7 +473,15 @@ pub fn install_local(
     let root = prepare_root(destination_root)?;
     let staging = root.join(format!(".monde-ensemble-{}.preparing", Uuid::new_v4()));
     fs::create_dir(&staging).map_err(io_error)?;
-    let result = build_fresh_server(&staging, heap_gb, false, java_port, bedrock_port, &progress);
+    let result = build_fresh_server(
+        &staging,
+        heap_gb,
+        false,
+        java_port,
+        bedrock_port,
+        None,
+        &progress,
+    );
     let artifacts = match result {
         Ok(artifacts) => artifacts,
         Err(error) => {
@@ -1188,6 +1202,291 @@ pub fn set_local_whitelist_enabled(server_dir: &Path, enabled: bool) -> Result<S
     Ok(response.trim().to_string())
 }
 
+pub fn prepare_pi_whitelist_migration(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+) -> Result<String, String> {
+    if !valid_remote_name(host) || !valid_remote_name(username) || !valid_remote_name(server_folder)
+    {
+        return Err("Adresse ou dossier du serveur Pi invalide.".into());
+    }
+    let destination = format!("{username}@{host}");
+    let port_check = run_ssh(
+        &destination,
+        "for p in 25575 25576; do if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE '[:.]$p$'; then echo PORT_$p=busy; else echo PORT_$p=free; fi; done",
+    )?;
+    let values = port_check
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<std::collections::HashMap<_, _>>();
+    let port = if values.get("PORT_25575") == Some(&"free") {
+        25575
+    } else if values.get("PORT_25576") == Some(&"free") {
+        25576
+    } else {
+        return Err("Les deux ports internes de contrôle sont déjà utilisés sur le Pi. Rien n’a été modifié.".into());
+    };
+    let password = Uuid::new_v4().simple().to_string();
+    let backup_id = Uuid::new_v4().simple().to_string();
+    let command = format!(
+        r#"set -eu
+umask 077
+d="$HOME/{server_folder}"
+test -d "$d" && test ! -L "$d"
+test -f "$d/monde-ensemble-profile.json" && test ! -L "$d/monde-ensemble-profile.json"
+test -f "$d/server.properties" && test ! -L "$d/server.properties"
+pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+case "$pid" in ''|*[!0-9]*) pid=;; esac
+if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo 'SERVER_RUNNING'; exit 9; fi
+python3 - "$d" "{backup_id}" "{port}" "{password}" <<'PYCODE'
+import json, os, pathlib, shutil, sys, tempfile
+root=pathlib.Path(sys.argv[1]); suffix=sys.argv[2]; port=int(sys.argv[3]); password=sys.argv[4]
+profile=root/'monde-ensemble-profile.json'; props=root/'server.properties'
+with profile.open(encoding='utf-8') as f: data=json.load(f)
+if data.get('application') != 'Monde Ensemble': raise SystemExit('PROFILE_NOT_MANAGED')
+if 'rcon_port' in data and 'rcon_password' in data: raise SystemExit('ALREADY_CONFIGURED')
+profile_backup=root/f'monde-ensemble-profile.json.before-rcon-{{suffix}}'
+props_backup=root/f'server.properties.before-rcon-{{suffix}}'
+shutil.copy2(profile, profile_backup); shutil.copy2(props, props_backup)
+try:
+    lines=props.read_text(encoding='utf-8').splitlines()
+    lines=[line for line in lines if not line.startswith(('enable-rcon=','rcon.port=','rcon.password=','rcon.ip='))]
+    lines += ['enable-rcon=true', f'rcon.port={port}', f'rcon.password={password}', 'rcon.ip=127.0.0.1']
+    data['rcon_port']=port; data['rcon_password']=password
+    fd, props_tmp=tempfile.mkstemp(prefix='.server.properties.', dir=root); os.close(fd)
+    fd, profile_tmp=tempfile.mkstemp(prefix='.monde-ensemble-profile.', dir=root); os.close(fd)
+    try:
+        pathlib.Path(props_tmp).write_text('\n'.join(lines)+'\n', encoding='utf-8'); os.chmod(props_tmp, 0o600)
+        pathlib.Path(profile_tmp).write_text(json.dumps(data, ensure_ascii=False, indent=2)+'\n', encoding='utf-8'); os.chmod(profile_tmp, 0o600)
+        os.replace(props_tmp, props); os.replace(profile_tmp, profile)
+    finally:
+        for temp in (props_tmp, profile_tmp):
+            try: os.unlink(temp)
+            except FileNotFoundError: pass
+    os.chmod(props, 0o600); os.chmod(profile, 0o600)
+except BaseException:
+    shutil.copy2(props_backup, props); shutil.copy2(profile_backup, profile)
+    raise
+print('MIGRATION_READY')
+print(f'BACKUP=server.properties.before-rcon-{{suffix}}')
+print(f'BACKUP=monde-ensemble-profile.json.before-rcon-{{suffix}}')
+PYCODE"#
+    );
+    let output = run_ssh(&destination, &command).map_err(|error| {
+        if error.contains("SERVER_RUNNING") {
+            "Arrête d’abord le serveur depuis le tableau de bord. Aucun fichier n’a été modifié."
+                .to_string()
+        } else {
+            format!("Migration Pi impossible; les mondes n’ont pas été touchés. {error}")
+        }
+    })?;
+    if !output.lines().any(|line| line == "MIGRATION_READY") {
+        return Err("Le Pi n’a pas confirmé la préparation du contrôle sécurisé. Les sauvegardes des réglages restent conservées.".into());
+    }
+    Ok("Réglages sécurisés préparés avec copies de sauvegarde. Redémarre maintenant le serveur depuis le tableau de bord pour activer la gestion des joueurs.".into())
+}
+
+pub fn pi_whitelist_status(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+) -> Result<PiWhitelistStatus, String> {
+    let (destination, profile, properties) =
+        read_pi_management_state(host, username, server_folder)?;
+    let enabled = properties
+        .lines()
+        .find_map(|line| line.strip_prefix("white-list="))
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+    let entries = with_pi_rcon(&destination, &profile, |tunnel_profile| {
+        rcon_command(tunnel_profile, "whitelist list")
+    })?;
+    Ok(PiWhitelistStatus { enabled, entries })
+}
+
+pub fn change_pi_whitelist(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    platform: &str,
+    action: &str,
+    player_name: &str,
+) -> Result<String, String> {
+    if !matches!(action, "add" | "remove") {
+        return Err("Action de liste d’accès invalide.".into());
+    }
+    let canonical_name = match platform {
+        "java" if Regex::new(r"^[A-Za-z0-9_]{3,16}$").is_ok_and(|pattern| pattern.is_match(player_name)) => player_name.to_string(),
+        "bedrock" if !player_name.trim().is_empty() && player_name.len() <= 16
+            && player_name.chars().all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | ' ')) =>
+                player_name.split_whitespace().collect::<Vec<_>>().join("_"),
+        "java" => return Err("Nom Java invalide. Utilise 3 à 16 lettres, chiffres ou tirets bas.".into()),
+        "bedrock" => return Err("Gamertag Bedrock invalide. Utilise jusqu’à 16 lettres, chiffres, espaces ou tirets bas.".into()),
+        _ => return Err("Choix d’édition invalide.".into()),
+    };
+    let (destination, profile, _) = read_pi_management_state(host, username, server_folder)?;
+    let command = if platform == "bedrock" {
+        format!("fwhitelist {action} {canonical_name}")
+    } else {
+        format!("whitelist {action} {canonical_name}")
+    };
+    with_pi_rcon(&destination, &profile, |tunnel_profile| {
+        rcon_command(tunnel_profile, &command)
+    })
+    .map(|response| response.trim().to_string())
+}
+
+pub fn set_pi_whitelist_enabled(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    enabled: bool,
+) -> Result<String, String> {
+    let (destination, profile, _) = read_pi_management_state(host, username, server_folder)?;
+    with_pi_rcon(&destination, &profile, |tunnel_profile| {
+        if enabled {
+            let entries = rcon_command(tunnel_profile, "whitelist list")?;
+            let count = Regex::new(r"(?i)There are\s+(\d+)\s+whitelisted player").ok()
+                .and_then(|pattern| pattern.captures(&entries)).and_then(|captures| captures.get(1))
+                .and_then(|value| value.as_str().parse::<u32>().ok())
+                .ok_or_else(|| "Le serveur n’a pas confirmé le nombre de joueurs autorisés. Ajoute d’abord un joueur et actualise la liste.".to_string())?;
+            if count == 0 {
+                return Err("Ajoute au moins un joueur avant d’activer la liste, pour éviter de te verrouiller dehors.".into());
+            }
+        }
+        rcon_command(
+            tunnel_profile,
+            if enabled {
+                "whitelist on"
+            } else {
+                "whitelist off"
+            },
+        )
+        .map(|response| response.trim().to_string())
+    })
+}
+
+fn read_pi_management_state(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+) -> Result<(String, serde_json::Value, String), String> {
+    if !valid_remote_name(host) || !valid_remote_name(username) || !valid_remote_name(server_folder)
+    {
+        return Err("Adresse ou dossier du serveur Pi invalide.".into());
+    }
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; test -d \"$d\" && test ! -L \"$d\"; test -f \"$d/monde-ensemble-profile.json\" && test ! -L \"$d/monde-ensemble-profile.json\"; test -f \"$d/server.properties\" && test ! -L \"$d/server.properties\"; printf 'PROFILE_START:'; cat \"$d/monde-ensemble-profile.json\"; printf ':PROFILE_END:PROPERTIES_START:'; cat \"$d/server.properties\"; printf ':PROPERTIES_END:'"
+    );
+    let output = run_ssh(&destination, &command)?;
+    let profile_text = output
+        .split_once("PROFILE_START:")
+        .and_then(|(_, rest)| rest.split_once(":PROFILE_END:PROPERTIES_START:"))
+        .map(|(profile, _)| profile)
+        .ok_or_else(|| "Le profil du serveur Pi est illisible.".to_string())?;
+    let properties = output
+        .split_once(":PROFILE_END:PROPERTIES_START:")
+        .and_then(|(_, rest)| rest.split_once(":PROPERTIES_END:"))
+        .map(|(properties, _)| properties.to_string())
+        .ok_or_else(|| "Les réglages du serveur Pi sont illisibles.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_str(profile_text)
+        .map_err(|_| "Le profil du serveur Pi est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier Pi n’a pas été créé par Monde Ensemble.".into());
+    }
+    if profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+        || profile
+            .get("rcon_password")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return Err("Cette installation Pi est antérieure à la gestion sécurisée des joueurs. Arrête le serveur puis choisis « Préparer la gestion des joueurs »; deux copies des réglages seront conservées.".into());
+    }
+    Ok((destination, profile, properties))
+}
+
+fn with_pi_rcon<T>(
+    destination: &str,
+    profile: &serde_json::Value,
+    operation: impl FnOnce(&serde_json::Value) -> Result<T, String>,
+) -> Result<T, String> {
+    require_local_rcon(profile)?;
+    let remote_port = profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port > 0)
+        .ok_or_else(|| "Le port du contrôle sécurisé Pi est invalide.".to_string())?;
+    let password = profile
+        .get("rcon_password")
+        .and_then(serde_json::Value::as_str)
+        .filter(|password| !password.is_empty())
+        .ok_or_else(|| "Le mot de passe du contrôle Pi est absent.".to_string())?;
+    let listener = TcpListener::bind(("127.0.0.1", 0)).map_err(io_error)?;
+    let local_port = listener.local_addr().map_err(io_error)?.port();
+    drop(listener);
+    let forward = format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}");
+    let mut child = Command::new("ssh")
+        .args([
+            "-N",
+            "-L",
+            &forward,
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            "-o",
+            "ExitOnForwardFailure=yes",
+            destination,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| "L’outil SSH est indisponible sur cet ordinateur.".to_string())?;
+    let ready = (0..50).any(|_| {
+        if child.try_wait().ok().flatten().is_some() {
+            return false;
+        }
+        if TcpStream::connect_timeout(
+            &std::net::SocketAddr::from(([127, 0, 0, 1], local_port)),
+            Duration::from_millis(100),
+        )
+        .is_ok()
+        {
+            return true;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+        false
+    });
+    if !ready {
+        let _ = child.kill();
+        let _ = child.wait();
+        return Err("Le tunnel sécurisé vers le contrôle du Pi n’a pas pu démarrer. Vérifie l’accès SSH au serveur.".into());
+    }
+    let mut tunnel_profile = profile.clone();
+    if let Some(object) = tunnel_profile.as_object_mut() {
+        object.insert("rcon_port".into(), serde_json::json!(local_port));
+        object.insert("rcon_password".into(), serde_json::json!(password));
+    }
+    let result = operation(&tunnel_profile);
+    let _ = child.kill();
+    let _ = child.wait();
+    result
+}
+
 pub fn export_local_server_log(server_dir: &Path, output_file: &Path) -> Result<String, String> {
     let server_dir = server_dir
         .canonicalize()
@@ -1831,12 +2130,12 @@ fn rcon_command(profile: &serde_json::Value, command: &str) -> Result<String, St
         .get("rcon_password")
         .and_then(serde_json::Value::as_str)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| "Le contrôle sécurisé du serveur n’est pas configuré.".to_string())?;
+        .ok_or_else(|| "Le contrôle sécurisé de ce serveur n’est pas configuré.".to_string())?;
     let mut stream = TcpStream::connect_timeout(
         &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
         Duration::from_secs(2),
     )
-    .map_err(|_| "Le serveur local ne répond pas au contrôle sécurisé.".to_string())?;
+    .map_err(|_| "Le serveur ne répond pas au contrôle sécurisé.".to_string())?;
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .map_err(io_error)?;
@@ -1846,12 +2145,12 @@ fn rcon_command(profile: &serde_json::Value, command: &str) -> Result<String, St
     write_rcon_packet(&mut stream, 1, 3, password)?;
     let (auth_id, _, _) = read_rcon_packet(&mut stream)?;
     if auth_id != 1 {
-        return Err("Le serveur local n’a pas confirmé son identité.".into());
+        return Err("Le serveur n’a pas confirmé son identité.".into());
     }
     write_rcon_packet(&mut stream, 2, 2, command)?;
     let (response_id, _, response) = read_rcon_packet(&mut stream)?;
     if response_id != 2 {
-        return Err("Le serveur local n’a pas confirmé la commande.".into());
+        return Err("Le serveur n’a pas confirmé la commande.".into());
     }
     Ok(response)
 }
@@ -1879,7 +2178,7 @@ fn read_rcon_packet(stream: &mut TcpStream) -> Result<(i32, i32, String), String
     stream.read_exact(&mut size).map_err(io_error)?;
     let size = i32::from_le_bytes(size);
     if !(10..=4096).contains(&size) {
-        return Err("Le serveur local a répondu avec un paquet de contrôle invalide.".into());
+        return Err("Le serveur a répondu avec un paquet de contrôle invalide.".into());
     }
     let mut packet = vec![0; size as usize];
     stream.read_exact(&mut packet).map_err(io_error)?;
@@ -1943,6 +2242,12 @@ pub fn install_remote_pi(
         BEDROCK_DEFAULT_PORT,
         BEDROCK_ALTERNATE_PORT,
     )?;
+    let rcon_port = select_remote_port(
+        facts.rcon_default_busy,
+        facts.rcon_alternate_busy,
+        25575,
+        25576,
+    )?;
     let heap_gb = ((facts.memory_gb * 0.4).floor() as u8).clamp(1, 6);
     let id = Uuid::new_v4().simple().to_string();
     let local_stage = std::env::temp_dir().join(format!("monde-ensemble-{id}"));
@@ -1955,6 +2260,7 @@ pub fn install_remote_pi(
         true,
         java_port,
         bedrock_port,
+        Some(rcon_port),
         &progress,
     )?;
 
@@ -1978,10 +2284,16 @@ pub fn install_remote_pi(
         .sync_all()
         .map_err(io_error)?;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&package_path, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
+    }
     let remote_archive = format!("Monde-Ensemble-{id}.tar.gz");
     progress("Envoi sécurisé des fichiers vérifiés au Pi…", 84);
     let scp = Command::new("scp")
         .args([
+            "-p",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -2003,7 +2315,7 @@ pub fn install_remote_pi(
 
     progress("Installation et démarrage du serveur sur le Pi…", 91);
     let prepare_command = format!(
-        "set -eu; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; cd \"$d/server\"; test -s paper.jar; test -s plugins/Geyser-Spigot.jar; test -s plugins/Floodgate-Spigot.jar; AUTOSTART=no; if command -v crontab >/dev/null 2>&1 && (systemctl is-enabled --quiet cron 2>/dev/null || systemctl is-enabled --quiet crond 2>/dev/null); then t=\"$(mktemp)\"; (crontab -l 2>/dev/null || true) | grep -Fv '# MONDE_ENSEMBLE_AUTO_START' > \"$t\" || true; printf '%s\\n' '@reboot \"$HOME/Monde-Ensemble-{id}/server/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START' >> \"$t\"; crontab \"$t\"; rm -f \"$t\"; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then AUTOSTART=yes; fi; fi; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; printf 'AUTOSTART=%s\\n' \"$AUTOSTART\""
+        "set -eu; umask 077; chmod 600 \"$HOME/{remote_archive}\"; trap 'rm -f \"$HOME/{remote_archive}\"' EXIT; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; trap - EXIT; cd \"$d/server\"; test -s paper.jar; test -s plugins/Geyser-Spigot.jar; test -s plugins/Floodgate-Spigot.jar; chmod 600 server.properties monde-ensemble-profile.json; AUTOSTART=no; if command -v crontab >/dev/null 2>&1 && (systemctl is-enabled --quiet cron 2>/dev/null || systemctl is-enabled --quiet crond 2>/dev/null); then t=\"$(mktemp)\"; (crontab -l 2>/dev/null || true) | grep -Fv '# MONDE_ENSEMBLE_AUTO_START' > \"$t\" || true; printf '%s\\n' '@reboot \"$HOME/Monde-Ensemble-{id}/server/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START' >> \"$t\"; crontab \"$t\"; rm -f \"$t\"; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then AUTOSTART=yes; fi; fi; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; printf 'AUTOSTART=%s\\n' \"$AUTOSTART\""
     );
     run_ssh(&destination, &prepare_command).map_err(|error| {
         format!("Les fichiers ont été transférés, mais leur préparation a échoué dans ~/Monde-Ensemble-{id}/server. Rien n’a été écrit dans les autres dossiers du Pi. Détail : {error}")
@@ -2615,11 +2927,17 @@ fn update_pi_server_if_ready(
         .sync_all()
         .map_err(io_error)?;
 
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&archive_path, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
+    }
     let destination = format!("{username}@{host}");
     let remote_archive = format!("Monde-Ensemble-update-{id}.tar.gz");
     progress("Envoi chiffré des fichiers contrôlés au Pi…", 65);
     let scp = Command::new("scp")
         .args([
+            "-p",
             "-o",
             "BatchMode=yes",
             "-o",
@@ -2651,9 +2969,11 @@ fn update_pi_server_if_ready(
     let floodgate_sha256 = &check.floodgate_sha256;
     let remote_script = format!(
         r#"set -eu
+umask 077
 d="$HOME/{server_folder}"
 parent="$HOME/{parent_folder}"
 upload="$HOME/{remote_archive}"
+chmod 600 "$upload"
 work="$parent/.update-{id}"
 backup="$parent/backups/{backup_name}"
 mkdir -p "$parent/backups"
@@ -2754,6 +3074,7 @@ mv -f "$d/paper.jar.new" "$d/paper.jar"
 mv -f "$d/plugins/Geyser-Spigot.jar.new" "$d/plugins/Geyser-Spigot.jar"
 mv -f "$d/plugins/Floodgate-Spigot.jar.new" "$d/plugins/Floodgate-Spigot.jar"
 mv -f "$d/monde-ensemble-profile.json.new" "$d/monde-ensemble-profile.json"
+chmod 600 "$d/server.properties" "$d/monde-ensemble-profile.json"
 old_lines="$(wc -l < "$d/serveur.log" 2>/dev/null || echo 0)"
 start_game
 if ! wait_ready "$old_lines"; then exit 1; fi
@@ -2962,6 +3283,8 @@ struct RemoteFacts {
     java_alternate_busy: bool,
     bedrock_default_busy: bool,
     bedrock_alternate_busy: bool,
+    rcon_default_busy: bool,
+    rcon_alternate_busy: bool,
 }
 
 fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
@@ -2993,6 +3316,8 @@ fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
         java_alternate_busy: required("PORT_25566")?.trim() == "busy",
         bedrock_default_busy: required("PORT_19132")?.trim() == "busy",
         bedrock_alternate_busy: required("PORT_19133")?.trim() == "busy",
+        rcon_default_busy: required("PORT_25575")?.trim() == "busy",
+        rcon_alternate_busy: required("PORT_25576")?.trim() == "busy",
     })
 }
 
@@ -3069,6 +3394,7 @@ fn build_fresh_server(
     remote_linux: bool,
     java_port: u16,
     bedrock_port: u16,
+    rcon_port: Option<u16>,
     progress: &impl Fn(&str, u8),
 ) -> Result<(String, String, String, String, u16, u16), String> {
     let client = client()?;
@@ -3151,6 +3477,7 @@ fn build_fresh_server(
         remote_linux,
         java_port,
         bedrock_port,
+        rcon_port,
         &geyser,
         &floodgate,
         paper.id,
@@ -3227,16 +3554,18 @@ fn configure_server(
     remote_linux: bool,
     java_port: u16,
     bedrock_port: u16,
+    rcon_port: Option<u16>,
     geyser: &BridgeBuild,
     floodgate: &BridgeBuild,
     paper_build_id: u64,
 ) -> Result<(), String> {
     let eula = format!("# EULA acceptée séparément dans l’application Monde Ensemble\neula=true\n");
     fs::write(stage.join("eula.txt"), eula).map_err(io_error)?;
-    let (rcon_properties, rcon_profile) = if remote_linux {
-        (String::new(), serde_json::Map::new())
-    } else {
-        let rcon_port = available_game_port(25575, 25576, false)?;
+    let (rcon_properties, rcon_profile) = {
+        let rcon_port = match rcon_port {
+            Some(port) => port,
+            None => available_game_port(25575, 25576, false)?,
+        };
         let rcon_password = Uuid::new_v4().simple().to_string();
         (
             format!(
@@ -3252,6 +3581,7 @@ fn configure_server(
         "motd=Monde Ensemble\nserver-port={java_port}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nview-distance=8\nsimulation-distance=6\n{rcon_properties}"
     );
     fs::write(stage.join("server.properties"), properties).map_err(io_error)?;
+    set_private_file_permissions(&stage.join("server.properties"))?;
 
     let geyser_jar = stage.join("plugins").join("Geyser-Spigot.jar");
     let mut jar =
@@ -3296,6 +3626,18 @@ fn configure_server(
         serde_json::to_vec_pretty(&profile).map_err(|error| error.to_string())?,
     )
     .map_err(io_error)?;
+    set_private_file_permissions(&stage.join("monde-ensemble-profile.json"))?;
+    Ok(())
+}
+
+#[cfg(unix)]
+fn set_private_file_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(io_error)
+}
+
+#[cfg(not(unix))]
+fn set_private_file_permissions(_path: &Path) -> Result<(), String> {
     Ok(())
 }
 

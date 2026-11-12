@@ -93,6 +93,7 @@ type LocalServerStatus = {
   log: string;
 };
 type LocalWhitelistStatus = { enabled: boolean; entries: string };
+type PiWhitelistStatus = { enabled: boolean; entries: string };
 type PiServerStatus = {
   running: boolean;
   ready: boolean;
@@ -159,6 +160,14 @@ function App() {
   const [piServerStatus, setPiServerStatus] = useState<PiServerStatus | null>(
     null,
   );
+  const [piWhitelistStatus, setPiWhitelistStatus] =
+    useState<PiWhitelistStatus | null>(null);
+  const [piPlayerName, setPiPlayerName] = useState("");
+  const [piPlayerPlatform, setPiPlayerPlatform] = useState<"java" | "bedrock">(
+    "java",
+  );
+  const [piPlayerError, setPiPlayerError] = useState("");
+  const [piPlayerMessage, setPiPlayerMessage] = useState("");
   const [localInstallation, setLocalInstallation] =
     useState<LocalInstallation | null>(() => {
       try {
@@ -587,6 +596,23 @@ function App() {
         serverFolder: piInstallation.serverFolder,
       });
       setPiServerStatus(status);
+      if (status.running) {
+        try {
+          setPiWhitelistStatus(
+            await invoke<PiWhitelistStatus>("pi_whitelist_status", {
+              host: piInstallation.host,
+              username: piInstallation.username,
+              serverFolder: piInstallation.serverFolder,
+            }),
+          );
+          setPiPlayerError("");
+        } catch (error) {
+          setPiWhitelistStatus(null);
+          setPiPlayerError(String(error));
+        }
+      } else {
+        setPiWhitelistStatus(null);
+      }
       if (includeLogs && !status.log) {
         setPiStatusError("Le serveur n’a pas encore écrit de journal.");
       }
@@ -613,6 +639,85 @@ function App() {
       setPiUpdateError(String(error));
     } finally {
       setCheckingPiUpdate(false);
+    }
+  };
+
+  const managePiPlayer = async (action: "add" | "remove") => {
+    if (!piInstallation) return;
+    setBusy(true);
+    setPiPlayerError("");
+    setPiPlayerMessage("Mise à jour de la liste des joueurs…");
+    try {
+      const response = await invoke<string>("change_pi_whitelist", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+        platform: piPlayerPlatform,
+        action,
+        playerName: piPlayerName,
+      });
+      setPiPlayerMessage(response || "La liste des joueurs a été actualisée.");
+      setPiWhitelistStatus(
+        await invoke<PiWhitelistStatus>("pi_whitelist_status", {
+          host: piInstallation.host,
+          username: piInstallation.username,
+          serverFolder: piInstallation.serverFolder,
+        }),
+      );
+      setPiPlayerName("");
+    } catch (error) {
+      setPiPlayerError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const preparePiPlayerManagement = async () => {
+    if (!piInstallation) return;
+    setBusy(true);
+    setPiPlayerError("");
+    setPiPlayerMessage("Préparation des réglages protégés…");
+    try {
+      setPiPlayerMessage(
+        await invoke<string>("prepare_pi_player_management", {
+          host: piInstallation.host,
+          username: piInstallation.username,
+          serverFolder: piInstallation.serverFolder,
+        }),
+      );
+      setPiWhitelistStatus(null);
+    } catch (error) {
+      setPiPlayerError(String(error));
+      setPiPlayerMessage("");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setPiWhitelist = async (enabled: boolean) => {
+    if (!piInstallation) return;
+    setBusy(true);
+    setPiPlayerError("");
+    try {
+      setPiPlayerMessage(
+        await invoke<string>("set_pi_whitelist_enabled", {
+          host: piInstallation.host,
+          username: piInstallation.username,
+          serverFolder: piInstallation.serverFolder,
+          enabled,
+        }),
+      );
+      setPiWhitelistStatus(
+        await invoke<PiWhitelistStatus>("pi_whitelist_status", {
+          host: piInstallation.host,
+          username: piInstallation.username,
+          serverFolder: piInstallation.serverFolder,
+        }),
+      );
+    } catch (error) {
+      setPiPlayerError(String(error));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -969,7 +1074,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.11.0
+          MONDE ENSEMBLE <span>·</span> 0.12.0
         </div>
       </aside>
 
@@ -1029,6 +1134,16 @@ function App() {
               onExportLocalLog={exportLocalLog}
               piInstallation={piInstallation}
               piServerStatus={piServerStatus}
+              piWhitelistStatus={piWhitelistStatus}
+              piPlayerName={piPlayerName}
+              piPlayerPlatform={piPlayerPlatform}
+              piPlayerError={piPlayerError}
+              piPlayerMessage={piPlayerMessage}
+              onPiPlayerNameChange={setPiPlayerName}
+              onPiPlayerPlatformChange={setPiPlayerPlatform}
+              onManagePiPlayer={managePiPlayer}
+              onSetPiWhitelist={setPiWhitelist}
+              onPreparePiPlayerManagement={preparePiPlayerManagement}
               piStatusError={piStatusError}
               piActionMessage={piActionMessage}
               actionProgress={busy ? (operationProgress?.step ?? "") : ""}
@@ -1819,6 +1934,16 @@ function Home({
   onExportLocalLog,
   piInstallation,
   piServerStatus,
+  piWhitelistStatus,
+  piPlayerName,
+  piPlayerPlatform,
+  piPlayerError,
+  piPlayerMessage,
+  onPiPlayerNameChange,
+  onPiPlayerPlatformChange,
+  onManagePiPlayer,
+  onSetPiWhitelist,
+  onPreparePiPlayerManagement,
   piStatusError,
   piActionMessage,
   actionProgress,
@@ -1858,6 +1983,16 @@ function Home({
   onExportLocalLog: () => void;
   piInstallation: PiInstallation | null;
   piServerStatus: PiServerStatus | null;
+  piWhitelistStatus: PiWhitelistStatus | null;
+  piPlayerName: string;
+  piPlayerPlatform: "java" | "bedrock";
+  piPlayerError: string;
+  piPlayerMessage: string;
+  onPiPlayerNameChange: (value: string) => void;
+  onPiPlayerPlatformChange: (value: "java" | "bedrock") => void;
+  onManagePiPlayer: (action: "add" | "remove") => void;
+  onSetPiWhitelist: (enabled: boolean) => void;
+  onPreparePiPlayerManagement: () => void;
   piStatusError: string;
   piActionMessage: string;
   actionProgress: string;
@@ -2423,6 +2558,147 @@ function Home({
             jamais, une réservation dans la box doit être confirmée. Pour jouer
             depuis l’extérieur, il faut aussi configurer l’accès du routeur.
           </p>
+        </section>
+      )}
+      {piInstallation && (
+        <section className="player-tools" aria-labelledby="pi-players-title">
+          <div className="player-tools-heading">
+            <div>
+              <div className="eyebrow">ACCÈS AU MONDE · RASPBERRY PI</div>
+              <h3 id="pi-players-title">Joueurs autorisés</h3>
+            </div>
+            <span
+              className={
+                piWhitelistStatus?.enabled
+                  ? "player-state enabled"
+                  : "player-state"
+              }
+            >
+              {piWhitelistStatus
+                ? piWhitelistStatus.enabled
+                  ? "Liste active"
+                  : "Liste inactive"
+                : piServerStatus?.running
+                  ? "À vérifier"
+                  : "Serveur à démarrer"}
+            </span>
+          </div>
+          {piWhitelistStatus ? (
+            <>
+              <p className="player-tools-note">
+                {piWhitelistStatus.enabled
+                  ? "Seuls les joueurs listés peuvent rejoindre."
+                  : "La liste est inactive : toute personne connaissant l’adresse peut tenter de rejoindre."}
+              </p>
+              <div className="player-entry-row">
+                <label>
+                  <span>Édition</span>
+                  <select
+                    value={piPlayerPlatform}
+                    onChange={(event) =>
+                      onPiPlayerPlatformChange(
+                        event.target.value as "java" | "bedrock",
+                      )
+                    }
+                    disabled={busy}
+                  >
+                    <option value="java">Java · PC et Mac</option>
+                    <option value="bedrock">
+                      Bedrock · mobile, console, Windows
+                    </option>
+                  </select>
+                </label>
+                <label className="player-name-input">
+                  <span>
+                    {piPlayerPlatform === "java" ? "Nom Java" : "Gamertag Xbox"}
+                  </span>
+                  <input
+                    value={piPlayerName}
+                    onChange={(event) =>
+                      onPiPlayerNameChange(event.target.value)
+                    }
+                    placeholder={
+                      piPlayerPlatform === "java"
+                        ? "Ex. Alex_12"
+                        : "Ex. Alex 12"
+                    }
+                    maxLength={16}
+                    disabled={busy}
+                  />
+                </label>
+                <button
+                  className="button primary"
+                  onClick={() => onManagePiPlayer("add")}
+                  disabled={busy || !piPlayerName.trim()}
+                >
+                  Ajouter
+                </button>
+                <button
+                  className="button secondary"
+                  onClick={() => onManagePiPlayer("remove")}
+                  disabled={busy || !piPlayerName.trim()}
+                >
+                  Retirer
+                </button>
+              </div>
+              {piPlayerPlatform === "bedrock" && (
+                <p className="player-tools-note">
+                  Un gamertag Bedrock doit avoir rejoint une première fois un
+                  serveur Geyser. La protection ne sera jamais désactivée pour
+                  contourner cette règle.
+                </p>
+              )}
+              <details className="player-list-output">
+                <summary>Voir la réponse du serveur</summary>
+                <pre>{piWhitelistStatus.entries}</pre>
+              </details>
+              <button
+                className="text-button"
+                onClick={() => onSetPiWhitelist(!piWhitelistStatus.enabled)}
+                disabled={busy}
+              >
+                {piWhitelistStatus.enabled
+                  ? "Désactiver la liste d’accès"
+                  : "Activer la liste d’accès"}
+              </button>
+            </>
+          ) : (
+            <>
+              <p className="player-tools-note">
+                {piPlayerError ||
+                  (piServerStatus?.running
+                    ? "La liste sera disponible après vérification du contrôle sécurisé."
+                    : "Démarre le serveur pour gérer la liste des joueurs.")}
+              </p>
+              {piPlayerError.includes("antérieure à la gestion sécurisée") && (
+                <>
+                  <p className="player-tools-note">
+                    Cette préparation conserve le monde, crée deux copies de
+                    réglages et ne fonctionne que serveur arrêté.
+                  </p>
+                  <button
+                    className="button secondary"
+                    onClick={onPreparePiPlayerManagement}
+                    disabled={busy || piServerStatus?.running}
+                  >
+                    {piServerStatus?.running
+                      ? "Arrête le serveur avant la préparation"
+                      : "Préparer la gestion des joueurs"}
+                  </button>
+                </>
+              )}
+            </>
+          )}
+          {piPlayerMessage && (
+            <p className="pi-action-message" aria-live="polite">
+              {piPlayerMessage}
+            </p>
+          )}
+          {piPlayerError && piWhitelistStatus && (
+            <p className="pi-error" role="alert">
+              {piPlayerError}
+            </p>
+          )}
         </section>
       )}
       <div className="hero">

@@ -1,4 +1,4 @@
-# Monde Ensemble 0.11.0
+# Monde Ensemble 0.12.0
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -41,8 +41,8 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 - La mise à jour coordonnée automatique est limitée aux serveurs Pi créés par Monde Ensemble. Le serveur doit être arrêté depuis l’application ; un mod, plugin non géré, pack de données, pack client, lien symbolique, runtime Java incompatible, espace insuffisant ou catalogue indisponible reporte la mise à jour et conserve la version actuelle.
 - Une mise à jour de Paper peut modifier les données de monde au premier démarrage. L’application conserve donc une archive complète avant lancement et ne valide la mise à jour qu’après le signal serveur prêt et l’ouverture des ports Java et Bedrock. Les sauvegardes automatiques s’accumulent et exigent de l’espace libre; l’application ne supprime pas les anciennes copies.
 - Les profils locaux antérieurs à 0.8.0 n’ont pas le contrôle RCON local nécessaire aux boutons de démarrage, d’arrêt et de mise à jour. Une copie mise à jour locale prend de l’espace supplémentaire : l’ancienne version et l’archive sont conservées, sans suppression automatique.
-- La gestion des joueurs est actuellement disponible sur les serveurs locaux gérés. Sur Bedrock, Floodgate exige que le joueur ait déjà rejoint un serveur Geyser avant que sa commande de liste d’accès puisse l’ajouter; la gestion correspondante à distance sur Pi reste à intégrer.
-- La gestion guidée des joueurs sur Pi, l’ajout de mods/plugins et l’installation de packs compatibles ne sont pas encore intégrés.
+- La gestion des joueurs est disponible sur les nouveaux serveurs locaux et Pi gérés. Les profils Pi plus anciens peuvent être préparés depuis le tableau de bord après arrêt du serveur; deux copies des réglages sont créées avant toute modification. Sur Bedrock, Floodgate exige que le joueur ait déjà rejoint un serveur Geyser avant que sa commande de liste d’accès puisse l’ajouter.
+- L’ajout guidé de mods/plugins et l’installation de packs compatibles ne sont pas encore intégrés.
 - Le contrôle du serveur repère maintenant l’absence du port TCP Bedrock, mais ne vérifie pas la redirection du routeur, le filtrage opérateur, l’authentification Microsoft, ni la compatibilité de chaque appareil. Le diagnostic `InitialConnection-149` reste donc partiel.
 - Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.
 - Une compilation sur Mac ne valide pas les installateurs Windows ou Raspberry Pi. Il faut encore compiler et vérifier ces cibles sur leurs machines correspondantes.
@@ -56,6 +56,8 @@ Le profil utilise un serveur Java Paper avec les versions officielles de Geyser 
 Pour les clients Bedrock 26.60 et plus récents, Geyser doit utiliser NetherNet : l’installation configure ce transport et vérifie que le port Bedrock répond en TCP pour le signalement et en UDP pour le jeu. Le contrôle à domicile ne peut pas confirmer une redirection de routeur, un pare-feu externe, un filtrage opérateur ou un accès Internet.
 
 ## Raspberry Pi
+
+Les serveurs Pi créés par cette version disposent aussi d’une liste d’accès Java/Bedrock gérée depuis le tableau de bord. Le contrôle RCON reste limité à la boucle locale du Pi et chaque action passe par un tunnel SSH temporaire. Les installations Pi plus anciennes affichent un message dédié au lieu de modifier leur configuration en silence.
 
 Sur un Pi déjà démarré, choisis « Sur un Raspberry Pi », saisis le nom de son compte, puis sélectionne « Trouver mon Pi ». L’application cherche sur le réseau local; si plusieurs Pi répondent, choisis celui qui convient. Elle utilise uniquement une clé SSH déjà approuvée et refuse les connexions qui demandent un mot de passe ou une clé inconnue. Ensuite, confirme l’EULA et choisis « Installer et démarrer le serveur ». La confirmation indique l’adresse et les ports. Les clients du même réseau local utilisent cette adresse; l’accès depuis l’extérieur demande aussi un réglage du routeur.
 

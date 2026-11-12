@@ -715,6 +715,69 @@ async fn inspect_pi_server(
 }
 
 #[tauri::command]
+async fn prepare_pi_player_management(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::prepare_pi_whitelist_migration(&host, &username, &server_folder)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn pi_whitelist_status(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<engine::PiWhitelistStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::pi_whitelist_status(&host, &username, &server_folder)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn change_pi_whitelist(
+    host: String,
+    username: String,
+    server_folder: String,
+    platform: String,
+    action: String,
+    player_name: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::change_pi_whitelist(
+            &host,
+            &username,
+            &server_folder,
+            &platform,
+            &action,
+            &player_name,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn set_pi_whitelist_enabled(
+    host: String,
+    username: String,
+    server_folder: String,
+    enabled: bool,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::set_pi_whitelist_enabled(&host, &username, &server_folder, enabled)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn check_pi_update(
     host: String,
     username: String,
@@ -845,6 +908,10 @@ pub fn run() {
             local_whitelist_status,
             change_local_whitelist,
             set_local_whitelist_enabled,
+            prepare_pi_player_management,
+            pi_whitelist_status,
+            change_pi_whitelist,
+            set_pi_whitelist_enabled,
             export_local_server_log,
             install_pi,
             inspect_pi_server,

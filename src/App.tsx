@@ -1563,7 +1563,9 @@ function App() {
                 ) : (
                   <div className="pi-panel">
                     <div className="pi-fresh-entry">
-                      <div className="eyebrow">NOUVEAU PI · PARCOURS DÉBUTANT</div>
+                      <div className="eyebrow">
+                        NOUVEAU PI · PARCOURS DÉBUTANT
+                      </div>
                       <p>
                         Ton Pi peut être neuf, allumé et sans stockage : il n’a
                         encore rien à démarrer. Branche sa carte vide au Mac qui
@@ -1578,7 +1580,10 @@ function App() {
                         onClick={() =>
                           document
                             .getElementById("pi-fresh-title")
-                            ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                            ?.scrollIntoView({
+                              behavior: "smooth",
+                              block: "start",
+                            })
                         }
                       >
                         Préparer un Pi neuf depuis cette application
@@ -1761,11 +1766,76 @@ function App() {
                       </h4>
                       <p>
                         Cette préparation se fait sur le Mac avec la carte SD ou
-                        le SSD vide branché. Le Pi n’a pas besoin de système,
-                        de Wi-Fi ni de SSH pour commencer. L’application choisit
-                        le système compatible et vérifie le support avant de
+                        le SSD vide branché. Le Pi n’a pas besoin de système, de
+                        Wi-Fi ni de SSH pour commencer. L’application choisit le
+                        système compatible et vérifie le support avant de
                         l’effacer.
                       </p>
+                      <ol
+                        className="pi-first-steps"
+                        aria-label="Progression de l’installation"
+                      >
+                        <li className={piFlashResult ? "complete" : "current"}>
+                          <b>1</b>
+                          <span>
+                            <strong>Préparer la carte</strong>
+                            <small>
+                              {piFlashResult
+                                ? "Système écrit et vérifié"
+                                : "Sur ce Mac, depuis l’application"}
+                            </small>
+                          </span>
+                        </li>
+                        <li
+                          className={
+                            piInstallation
+                              ? "complete"
+                              : piFlashResult
+                                ? "current"
+                                : ""
+                          }
+                        >
+                          <b>2</b>
+                          <span>
+                            <strong>Démarrer le Pi</strong>
+                            <small>
+                              {piInstallation
+                                ? "Pi trouvé sur le réseau"
+                                : "Insérer la carte Pi éteint, puis le rallumer"}
+                            </small>
+                          </span>
+                        </li>
+                        <li
+                          className={
+                            piServerStatus?.ready
+                              ? "complete"
+                              : piInstallation
+                                ? "current"
+                                : ""
+                          }
+                        >
+                          <b>3</b>
+                          <span>
+                            <strong>Installer et contrôler</strong>
+                            <small>
+                              {piServerStatus?.ready
+                                ? "Java et Bedrock répondent"
+                                : "Serveur, versions et ports"}
+                            </small>
+                          </span>
+                        </li>
+                        <li className={piServerStatus?.ready ? "current" : ""}>
+                          <b>4</b>
+                          <span>
+                            <strong>Rejoindre le monde</strong>
+                            <small>
+                              {piServerStatus?.ready
+                                ? "À essayer dans Minecraft avec l’adresse affichée"
+                                : "L’adresse apparaîtra après le contrôle"}
+                            </small>
+                          </span>
+                        </li>
+                      </ol>
                       <button
                         className="button secondary"
                         onClick={findPiBootTargets}
@@ -1798,8 +1868,8 @@ function App() {
                           <>
                             <small className="pi-wifi-note">
                               Le mot de passe est placé temporairement dans un
-                              fichier de démarrage ; l’application programme
-                              sa suppression au premier démarrage. Pour ne pas
+                              fichier de démarrage ; l’application programme sa
+                              suppression au premier démarrage. Pour ne pas
                               écrire le mot de passe sur la carte, utilise
                               plutôt un câble réseau.
                             </small>
@@ -1944,11 +2014,10 @@ function App() {
                           Pi 4 ou 5 si son boîtier est assez alimenté et si le
                           Pi autorise le démarrage USB. Certains anciens Pi 4
                           nécessitent une mise à jour de leur chargeur de
-                          démarrage.
-                          L’application vérifie la capacité et l’écriture; seul
-                          le premier démarrage confirme que le Pi accepte ce
-                          SSD. Si tu veux éviter cette incertitude, commence en
-                          microSD.
+                          démarrage. L’application vérifie la capacité et
+                          l’écriture; seul le premier démarrage confirme que le
+                          Pi accepte ce SSD. Si tu veux éviter cette
+                          incertitude, commence en microSD.
                         </p>
                       )}
                       {(operationProgress || operationError) && (
@@ -3843,9 +3912,7 @@ function GameSettingsPanel({
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const serverRunning =
-    target === "local"
-      ? localServerStatus?.running
-      : piServerStatus?.running;
+    target === "local" ? localServerStatus?.running : piServerStatus?.running;
   const serverVerified =
     target === "local" ? Boolean(localServerStatus) : Boolean(piServerStatus);
 
@@ -3893,7 +3960,9 @@ function GameSettingsPanel({
     key: K,
     value: GameSettings[K],
   ) => {
-    setSettings((current) => (current ? { ...current, [key]: value } : current));
+    setSettings((current) =>
+      current ? { ...current, [key]: value } : current,
+    );
     setMessage("");
   };
 
@@ -3947,7 +4016,9 @@ function GameSettingsPanel({
               Serveur à configurer
               <select
                 value={target}
-                onChange={(event) => setTarget(event.target.value as PluginTarget)}
+                onChange={(event) =>
+                  setTarget(event.target.value as PluginTarget)
+                }
                 disabled={loading || saving || busy}
               >
                 <option value="local">Ordinateur · serveur local</option>
@@ -3960,7 +4031,11 @@ function GameSettingsPanel({
             </p>
           )}
           {loading && <p className="path-note">Lecture des réglages…</p>}
-          {error && <p className="pi-error" role="alert">{error}</p>}
+          {error && (
+            <p className="pi-error" role="alert">
+              {error}
+            </p>
+          )}
           {settings && (
             <>
               <div className="game-settings-grid">
@@ -3978,7 +4053,10 @@ function GameSettingsPanel({
                   <select
                     value={settings.gamemode}
                     onChange={(event) =>
-                      change("gamemode", event.target.value as GameSettings["gamemode"])
+                      change(
+                        "gamemode",
+                        event.target.value as GameSettings["gamemode"],
+                      )
                     }
                     disabled={saving || busy}
                   >
@@ -3993,7 +4071,10 @@ function GameSettingsPanel({
                   <select
                     value={settings.difficulty}
                     onChange={(event) =>
-                      change("difficulty", event.target.value as GameSettings["difficulty"])
+                      change(
+                        "difficulty",
+                        event.target.value as GameSettings["difficulty"],
+                      )
                     }
                     disabled={saving || busy}
                   >
@@ -4046,7 +4127,8 @@ function GameSettingsPanel({
               <p className="path-note">
                 Des distances plus grandes chargent davantage de terrain et
                 peuvent ralentir un Raspberry Pi. Commence à 8 chunks
-                d’affichage et 6 de simulation, puis augmente si le serveur reste fluide.
+                d’affichage et 6 de simulation, puis augmente si le serveur
+                reste fluide.
               </p>
               <div className="game-settings-toggles">
                 <label>
@@ -4086,14 +4168,16 @@ function GameSettingsPanel({
                   onClick={() => void saveSettings()}
                   disabled={saving || busy || loading}
                 >
-                  {saving ? "Sauvegarde des réglages…" : "Enregistrer les réglages"}
+                  {saving
+                    ? "Sauvegarde des réglages…"
+                    : "Enregistrer les réglages"}
                 </button>
               )}
               {message && <p className="settings-save-message">{message}</p>}
               <small className="path-note">
-                Le redémarrage du serveur est nécessaire. En cas de problème,
-                la copie précédente de la configuration reste dans le dossier
-                du serveur.
+                Le redémarrage du serveur est nécessaire. En cas de problème, la
+                copie précédente de la configuration reste dans le dossier du
+                serveur.
               </small>
             </>
           )}

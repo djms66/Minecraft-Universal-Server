@@ -1263,6 +1263,64 @@ button {
 .pi-first-boot p {
   margin: 8px 0 0;
 }
+.pi-first-steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 7px;
+  padding: 0;
+  margin: 14px 0 4px;
+  list-style: none;
+}
+.pi-first-steps li {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  padding: 9px;
+  border: 1px solid #e5e9e1;
+  border-radius: 4px;
+  background: #f8faf6;
+  color: #788476;
+}
+.pi-first-steps li > b {
+  display: grid;
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  place-items: center;
+  border-radius: 50%;
+  background: #e8ece5;
+  color: #64715f;
+  font-size: 9px;
+}
+.pi-first-steps li > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+.pi-first-steps strong {
+  color: #3e4b3b;
+  font-size: 9px;
+}
+.pi-first-steps small {
+  line-height: 1.4;
+}
+.pi-first-steps li.current {
+  border-color: #a9bea0;
+  background: #f1f6ee;
+}
+.pi-first-steps li.current > b,
+.pi-first-steps li.complete > b {
+  background: #55764d;
+  color: #fff;
+}
+.pi-first-steps li.complete {
+  border-color: #d0ddc9;
+  color: #5f715b;
+}
+.pi-first-steps li.complete strong {
+  color: #365234;
+}
 .pi-wireless-fields {
   display: grid;
   grid-template-columns: 1fr 1fr 0.65fr;
@@ -2261,6 +2319,9 @@ button {
   white-space: nowrap;
 }
 @media (max-width: 800px) {
+  .pi-first-steps {
+    grid-template-columns: 1fr 1fr;
+  }
   .console-guide-grid {
     grid-template-columns: 1fr;
   }

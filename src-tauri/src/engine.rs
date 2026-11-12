@@ -1084,51 +1084,35 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
     const MANIFEST_URL: &str = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json";
     let client = client()?;
     let manifest: RaspberryPiOsManifest = get_json(&client, MANIFEST_URL)?;
-    let mut entries = Vec::new();
-    flatten_pi_os_entries(manifest.os_list, &mut entries);
-    let mut candidates: Vec<RaspberryPiOsEntry> = entries
-        .into_iter()
-        .filter(|entry| {
-            entry
-                .name
-                .eq_ignore_ascii_case("Raspberry Pi OS Lite (64-bit)")
-                && entry.init_format.as_deref() == Some("cloudinit-rpi")
-                && entry
-                    .url
-                    .as_deref()
-                    .is_some_and(|url| url.starts_with("https://"))
-                && entry.devices.as_ref().is_some_and(|devices| {
-                    devices.iter().any(|device| {
-                        ["pi3", "pi4", "pi5"]
-                            .iter()
-                            .any(|supported| device.starts_with(supported))
-                    })
-                })
-                && entry.extract_sha256.as_deref().is_some_and(valid_sha256)
-                && entry.extract_size.is_some()
-                && entry.release_date.is_some()
-        })
-        .collect();
-    candidates.sort_by(|a, b| b.release_date.cmp(&a.release_date));
-    let image = candidates.into_iter().next().ok_or_else(|| {
+    let image = latest_supported_pi_image(manifest.os_list).ok_or_else(|| {
         "Le catalogue officiel ne fournit pas d’image Raspberry Pi OS Lite 64 bits avec configuration de premier démarrage vérifiable. Préparation bloquée.".to_string()
+    })?;
+    let image_url = image
+        .url
+        .ok_or_else(|| "Le catalogue officiel ne fournit pas d’adresse d’image.".to_string())?;
+    let image_sha256 = image.extract_sha256.ok_or_else(|| {
+        "Le catalogue officiel ne fournit pas l’empreinte de l’image.".to_string()
+    })?;
+    let download_sha256 = image.image_download_sha256.ok_or_else(|| {
+        "Le catalogue officiel ne fournit pas l’empreinte du téléchargement.".to_string()
+    })?;
+    let download_size = image.image_download_size.ok_or_else(|| {
+        "Le catalogue officiel ne fournit pas la taille du téléchargement.".to_string()
+    })?;
+    let image_size = image.extract_size.ok_or_else(|| {
+        "Le catalogue officiel ne fournit pas la taille de l’image écrite.".to_string()
+    })?;
+    let release_date = image.release_date.ok_or_else(|| {
+        "Le catalogue officiel ne fournit pas la date de publication.".to_string()
     })?;
     Ok(PiOsRecommendation {
         name: image.name,
-        release_date: image.release_date.unwrap_or_default(),
-        image_url: image.url.unwrap_or_default(),
-        image_sha256: image.extract_sha256.unwrap_or_default(),
-        download_sha256: image
-            .image_download_sha256
-            .filter(|digest| valid_sha256(digest))
-            .unwrap_or_default(),
-        download_size_gb: (image.image_download_size.unwrap_or_default() as f64 / 1_000_000_000.0
-            * 10.0)
-            .round()
-            / 10.0,
-        image_size_gb: (image.extract_size.unwrap_or_default() as f64 / 1_000_000_000.0 * 10.0)
-            .round()
-            / 10.0,
+        release_date,
+        image_url,
+        image_sha256,
+        download_sha256,
+        download_size_gb: (download_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
+        image_size_gb: (image_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
         devices: image.devices.unwrap_or_default(),
         init_format: image.init_format.unwrap_or_default(),
         minimum_server_memory_gb: MINIMUM_SERVER_MEMORY_GB,
@@ -2099,6 +2083,44 @@ fn flatten_pi_os_entries(
         }
         flattened.push(entry);
     }
+}
+
+fn latest_supported_pi_image(os_list: Vec<RaspberryPiOsEntry>) -> Option<RaspberryPiOsEntry> {
+    let mut entries = Vec::new();
+    flatten_pi_os_entries(os_list, &mut entries);
+    let mut candidates: Vec<_> = entries
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .name
+                .eq_ignore_ascii_case("Raspberry Pi OS Lite (64-bit)")
+                && entry.init_format.as_deref() == Some("cloudinit-rpi")
+                && entry
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| url.starts_with("https://downloads.raspberrypi.com/"))
+                && entry.devices.as_ref().is_some_and(|devices| {
+                    devices.iter().any(|device| {
+                        ["pi3", "pi4", "pi5"]
+                            .iter()
+                            .any(|supported| device.starts_with(supported))
+                    })
+                })
+                && entry.extract_sha256.as_deref().is_some_and(valid_sha256)
+                && entry
+                    .image_download_sha256
+                    .as_deref()
+                    .is_some_and(valid_sha256)
+                && entry.extract_size.is_some_and(|size| size > 0)
+                && entry.image_download_size.is_some_and(|size| size > 0)
+                && entry
+                    .release_date
+                    .as_deref()
+                    .is_some_and(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())
+        })
+        .collect();
+    candidates.sort_by(|left, right| right.release_date.cmp(&left.release_date));
+    candidates.into_iter().next()
 }
 
 fn valid_sha256(value: &str) -> bool {
@@ -7010,12 +7032,13 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GameSettings, LocalStartResult, RemoveDirOnDrop, add_identity_file, apply_game_settings,
-        artifact_hash_matches, copy_verified_pack, hash_file, inspect_bedrock_resource_pack,
-        java_major_for, parse_game_settings, parse_supported_versions_page,
-        record_managed_artifact_hashes, restore_backup, safe_archive_path, safe_version,
-        shell_single_quote, start_updated_local_copy_with_fallback, valid_bedrock_pack_filename,
-        valid_plugin_filename, validate_game_settings,
+        GameSettings, LocalStartResult, RaspberryPiOsEntry, RemoveDirOnDrop, add_identity_file,
+        apply_game_settings, artifact_hash_matches, copy_verified_pack, hash_file,
+        inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
+        parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
+        restore_backup, safe_archive_path, safe_version, shell_single_quote,
+        start_updated_local_copy_with_fallback, valid_bedrock_pack_filename, valid_plugin_filename,
+        validate_game_settings,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, io::Write, path::Path, process::Command};
@@ -7056,6 +7079,46 @@ mod tests {
             .unwrap();
         archive.write_all(manifest.as_bytes()).unwrap();
         archive.finish().unwrap();
+    }
+
+    fn pi_os_entry(release_date: &str) -> RaspberryPiOsEntry {
+        RaspberryPiOsEntry {
+            name: "Raspberry Pi OS Lite (64-bit)".into(),
+            release_date: Some(release_date.into()),
+            url: Some("https://downloads.raspberrypi.com/raspios_lite_arm64/test.img.xz".into()),
+            extract_sha256: Some("a".repeat(64)),
+            image_download_sha256: Some("b".repeat(64)),
+            image_download_size: Some(1_000_000_000),
+            extract_size: Some(2_000_000_000),
+            init_format: Some("cloudinit-rpi".into()),
+            devices: Some(vec!["pi4-64bit".into(), "pi5-64bit".into()]),
+            subitems: None,
+        }
+    }
+
+    #[test]
+    fn pi_os_selection_skips_newer_images_without_verified_download_metadata() {
+        let older_verified = pi_os_entry("2026-09-01");
+        let newer_unverified = RaspberryPiOsEntry {
+            release_date: Some("2026-10-01".into()),
+            image_download_sha256: None,
+            ..pi_os_entry("2026-10-01")
+        };
+
+        let selected = latest_supported_pi_image(vec![older_verified, newer_unverified]).unwrap();
+        assert_eq!(selected.release_date.as_deref(), Some("2026-09-01"));
+        assert!(
+            selected
+                .image_download_sha256
+                .as_deref()
+                .is_some_and(|checksum| checksum.len() == 64)
+        );
+
+        let only_unverified = RaspberryPiOsEntry {
+            image_download_sha256: None,
+            ..pi_os_entry("2026-10-01")
+        };
+        assert!(latest_supported_pi_image(vec![only_unverified]).is_none());
     }
 
     #[test]

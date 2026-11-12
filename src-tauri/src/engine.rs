@@ -6019,7 +6019,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.18.10")
+        .user_agent(concat!("MondeEnsemble/", env!("CARGO_PKG_VERSION")))
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

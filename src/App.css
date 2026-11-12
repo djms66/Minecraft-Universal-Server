@@ -946,6 +946,20 @@ button {
   border-radius: 4px;
   padding: 17px 18px;
 }
+.pi-fresh-entry {
+  padding: 12px 14px;
+  border: 1px solid #dbe6d4;
+  border-left: 3px solid #65815e;
+  border-radius: 4px;
+  background: #f5f8f2;
+}
+.pi-fresh-entry p {
+  margin: 7px 0 10px;
+  color: #52624f;
+}
+.pi-fresh-entry .button {
+  margin: 0;
+}
 .panel-head {
   display: flex;
   justify-content: space-between;

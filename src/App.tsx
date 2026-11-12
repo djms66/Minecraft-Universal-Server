@@ -1406,7 +1406,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.10
+          MONDE ENSEMBLE <span>·</span> {__APP_VERSION__}
         </div>
       </aside>
 
@@ -1526,7 +1526,7 @@ function App() {
                     <span className="target-icon">▤</span>
                     <strong>Sur un Raspberry Pi</strong>
                     <small>Le serveur peut tourner sans écran.</small>
-                    <em>Besoin d’un accès configuré une fois</em>
+                    <em>Pi neuf : préparation guidée dans l’application</em>
                   </button>
                 </div>
                 {target === "this" ? (
@@ -1548,8 +1548,31 @@ function App() {
                   </>
                 ) : (
                   <div className="pi-panel">
-                    <div className="eyebrow">INSTALLATION GUIDÉE</div>
-                    <h3>Installer réellement le serveur sur le Pi</h3>
+                    <div className="pi-fresh-entry">
+                      <div className="eyebrow">NOUVEAU PI · PARCOURS DÉBUTANT</div>
+                      <p>
+                        Tu peux préparer la carte ou le SSD ici. L’application
+                        choisit le système, crée le compte sécurisé et retrouve
+                        ensuite le Pi automatiquement : pas besoin de saisir son
+                        IP ni de configurer SSH.
+                      </p>
+                      <button
+                        className="button secondary"
+                        type="button"
+                        onClick={() =>
+                          document
+                            .getElementById("pi-fresh-title")
+                            ?.scrollIntoView({ behavior: "smooth", block: "start" })
+                        }
+                      >
+                        Préparer un Pi neuf depuis cette application
+                      </button>
+                    </div>
+                    <div className="pi-separator">
+                      <span>PI DÉJÀ CONFIGURÉ</span>
+                    </div>
+                    <div className="eyebrow">INSTALLATION DISTANTE</div>
+                    <h3>Installer le serveur sur le Pi</h3>
                     <p>
                       L’application va trouver le Pi sur le réseau, vérifier son
                       modèle, sa mémoire et l’espace disponible, puis installer

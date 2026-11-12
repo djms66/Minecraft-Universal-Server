@@ -1111,6 +1111,19 @@ button {
   font-size: 9px;
   color: #647164;
 }
+.form-row label small {
+  display: block;
+  margin-top: 5px;
+  color: #899387;
+  font-size: 8px;
+  line-height: 1.4;
+}
+.pi-panel .pi-setup-help {
+  padding: 9px 10px;
+  border-left: 2px solid #90a77e;
+  background: #f5f7f1;
+  color: #657264;
+}
 .form-row input {
   display: block;
   width: 100%;
@@ -1129,6 +1142,46 @@ button {
   font-size: 9px;
   white-space: pre-wrap;
   line-height: 1.5;
+}
+.pi-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 11px;
+}
+.pi-actions .button {
+  margin: 0;
+}
+.pi-candidate-choice {
+  display: block;
+  margin-top: 12px;
+  color: #647164;
+  font-size: 9px;
+}
+.pi-candidate-choice select {
+  display: block;
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 8px;
+  border: 1px solid #dfe5db;
+  border-radius: 3px;
+  background: #fff;
+  color: #344134;
+  font: inherit;
+}
+.pi-first-boot {
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid #e5e9e1;
+  color: #657264;
+  font-size: 9px;
+}
+.pi-first-boot summary {
+  cursor: pointer;
+  font-weight: 700;
+}
+.pi-first-boot p {
+  margin: 8px 0 0;
 }
 .error-text {
   font-size: 10px;

@@ -1,6 +1,6 @@
 [package]
 name = "monde-ensemble"
-version = "0.3.0"
+version = "0.4.0"
 description = "Un guide sûr pour les serveurs Minecraft multiplateformes"
 authors = ["Daniel Streng"]
 edition = "2024"
@@ -19,7 +19,6 @@ tauri-build = { version = "2", features = [] }
 
 [dependencies]
 tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -33,6 +32,7 @@ walkdir = "2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["clock"] }
 fs2 = "0.4"
+mdns-sd = "0.21"
 
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration

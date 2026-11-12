@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import "./App.css";
 
 type SystemInfo = {
@@ -26,6 +25,7 @@ type CompatibilityReport = {
 };
 type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
+type DiscoveredPi = { host: string; address: string; model: string };
 
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "home", label: "Mon monde", icon: "▦" },
@@ -42,12 +42,16 @@ function App() {
   const [target, setTarget] = useState<"this" | "pi">("this");
   const [piHost, setPiHost] = useState("");
   const [piUser, setPiUser] = useState("");
+  const [piVerified, setPiVerified] = useState(false);
+  const [piDiscovering, setPiDiscovering] = useState(false);
+  const [piCandidates, setPiCandidates] = useState<DiscoveredPi[]>([]);
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
   const [compatibility, setCompatibility] =
     useState<CompatibilityReport | null>(null);
   const [compatibilityError, setCompatibilityError] = useState("");
   const [eulaAccepted, setEulaAccepted] = useState(false);
+  const [piEulaAccepted, setPiEulaAccepted] = useState(false);
   const [destination, setDestination] = useState("");
   const [backupSource, setBackupSource] = useState("");
   const [backupOutput, setBackupOutput] = useState("");
@@ -163,13 +167,64 @@ function App() {
 
   const testPi = async () => {
     setBusy(true);
+    setPiVerified(false);
     setConnection("Vérification de l’accès…");
     try {
       setConnection(
         await invoke<string>("probe_ssh", { host: piHost, username: piUser }),
       );
+      setPiVerified(true);
     } catch (e) {
       setConnection(String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const findPi = async () => {
+    if (!piUser) {
+      setConnection("Saisis d’abord le nom du compte utilisé sur le Pi.");
+      return;
+    }
+    setPiDiscovering(true);
+    setPiVerified(false);
+    setConnection("Recherche du Raspberry Pi sur le réseau local…");
+    try {
+      const found = await invoke<DiscoveredPi[]>("discover_pi", {
+        username: piUser,
+      });
+      setPiCandidates(found);
+      if (found.length === 1) {
+        const pi = found[0];
+        setPiHost(pi.host);
+        setPiVerified(true);
+        setConnection(`${pi.model} · trouvé à ${pi.address} · accès vérifié`);
+      } else {
+        setPiVerified(false);
+        setConnection(
+          `${found.length} Raspberry Pi trouvés. Choisis celui qui hébergera le serveur.`,
+        );
+      }
+    } catch (error) {
+      setConnection(String(error));
+    } finally {
+      setPiDiscovering(false);
+    }
+  };
+
+  const installPi = async () => {
+    resetOperation();
+    setBusy(true);
+    try {
+      const result = await invoke<OperationResult>("install_pi", {
+        host: piHost,
+        username: piUser,
+        acceptEula: piEulaAccepted,
+        progress: progressChannel(),
+      });
+      setOperationResult(result);
+    } catch (error) {
+      setOperationError(String(error));
     } finally {
       setBusy(false);
     }
@@ -240,7 +295,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.3.0
+          MONDE ENSEMBLE <span>·</span> 0.4.0
         </div>
       </aside>
 
@@ -339,62 +394,143 @@ function App() {
                   </>
                 ) : (
                   <div className="pi-panel">
-                    <h3>Tu pars de zéro sur le Raspberry Pi ?</h3>
+                    <div className="eyebrow">INSTALLATION GUIDÉE</div>
+                    <h3>Installer réellement le serveur sur le Pi</h3>
                     <p>
-                      Prépare-le avec Raspberry Pi Imager. L’outil indique les
-                      systèmes compatibles avec le modèle choisi; pour le
-                      serveur, privilégie Raspberry Pi OS 64 bits s’il est
-                      proposé. Choisis ensuite la carte ou le SSD par son nom et
-                      sa capacité, puis active l’accès distant. L’image efface
-                      le support sélectionné : vérifie-le soigneusement.
+                      L’application va trouver le Pi sur le réseau, vérifier son
+                      modèle, sa mémoire et l’espace disponible, puis installer
+                      et démarrer le serveur. Elle crée un nouveau dossier sans
+                      supprimer les fichiers déjà présents.
                     </p>
-                    <button
-                      className="button secondary"
-                      onClick={() =>
-                        openUrl("https://www.raspberrypi.com/software/")
-                      }
-                    >
-                      Ouvrir Raspberry Pi Imager ↗
-                    </button>
-                    <div className="pi-separator">
-                      <span>PI DÉJÀ PRÉPARÉ</span>
-                    </div>
-                    <h3>Relier le Raspberry Pi</h3>
-                    <p>
-                      Le Pi doit être allumé sur le même réseau et l’accès
-                      sécurisé déjà activé. Aucun mot de passe ne sera demandé
-                      ni enregistré ici.
+                    <p className="pi-setup-help">
+                      Pour éviter de te faire saisir une adresse IP, commence
+                      par « Trouver mon Pi ». Il faut seulement connaître le nom
+                      du compte créé sur le Pi. Cette version exige que son
+                      accès sécurisé soit déjà activé; elle ne te demandera ni
+                      ne conservera de mot de passe.
                     </p>
                     <div className="form-row">
                       <label>
-                        Nom ou adresse du Pi
-                        <input
-                          value={piHost}
-                          onChange={(e) => setPiHost(e.target.value)}
-                          placeholder="raspberrypi.local"
-                          autoComplete="off"
-                        />
-                      </label>
-                      <label>
-                        Nom du compte
+                        Compte Raspberry Pi
                         <input
                           value={piUser}
-                          onChange={(e) => setPiUser(e.target.value)}
+                          onChange={(e) => {
+                            setPiUser(e.target.value);
+                            setPiVerified(false);
+                          }}
                           placeholder="ex. daniel"
+                          autoComplete="off"
+                        />
+                        <small>
+                          Le compte choisi lors de la première configuration du
+                          Raspberry Pi.
+                        </small>
+                      </label>
+                      <label>
+                        Adresse (si détection impossible)
+                        <input
+                          value={piHost}
+                          onChange={(e) => {
+                            setPiHost(e.target.value);
+                            setPiVerified(false);
+                          }}
+                          placeholder="Détection automatique"
                           autoComplete="off"
                         />
                       </label>
                     </div>
-                    <button
-                      className="button secondary"
-                      onClick={testPi}
-                      disabled={busy || !piHost || !piUser}
-                    >
-                      {busy ? "Vérification…" : "Vérifier la connexion"}
-                    </button>
+                    {piCandidates.length > 1 && (
+                      <label className="pi-candidate-choice">
+                        Raspberry Pi trouvé
+                        <select
+                          value={piHost}
+                          onChange={(event) => {
+                            const selected = piCandidates.find(
+                              (pi) => pi.host === event.target.value,
+                            );
+                            setPiHost(selected?.host ?? "");
+                            setPiVerified(Boolean(selected));
+                            setConnection(
+                              selected
+                                ? `${selected.model} · ${selected.address} · accès vérifié`
+                                : "",
+                            );
+                          }}
+                        >
+                          <option value="">Choisir le bon appareil…</option>
+                          {piCandidates.map((pi) => (
+                            <option
+                              key={`${pi.host}-${pi.address}`}
+                              value={pi.host}
+                            >
+                              {pi.model} · {pi.address}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    )}
+                    <div className="pi-actions">
+                      <button
+                        className="button secondary"
+                        onClick={findPi}
+                        disabled={busy || piDiscovering || !piUser}
+                      >
+                        {piDiscovering ? "Recherche…" : "Trouver mon Pi"}
+                      </button>
+                      <button
+                        className="button secondary"
+                        onClick={testPi}
+                        disabled={busy || !piHost || !piUser}
+                      >
+                        Vérifier cette adresse
+                      </button>
+                    </div>
                     {connection && (
                       <div className="connection-result">{connection}</div>
                     )}
+                    <label className="eula-choice">
+                      <input
+                        type="checkbox"
+                        checked={piEulaAccepted}
+                        onChange={(event) =>
+                          setPiEulaAccepted(event.target.checked)
+                        }
+                      />
+                      <span>
+                        J’accepte le contrat de licence Minecraft pour ce
+                        serveur.
+                      </span>
+                    </label>
+                    <button
+                      className="button primary action-button"
+                      onClick={installPi}
+                      disabled={busy || !piVerified || !piEulaAccepted}
+                    >
+                      {busy
+                        ? "Installation du serveur sur le Pi…"
+                        : "Installer et démarrer le serveur"}
+                    </button>
+                    {(operationProgress ||
+                      operationResult ||
+                      operationError) && (
+                      <OperationStatus
+                        progress={operationProgress}
+                        result={operationResult}
+                        error={operationError}
+                      />
+                    )}
+                    <details className="pi-first-boot">
+                      <summary>
+                        Mon Raspberry Pi est neuf et n’a pas encore de système
+                      </summary>
+                      <p>
+                        Cette version peut détecter et installer le serveur sur
+                        un Pi déjà démarré. Elle ne peut pas encore installer le
+                        système sur une carte ou un SSD vierge. L’écriture d’un
+                        système efface le support choisi; garde-le débranché
+                        jusqu’à ce que cette étape guidée soit disponible.
+                      </p>
+                    </details>
                   </div>
                 )}
                 <div className="notice safe">

@@ -1,4 +1,4 @@
-# Monde Ensemble
+# Monde Ensemble 0.4.0
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -11,13 +11,17 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
 - crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive qui porte déjà le même nom ;
 - vérifie le contrôle d’intégrité et les chemins d’une archive avant restauration, puis restaure dans un nouveau dossier ;
-- explique la préparation du Raspberry Pi et permet de vérifier un accès SSH déjà configuré, sans écrire sur le Pi.
+- recherche les Raspberry Pi qui annoncent SSH sur le réseau local et affiche leur modèle et leur adresse ;
+- vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
+- transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
+- affiche l’adresse et les ports à saisir dans Minecraft, ainsi que le chemin du dossier et des journaux sur le Pi.
 
-Toutes les installations neuves et restaurations sont faites à côté des dossiers existants. L’acceptation de l’EULA est requise avant de préparer un serveur. Le serveur n’est pas démarré automatiquement.
+Toutes les installations neuves et restaurations sont faites à côté des dossiers existants. Sur le Pi, l’application vérifie que les ports choisis sont libres et ne touche pas aux autres dossiers. L’acceptation de l’EULA est requise. La connexion SSH doit être déjà configurée sur cet ordinateur; aucune clé inconnue n’est approuvée automatiquement. Le compte choisi doit pouvoir écrire dans son dossier personnel.
 
 ## Ce que cette version ne fait pas
 
-- Elle n’installe pas encore le serveur à distance sur un Raspberry Pi. La vérification SSH est en lecture seule.
+- Elle n’installe pas encore le système Raspberry Pi OS sur une carte SD ou un SSD vierge : elle prend en charge un Pi déjà démarré et configuré.
+- Elle n’installe pas encore un service qui relance le serveur automatiquement après un redémarrage du Pi; le premier démarrage est contrôlé, mais le redémarrage automatique reste à ajouter.
 - Elle ne met pas à jour un serveur existant et ne garantit pas que les plugins privés/tiers de ton monde sont compatibles. Elle ne touche donc pas à l’installation active.
 - Elle ne gère pas encore le démarrage, l’arrêt, les joueurs, les mods, ni les packs de ressources.
 - Le message Bedrock `InitialConnection-149` n’est pas diagnostiqué depuis les logs du serveur par cette version.
@@ -32,7 +36,9 @@ Le profil utilise un serveur Java Paper avec les versions officielles de Geyser 
 
 ## Raspberry Pi
 
-L’application ouvre le guide officiel Raspberry Pi Imager et explique le choix d’une image 64 bits lorsqu’elle est proposée pour la carte. Imager peut effacer le support sélectionné : le nom et la capacité doivent être vérifiés avant écriture. L’app sait mesurer le Pi via une connexion SSH déjà configurée, mais pas encore y installer le serveur. Sur Raspberry Pi OS Lite, l’interface doit rester sur le Mac/PC et le Pi héberge uniquement le serveur.
+Sur un Pi déjà démarré, choisis « Sur un Raspberry Pi », saisis le nom de son compte, puis sélectionne « Trouver mon Pi ». L’application cherche sur le réseau local; si plusieurs Pi répondent, choisis celui qui convient. Elle utilise uniquement une clé SSH déjà approuvée et refuse les connexions qui demandent un mot de passe ou une clé inconnue. Ensuite, confirme l’EULA et choisis « Installer et démarrer le serveur ». La confirmation indique l’adresse et les ports. Les clients du même réseau local utilisent cette adresse; l’accès depuis l’extérieur demande aussi un réglage du routeur.
+
+Un Pi neuf, sans système installé, n’est pas encore automatisé : il faut préparer son système et son accès distant avant que l’application puisse le trouver. L’application le signale explicitement. Sur Raspberry Pi OS Lite, l’interface reste sur le Mac/PC et le Pi héberge uniquement le serveur.
 
 ## Compiler
 

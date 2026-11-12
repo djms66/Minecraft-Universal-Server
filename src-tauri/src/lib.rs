@@ -80,6 +80,13 @@ fn probe_ssh(host: String, username: String) -> Result<String, String> {
     ))
 }
 
+#[tauri::command]
+async fn discover_pi(username: String) -> Result<Vec<engine::DiscoveredPi>, String> {
+    tauri::async_runtime::spawn_blocking(move || engine::discover_pi(&username))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
 fn valid_host(value: &str) -> bool {
     !value.is_empty()
         && value.len() <= 253
@@ -254,6 +261,25 @@ async fn create_server(
 }
 
 #[tauri::command]
+async fn install_pi(
+    host: String,
+    username: String,
+    accept_eula: bool,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::install_remote_pi(&host, &username, accept_eula, |step, percent| {
+            let _ = progress.send(engine::ProgressMessage {
+                step: step.to_string(),
+                percent,
+            });
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn backup_server(
     source: String,
     output_file: String,
@@ -302,13 +328,14 @@ async fn restore_server(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             inspect_system,
             probe_ssh,
+            discover_pi,
             get_compatibility,
             create_server,
+            install_pi,
             backup_server,
             restore_server
         ])

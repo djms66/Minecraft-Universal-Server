@@ -6,6 +6,7 @@
 
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use mdns_sd::{ServiceDaemon, ServiceEvent};
 use regex::Regex;
 use reqwest::blocking::Client;
 use serde::{Deserialize, Serialize};
@@ -15,6 +16,7 @@ use std::{
     fs::{self, File, OpenOptions},
     io::{self, Read},
     path::{Component, Path, PathBuf},
+    process::Command,
     time::Duration,
 };
 use tar::{Archive, Builder, EntryType};
@@ -24,6 +26,7 @@ use walkdir::WalkDir;
 const GAME_PORT: u16 = 25566;
 const BEDROCK_PORT: u16 = 19133;
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; printf '\nIP='; hostname -I | awk '{print $1}'; printf '\nPORT_25566='; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE '[:.]25566$'; then echo busy; else echo free; fi; printf 'PORT_19133='; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE '[:.]19133$'; then echo busy; else echo free; fi"#;
 
 #[derive(Clone, Serialize)]
 pub struct ProgressMessage {
@@ -47,6 +50,13 @@ pub struct OperationResult {
     pub path: String,
     pub detail: String,
     pub sha256: Option<String>,
+}
+
+#[derive(Serialize)]
+pub struct DiscoveredPi {
+    pub host: String,
+    pub address: String,
+    pub model: String,
 }
 
 #[derive(Deserialize)]
@@ -106,6 +116,14 @@ struct RemoveFileOnDrop(PathBuf);
 impl Drop for RemoveFileOnDrop {
     fn drop(&mut self) {
         let _ = fs::remove_file(&self.0);
+    }
+}
+
+struct RemoveDirectoryOnDrop(PathBuf);
+
+impl Drop for RemoveDirectoryOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
     }
 }
 
@@ -217,7 +235,7 @@ pub fn install_local(
     let root = prepare_root(destination_root)?;
     let staging = root.join(format!(".monde-ensemble-{}.preparing", Uuid::new_v4()));
     fs::create_dir(&staging).map_err(io_error)?;
-    let result = build_fresh_server(&staging, heap_gb, &progress);
+    let result = build_fresh_server(&staging, heap_gb, false, &progress);
     let artifacts = match result {
         Ok(artifacts) => artifacts,
         Err(error) => {
@@ -245,9 +263,329 @@ pub fn install_local(
     })
 }
 
+/// Installs a complete Linux ARM64 server on an already configured Raspberry Pi.
+/// It only creates a new, uniquely named folder under the SSH account's home.
+pub fn install_remote_pi(
+    host: &str,
+    username: &str,
+    accept_eula: bool,
+    progress: impl Fn(&str, u8),
+) -> Result<OperationResult, String> {
+    if !valid_remote_name(host) || !valid_remote_name(username) {
+        return Err("Nom du Raspberry Pi ou compte invalide.".into());
+    }
+    if !accept_eula {
+        return Err("Confirme le CLUF Minecraft avant de préparer le serveur.".into());
+    }
+    progress(
+        "Recherche du Raspberry Pi et vérification de sa capacité…",
+        3,
+    );
+    let destination = format!("{username}@{host}");
+    let inspect = run_ssh(&destination, REMOTE_PROBE_COMMAND)?;
+    let facts = parse_remote_facts(&inspect)?;
+    if facts.architecture != "aarch64" {
+        return Err(format!(
+            "Ce Pi utilise {}. Le profil sécurisé demande Raspberry Pi OS 64 bits sur Raspberry Pi 3 ou plus récent.",
+            facts.architecture
+        ));
+    }
+    if facts.memory_gb < 2.0 {
+        return Err(format!(
+            "{} n’a que {:.1} Go de mémoire. Le serveur partagé demande au moins 2 Go.",
+            facts.model, facts.memory_gb
+        ));
+    }
+    if facts.free_gb < 8 {
+        return Err(format!(
+            "Il reste {} Go libres sur le disque système du Pi. Libère au moins 8 Go avant l’installation.",
+            facts.free_gb
+        ));
+    }
+    if facts.ip.is_empty() {
+        return Err("Le Pi a répondu, mais son adresse locale n’a pas pu être détectée. Aucun fichier n’a été envoyé.".into());
+    }
+    if facts.java_port_busy || facts.bedrock_port_busy {
+        let ports = [
+            (facts.java_port_busy, GAME_PORT),
+            (facts.bedrock_port_busy, BEDROCK_PORT),
+        ]
+        .into_iter()
+        .filter_map(|(busy, port)| busy.then_some(port.to_string()))
+        .collect::<Vec<_>>()
+        .join(", ");
+        return Err(format!(
+            "Le port {ports} est déjà utilisé sur le Pi. L’installation est bloquée pour ne pas perturber un autre serveur."
+        ));
+    }
+    let heap_gb = ((facts.memory_gb * 0.4).floor() as u8).clamp(1, 6);
+    let id = Uuid::new_v4().simple().to_string();
+    let local_stage = std::env::temp_dir().join(format!("monde-ensemble-{id}"));
+    fs::create_dir(&local_stage).map_err(io_error)?;
+    let _cleanup_stage = RemoveDirectoryOnDrop(local_stage.clone());
+    progress("Préparation du profil Linux ARM64 compatible…", 8);
+    let profile = build_fresh_server(&local_stage, heap_gb, true, &progress)?;
+
+    let package_path = local_stage.with_extension("tar.gz");
+    let _cleanup_package = RemoveFileOnDrop(package_path.clone());
+    let package = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&package_path)
+        .map_err(io_error)?;
+    let encoder = GzEncoder::new(package, Compression::fast());
+    let mut archive = Builder::new(encoder);
+    archive
+        .append_dir_all("server", &local_stage)
+        .map_err(io_error)?;
+    archive
+        .into_inner()
+        .map_err(io_error)?
+        .finish()
+        .map_err(io_error)?
+        .sync_all()
+        .map_err(io_error)?;
+
+    let remote_archive = format!("Monde-Ensemble-{id}.tar.gz");
+    progress("Envoi sécurisé des fichiers vérifiés au Pi…", 84);
+    let scp = Command::new("scp")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            package_path.to_string_lossy().as_ref(),
+            &format!("{destination}:{remote_archive}"),
+        ])
+        .output()
+        .map_err(|_| {
+            "L’outil de transfert sécurisé n’est pas disponible sur cet ordinateur.".to_string()
+        })?;
+    if !scp.status.success() {
+        return Err("Le transfert vers le Pi a échoué. Rien n’a été installé. Vérifie l’accès SSH et réessaie.".into());
+    }
+
+    progress("Installation et démarrage du serveur sur le Pi…", 91);
+    let prepare_command = format!(
+        "set -eu; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; cd \"$d/server\"; test -s paper.jar; test -s plugins/Geyser-Spigot.jar; test -s plugins/Floodgate-Spigot.jar; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid"
+    );
+    run_ssh(&destination, &prepare_command).map_err(|error| {
+        format!("Les fichiers ont été transférés, mais leur préparation a échoué dans ~/Monde-Ensemble-{id}/server. Rien n’a été écrit dans les autres dossiers du Pi. Détail : {error}")
+    })?;
+    let mut started = false;
+    for attempt in 0..30 {
+        let check_command = format!(
+            "cd \"$HOME/Monde-Ensemble-{id}/server\"; if grep -q 'Done (' serveur.log; then echo READY; elif kill -0 \"$(cat serveur.pid)\" 2>/dev/null; then echo STARTING; else tail -n 60 serveur.log; exit 3; fi"
+        );
+        let status = run_ssh(&destination, &check_command).map_err(|error| {
+            format!("Le serveur a été installé, mais n’a pas confirmé son démarrage. Les détails sont dans `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi. {error}")
+        })?;
+        if status.lines().any(|line| line == "READY") {
+            started = true;
+            break;
+        }
+        progress(
+            "Le Pi démarre Minecraft pour la première fois…",
+            92 + (attempt / 5) as u8,
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if !started {
+        return Err(format!(
+            "Le serveur a été installé, mais le premier démarrage dépasse 60 secondes. Consulte `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi."
+        ));
+    }
+    let ip = &facts.ip;
+    if ip.is_empty() {
+        return Err(
+            "Le serveur a démarré, mais l’adresse locale du Pi n’a pas pu être lue.".into(),
+        );
+    }
+    progress("Serveur démarré et contrôlé sur le Raspberry Pi.", 100);
+    Ok(OperationResult {
+        path: format!("{username}@{host}:~/Monde-Ensemble-{id}/server"),
+        detail: format!(
+            "Serveur démarré et prêt · {} · Minecraft Java {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{GAME_PORT} · mobile/tablette Bedrock : {ip}:{BEDROCK_PORT} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.",
+            facts.model,
+            profile.0,
+            profile.1,
+            profile.2,
+            java_major_for(&profile.0)?,
+            heap_gb
+        ),
+        sha256: None,
+    })
+}
+
+/// Uses local DNS-SD to find SSH devices and confirms Raspberry Pi identity
+/// without writing to any device. A configured SSH key is required.
+pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
+    if !valid_remote_name(username) {
+        return Err("Saisis le nom du compte du Pi pour le retrouver automatiquement.".into());
+    }
+    let mdns = ServiceDaemon::new()
+        .map_err(|error| format!("La détection du réseau local n’a pas pu démarrer : {error}"))?;
+    let receiver = mdns
+        .browse("_ssh._tcp.local.")
+        .map_err(|error| format!("La recherche du Raspberry Pi a échoué : {error}"))?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(4);
+    let mut candidates = std::collections::BTreeMap::<String, String>::new();
+    while std::time::Instant::now() < deadline {
+        match receiver.recv_timeout(Duration::from_millis(250)) {
+            Ok(ServiceEvent::ServiceResolved(service)) if service.get_port() == 22 => {
+                let host = service.get_hostname().trim_end_matches('.').to_string();
+                for address in service.get_addresses_v4() {
+                    candidates
+                        .entry(host.clone())
+                        .or_insert_with(|| address.to_string());
+                }
+            }
+            Ok(_) | Err(_) => {}
+        }
+    }
+    let _ = mdns.stop_browse("_ssh._tcp.local.");
+    let _ = mdns.shutdown();
+    if candidates.is_empty() {
+        return Err("Aucun appareil SSH n’a été annoncé sur le réseau local. Vérifie que le Pi est allumé sur le même Wi-Fi ou câble réseau.".into());
+    }
+
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut targets = Vec::new();
+    for (host, address) in candidates {
+        targets.push((host, address.clone()));
+        targets.push((address.clone(), address));
+    }
+    targets.sort();
+    targets.dedup();
+    for (host, address) in targets.into_iter().take(12) {
+        let sender = sender.clone();
+        let username = username.to_string();
+        std::thread::spawn(move || {
+            let result = run_ssh_timeout(&format!("{username}@{host}"), REMOTE_PROBE_COMMAND, 3);
+            let _ = sender.send((host, address, result));
+        });
+    }
+    drop(sender);
+    let mut discovered = receiver
+        .into_iter()
+        .filter_map(|(host, address, result)| {
+            let facts = parse_remote_facts(&result.ok()?).ok()?;
+            Some(DiscoveredPi {
+                host,
+                address,
+                model: facts.model,
+            })
+        })
+        .collect::<Vec<_>>();
+    discovered.sort_by(|left, right| left.host.cmp(&right.host));
+    discovered.dedup_by(|left, right| left.address == right.address);
+    if discovered.is_empty() {
+        return Err("Le réseau a répondu, mais aucun Pi n’a pu être vérifié avec le compte et la clé SSH de cet ordinateur. Rien n’a été modifié.".into());
+    }
+    Ok(discovered)
+}
+
+struct RemoteFacts {
+    model: String,
+    memory_gb: f64,
+    free_gb: u64,
+    architecture: String,
+    ip: String,
+    java_port_busy: bool,
+    bedrock_port_busy: bool,
+}
+
+fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
+    let values = output
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<std::collections::HashMap<_, _>>();
+    let required = |key: &str| {
+        values
+            .get(key)
+            .copied()
+            .ok_or_else(|| format!("Le Pi n’a pas fourni la caractéristique {key}."))
+    };
+    let model = required("MODEL")?.trim().to_string();
+    if !model.to_lowercase().contains("raspberry pi") {
+        return Err("L’appareil trouvé ne s’identifie pas comme un Raspberry Pi. Aucun fichier n’a été envoyé.".into());
+    }
+    Ok(RemoteFacts {
+        model,
+        memory_gb: required("MEMORY_GB")?
+            .parse()
+            .map_err(|_| "Mémoire du Pi illisible.".to_string())?,
+        free_gb: required("FREE_GB")?
+            .parse()
+            .map_err(|_| "Espace libre du Pi illisible.".to_string())?,
+        architecture: required("ARCH")?.trim().to_string(),
+        ip: required("IP")?.trim().to_string(),
+        java_port_busy: required("PORT_25566")?.trim() == "busy",
+        bedrock_port_busy: required("PORT_19133")?.trim() == "busy",
+    })
+}
+
+fn valid_remote_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 253
+        && value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_'))
+        && !value.starts_with('-')
+}
+
+fn run_ssh(destination: &str, command: &str) -> Result<String, String> {
+    run_ssh_timeout(destination, command, 8)
+}
+
+fn run_ssh_timeout(
+    destination: &str,
+    command: &str,
+    timeout_seconds: u8,
+) -> Result<String, String> {
+    let output = Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            &format!("ConnectTimeout={timeout_seconds}"),
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            destination,
+            command,
+        ])
+        .output()
+        .map_err(|_| {
+            "L’outil d’accès sécurisé SSH n’est pas disponible sur cet ordinateur.".to_string()
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = [stderr, stdout]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let detail = detail.chars().take(6000).collect::<String>();
+        return Err(if detail.is_empty() {
+            "Connexion SSH refusée. Vérifie que le Pi est allumé et que sa clé d’hôte est déjà approuvée sur cet ordinateur.".into()
+        } else {
+            format!("Connexion SSH impossible : {detail}")
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
 fn build_fresh_server(
     stage: &Path,
     heap_gb: u8,
+    remote_linux: bool,
     progress: &impl Fn(&str, u8),
 ) -> Result<(String, String, String), String> {
     let client = client()?;
@@ -312,8 +650,8 @@ fn build_fresh_server(
     }
 
     progress("Préparation du Java adapté à cet ordinateur…", 66);
-    let java_major = java_major_for(&supported.java);
-    let runtime = runtime_package(&client, java_major)?;
+    let java_major = java_major_for(&supported.java)?;
+    let runtime = runtime_package(&client, java_major, remote_linux)?;
     let runtime_archive = stage.join(&runtime.name);
     download_url_verified(&client, &runtime.link, &runtime.checksum, &runtime_archive)?;
     progress("Installation du runtime Java inclus…", 78);
@@ -327,6 +665,7 @@ fn build_fresh_server(
         &supported.bedrock,
         java_major,
         heap_gb,
+        remote_linux,
         &geyser,
         &floodgate,
     )?;
@@ -335,16 +674,22 @@ fn build_fresh_server(
 
 /// Paper's current Java requirement follows its published game-version matrix.
 /// Unknown formats are rejected rather than guessed.
-fn java_major_for(game_version: &str) -> u8 {
+fn java_major_for(game_version: &str) -> Result<u8, String> {
     if game_version.starts_with("26.") {
-        25
+        Ok(25)
     } else {
-        21
+        Err(format!(
+            "La version Minecraft {game_version} ne correspond à aucune règle Java validée par l’application. Installation bloquée."
+        ))
     }
 }
 
-fn runtime_package(client: &Client, major: u8) -> Result<RuntimePackage, String> {
-    let (os, arch) = runtime_target()?;
+fn runtime_package(
+    client: &Client,
+    major: u8,
+    remote_linux: bool,
+) -> Result<RuntimePackage, String> {
+    let (os, arch) = runtime_target(remote_linux)?;
     let url = format!(
         "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={arch}&image_type=jre&os={os}&vendor=eclipse"
     );
@@ -357,17 +702,25 @@ fn runtime_package(client: &Client, major: u8) -> Result<RuntimePackage, String>
         .ok_or_else(|| format!("Aucun Java {major} officiel ne correspond à cet appareil."))
 }
 
-fn runtime_target() -> Result<(&'static str, &'static str), String> {
-    let os = match std::env::consts::OS {
-        "macos" => "mac",
-        "windows" => "windows",
-        "linux" => "linux",
-        other => return Err(format!("Le système {other} n’est pas pris en charge.")),
+fn runtime_target(remote_linux: bool) -> Result<(&'static str, &'static str), String> {
+    let os = if remote_linux {
+        "linux"
+    } else {
+        match std::env::consts::OS {
+            "macos" => "mac",
+            "windows" => "windows",
+            "linux" => "linux",
+            other => return Err(format!("Le système {other} n’est pas pris en charge.")),
+        }
     };
-    let arch = match std::env::consts::ARCH {
-        "aarch64" => "aarch64",
-        "x86_64" => "x64",
-        other => return Err(format!("L’architecture {other} n’est pas prise en charge.")),
+    let arch = if remote_linux {
+        "aarch64"
+    } else {
+        match std::env::consts::ARCH {
+            "aarch64" => "aarch64",
+            "x86_64" => "x64",
+            other => return Err(format!("L’architecture {other} n’est pas prise en charge.")),
+        }
     };
     Ok((os, arch))
 }
@@ -378,6 +731,7 @@ fn configure_server(
     bedrock_versions: &str,
     java_major: u8,
     heap_gb: u8,
+    remote_linux: bool,
     geyser: &BridgeBuild,
     floodgate: &BridgeBuild,
 ) -> Result<(), String> {
@@ -404,7 +758,7 @@ fn configure_server(
     fs::create_dir_all(stage.join("plugins/Geyser-Spigot")).map_err(io_error)?;
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
 
-    write_launch_files(stage, heap_gb)?;
+    write_launch_files(stage, heap_gb, remote_linux)?;
     let profile = serde_json::json!({
         "application": "Monde Ensemble",
         "minecraft_java": java_version,
@@ -454,8 +808,8 @@ fn set_yaml(source: &str, section: &str, key: &str, value: &str) -> String {
     lines.join("\n") + "\n"
 }
 
-fn write_launch_files(stage: &Path, heap_gb: u8) -> Result<(), String> {
-    if cfg!(windows) {
+fn write_launch_files(stage: &Path, heap_gb: u8, remote_linux: bool) -> Result<(), String> {
+    if cfg!(windows) && !remote_linux {
         let script = format!(
             "@echo off\r\ncd /d \"%~dp0\"\r\nfor /r runtime %%J in (java.exe) do set JAVA_BIN=%%J\r\nif not defined JAVA_BIN echo Java inclus introuvable & exit /b 1\r\n\"%JAVA_BIN%\" -Xms1G -Xmx{heap_gb}G -jar paper.jar --nogui\r\npause\r\n"
         );

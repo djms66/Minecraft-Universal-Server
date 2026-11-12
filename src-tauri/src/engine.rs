@@ -180,6 +180,12 @@ pub struct LocalServerStatus {
     pub log: String,
 }
 
+#[derive(Serialize)]
+pub struct LocalStartResult {
+    pub server_path: String,
+    pub message: String,
+}
+
 #[derive(Deserialize)]
 struct PaperBuild {
     id: u64,
@@ -613,7 +619,11 @@ fn tcp_port_open(port: u16) -> bool {
 }
 
 fn udp_port_available(port: u16) -> bool {
-    UdpSocket::bind(("127.0.0.1", port)).is_ok()
+    UdpSocket::bind(("0.0.0.0", port)).is_ok()
+}
+
+fn tcp_port_available(port: u16) -> bool {
+    TcpListener::bind(("0.0.0.0", port)).is_ok()
 }
 
 fn local_network_address() -> Option<String> {
@@ -726,6 +736,274 @@ pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, Stri
         address: local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
         players: players.unwrap_or_default(),
         log,
+    })
+}
+
+/// Read-only compatibility gate for an application-managed local server.
+/// Unknown extensions, custom resource packs, modified Geyser configuration,
+/// links, or an unrecognized runtime prevent an automatic update.
+pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    let latest = compatibility()?;
+    let profile_path = server_dir.join("monde-ensemble-profile.json");
+    let profile: serde_json::Value = serde_json::from_slice(
+        &fs::read(&profile_path)
+            .map_err(|_| "Le profil du serveur local est illisible.".to_string())?,
+    )
+    .map_err(|_| "Le profil du serveur local est illisible.".to_string())?;
+    let mut reasons = Vec::new();
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        reasons.push("Cette installation n’a pas un profil Monde Ensemble reconnu.".into());
+    }
+
+    let profile_sha256 = hash_regular_file(&profile_path).unwrap_or_default();
+    let paper_path = server_dir.join("paper.jar");
+    let geyser_path = server_dir.join("plugins/Geyser-Spigot.jar");
+    let floodgate_path = server_dir.join("plugins/Floodgate-Spigot.jar");
+    let paper_sha256 = hash_regular_file(&paper_path).unwrap_or_default();
+    let geyser_sha256 = hash_regular_file(&geyser_path).unwrap_or_default();
+    let floodgate_sha256 = hash_regular_file(&floodgate_path).unwrap_or_default();
+    for (name, checksum) in [
+        ("profil", profile_sha256.as_str()),
+        ("Paper", paper_sha256.as_str()),
+        ("Geyser", geyser_sha256.as_str()),
+        ("Floodgate", floodgate_sha256.as_str()),
+    ] {
+        if !valid_sha256(checksum) {
+            reasons.push(format!(
+                "Le fichier {name} est absent ou son empreinte est illisible."
+            ));
+        }
+    }
+
+    let mut has_symlink = false;
+    for entry in WalkDir::new(&server_dir).follow_links(false) {
+        match entry {
+            Ok(entry) if entry.file_type().is_symlink() => has_symlink = true,
+            Err(_) => reasons.push(
+                "Un élément du dossier serveur est illisible; la mise à jour est bloquée.".into(),
+            ),
+            _ => {}
+        }
+    }
+    if has_symlink {
+        reasons.push(
+            "Le serveur contient un lien symbolique; la mise à jour automatique est bloquée."
+                .into(),
+        );
+    }
+
+    let plugin_jars = WalkDir::new(server_dir.join("plugins"))
+        .max_depth(2)
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jar")
+        })
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_string))
+        .filter(|name| !matches!(name.as_str(), "Geyser-Spigot.jar" | "Floodgate-Spigot.jar"))
+        .collect::<Vec<_>>();
+    if !plugin_jars.is_empty() {
+        reasons.push(format!(
+            "Extensions non vérifiées : {}. Elles bloquent la mise à jour automatique pour protéger le monde.",
+            plugin_jars.join(", ")
+        ));
+    }
+    let mod_jars = WalkDir::new(server_dir.join("mods"))
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_file())
+        .filter(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|extension| extension == "jar")
+        })
+        .filter_map(|entry| {
+            entry
+                .path()
+                .strip_prefix(server_dir.join("mods"))
+                .ok()
+                .map(|path| path.display().to_string())
+        })
+        .collect::<Vec<_>>();
+    if !mod_jars.is_empty() {
+        reasons.push(format!(
+            "Mods présents : {}. Leur compatibilité n’est pas vérifiée par l’application.",
+            mod_jars.join(", ")
+        ));
+    }
+
+    let properties = match fs::read_to_string(server_dir.join("server.properties")) {
+        Ok(properties) => properties,
+        Err(_) => {
+            reasons.push(
+                "Les réglages du serveur sont illisibles; la mise à jour est bloquée.".into(),
+            );
+            String::new()
+        }
+    };
+    let level_name = properties
+        .lines()
+        .find_map(|line| line.strip_prefix("level-name="))
+        .filter(|value| !value.is_empty())
+        .unwrap_or("world");
+    let level_path = Path::new(level_name);
+    if level_path.components().count() != 1
+        || !matches!(level_path.components().next(), Some(Component::Normal(_)))
+    {
+        reasons.push(
+            "Le nom du monde sort du dossier serveur attendu; la mise à jour est bloquée.".into(),
+        );
+    } else {
+        let datapacks = server_dir.join(level_path).join("datapacks");
+        match fs::read_dir(&datapacks) {
+            Ok(entries) => {
+                let mut found_custom_pack = false;
+                for entry in entries {
+                    match entry {
+                        Ok(entry) if !entry.file_name().to_string_lossy().starts_with('.') => {
+                            found_custom_pack = true;
+                        }
+                        Err(_) => reasons.push(
+                            "La liste des packs de données est illisible; la mise à jour est bloquée.".into(),
+                        ),
+                        _ => {}
+                    }
+                }
+                if found_custom_pack {
+                    reasons.push("Des packs de données personnalisés sont présents; leur compatibilité doit être vérifiée avant une mise à jour.".into());
+                }
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+            Err(_) => reasons.push(
+                "Le dossier des packs de données est illisible; la mise à jour est bloquée.".into(),
+            ),
+        }
+    }
+
+    let resource_pack = properties
+        .lines()
+        .find_map(|line| line.strip_prefix("resource-pack="))
+        .unwrap_or_default();
+    if !resource_pack.trim().is_empty() {
+        reasons.push("Un pack de ressources personnalisé est configuré; sa compatibilité doit être vérifiée avant une mise à jour.".into());
+    }
+
+    if !geyser_config_matches_profile(&server_dir, &profile) {
+        reasons.push("La configuration Geyser a été modifiée ou ne peut pas être reconnue comme configuration standard; la mise à jour automatique est bloquée.".into());
+    }
+
+    let runtime_name = if cfg!(windows) { "java.exe" } else { "java" };
+    let runtime_present = WalkDir::new(server_dir.join("runtime"))
+        .follow_links(false)
+        .into_iter()
+        .filter_map(Result::ok)
+        .any(|entry| entry.file_type().is_file() && entry.file_name() == runtime_name);
+    if !runtime_present {
+        reasons.push(
+            "Le runtime Java inclus est absent; la mise à jour automatique est bloquée.".into(),
+        );
+    }
+    match java_major_for(&latest.java_version) {
+        Ok(required)
+            if profile
+                .get("java_runtime")
+                .and_then(serde_json::Value::as_u64)
+                != Some(required as u64) =>
+        {
+            reasons.push(format!(
+                "La nouvelle version demande Java {required}, différent du runtime inclus. La mise à jour attend une évolution sûre du runtime."
+            ));
+        }
+        Err(error) => reasons.push(format!(
+            "La compatibilité du runtime Java n’a pas pu être établie : {error}"
+        )),
+        _ => {}
+    }
+
+    let latest_geyser = latest
+        .geyser_version
+        .split(" · build ")
+        .next()
+        .unwrap_or(&latest.geyser_version)
+        .to_string();
+    let latest_floodgate = latest
+        .floodgate_version
+        .split(" · build ")
+        .next()
+        .unwrap_or(&latest.floodgate_version)
+        .to_string();
+    let current_java = profile
+        .get("minecraft_java")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("inconnue")
+        .to_string();
+    let current_bedrock = profile
+        .get("minecraft_bedrock")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("inconnue")
+        .to_string();
+    let current_geyser = profile
+        .get("geyser")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("inconnue")
+        .to_string();
+    let current_floodgate = profile
+        .get("floodgate")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("inconnue")
+        .to_string();
+    let update_available = current_java != latest.java_version
+        || current_bedrock != latest.bedrock_versions
+        || current_geyser != latest_geyser
+        || current_floodgate != latest_floodgate
+        || profile
+            .get("paper_build_id")
+            .and_then(serde_json::Value::as_u64)
+            != Some(latest.paper_build_id)
+        || profile
+            .get("geyser_build_id")
+            .and_then(serde_json::Value::as_u64)
+            != Some(latest.geyser_build_id)
+        || profile
+            .get("floodgate_build_id")
+            .and_then(serde_json::Value::as_u64)
+            != Some(latest.floodgate_build_id);
+
+    Ok(PiUpdateCheck {
+        ready: reasons.is_empty(),
+        update_available,
+        current_java,
+        current_bedrock,
+        current_geyser,
+        current_floodgate,
+        latest_java: latest.java_version,
+        latest_bedrock: latest.bedrock_versions,
+        latest_geyser,
+        latest_geyser_build: latest.geyser_build_id,
+        latest_floodgate,
+        latest_floodgate_build: latest.floodgate_build_id,
+        latest_paper_build: latest.paper_build_id,
+        profile,
+        profile_sha256,
+        paper_sha256,
+        geyser_sha256,
+        floodgate_sha256,
+        reasons,
+        checked_at: latest.checked_at,
     })
 }
 
@@ -910,7 +1188,15 @@ pub fn export_pi_server_log(
 pub fn start_local_server(
     server_dir: &Path,
     progress: impl Fn(&str, u8),
-) -> Result<String, String> {
+) -> Result<LocalStartResult, String> {
+    start_local_server_impl(server_dir, &progress, true)
+}
+
+fn start_local_server_impl(
+    server_dir: &Path,
+    progress: &impl Fn(&str, u8),
+    allow_updates: bool,
+) -> Result<LocalStartResult, String> {
     let server_dir = server_dir
         .canonicalize()
         .map_err(|_| "Le dossier de serveur local enregistré est introuvable.".to_string())?;
@@ -938,7 +1224,54 @@ pub fn start_local_server(
         return Err("Ce serveur a été créé par une version antérieure et ne possède pas le contrôle local sécurisé. Il reste intact.".into());
     }
     if rcon_command(&profile, "list").is_ok() {
-        return Ok("Le serveur local est déjà démarré.".into());
+        return Ok(LocalStartResult {
+            server_path: server_dir.display().to_string(),
+            message: "Le serveur local est déjà démarré.".into(),
+        });
+    }
+    let mut update_note = String::new();
+    if allow_updates {
+        match check_local_update(&server_dir) {
+            Ok(check) if check.ready && check.update_available => {
+                progress("Compatibilité prête; création d’une copie sauvegardée…", 5);
+                match prepare_local_update_copy(&server_dir, &check, progress) {
+                    Ok((updated_dir, backup)) => {
+                        let result = start_local_server_impl(&updated_dir, progress, false)
+                            .map_err(|error| {
+                                format!(
+                                    "La nouvelle copie n’a pas confirmé son démarrage. Le dossier et la sauvegarde d’origine restent intacts. Nouvelle copie : {} · {error}",
+                                    updated_dir.display()
+                                )
+                            })?;
+                        return Ok(LocalStartResult {
+                            server_path: result.server_path,
+                            message: format!(
+                                "Mise à jour coordonnée démarrée. L’ancien serveur reste conservé. Sauvegarde : {} · {}",
+                                backup.display(),
+                                result.message
+                            ),
+                        });
+                    }
+                    Err(error) => {
+                        update_note = format!(
+                            "Mise à jour reportée; le serveur d’origine reste intact. {error} "
+                        );
+                    }
+                }
+            }
+            Ok(check) if !check.ready => {
+                update_note = format!(
+                    "Mise à jour reportée pour protéger ce monde : {}. La version actuelle reste disponible. ",
+                    check.reasons.join(" ")
+                );
+            }
+            Ok(_) => {}
+            Err(error) => {
+                update_note = format!(
+                    "Catalogue indisponible; aucune mise à jour appliquée. La version actuelle reste disponible. {error}. "
+                );
+            }
+        }
     }
     let java_port = profile
         .get("java_port")
@@ -950,7 +1283,9 @@ pub fn start_local_server(
         .and_then(serde_json::Value::as_u64)
         .and_then(|port| u16::try_from(port).ok())
         .ok_or_else(|| "Le port Bedrock du serveur est illisible.".to_string())?;
-    if tcp_port_open(java_port) || tcp_port_open(bedrock_port) || !udp_port_available(bedrock_port)
+    if !tcp_port_available(java_port)
+        || !tcp_port_available(bedrock_port)
+        || !udp_port_available(bedrock_port)
     {
         return Err("Un autre service utilise déjà un port réservé au serveur. Aucun processus n’a été démarré.".into());
     }
@@ -1007,20 +1342,24 @@ pub fn start_local_server(
             && rcon_command(&profile, "list").is_ok()
         {
             progress("Serveur local prêt et contrôlé.", 100);
-            return Ok(format!(
-                "Serveur démarré et vérifié · Java {} · Bedrock compatible {} · adresse {} · Java TCP {} · Bedrock TCP/UDP {}",
-                profile
-                    .get("minecraft_java")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("inconnue"),
-                profile
-                    .get("minecraft_bedrock")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or("inconnue"),
-                local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
-                java_port,
-                bedrock_port
-            ));
+            return Ok(LocalStartResult {
+                server_path: server_dir.display().to_string(),
+                message: format!(
+                    "{}Serveur démarré et vérifié · Java {} · Bedrock compatible {} · adresse {} · Java TCP {} · Bedrock TCP/UDP {}",
+                    update_note,
+                    profile
+                        .get("minecraft_java")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("inconnue"),
+                    profile
+                        .get("minecraft_bedrock")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or("inconnue"),
+                    local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
+                    java_port,
+                    bedrock_port
+                ),
+            });
         }
         progress(
             &format!("Minecraft démarre… vérification {}/60", attempt + 1),
@@ -1032,6 +1371,306 @@ pub fn start_local_server(
         "Le serveur n’a pas confirmé son démarrage après deux minutes. Il n’a pas été arrêté de force. Consulte le journal : {}",
         log_path.display()
     ))
+}
+
+fn local_profile(server_dir: &Path) -> Result<serde_json::Value, String> {
+    let profile: serde_json::Value = serde_json::from_slice(
+        &fs::read(server_dir.join("monde-ensemble-profile.json"))
+            .map_err(|_| "Le profil du serveur local est illisible.".to_string())?,
+    )
+    .map_err(|_| "Le profil du serveur local est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier n’a pas été créé par Monde Ensemble.".into());
+    }
+    Ok(profile)
+}
+
+fn prepare_local_update_copy(
+    server_dir: &Path,
+    check: &PiUpdateCheck,
+    progress: &impl Fn(&str, u8),
+) -> Result<(PathBuf, PathBuf), String> {
+    let profile = local_profile(server_dir)?;
+    if rcon_command(&profile, "list").is_ok() {
+        return Err(
+            "Le serveur est encore actif; arrête-le proprement avant de le mettre à jour.".into(),
+        );
+    }
+    let java_port = profile
+        .get("java_port")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default() as u16;
+    let bedrock_port = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default() as u16;
+    if java_port == 0
+        || bedrock_port == 0
+        || !tcp_port_available(java_port)
+        || !tcp_port_available(bedrock_port)
+        || !udp_port_available(bedrock_port)
+    {
+        return Err("Un port Minecraft est utilisé. Aucune mise à jour n’a été appliquée.".into());
+    }
+    if !check.ready || !check.update_available {
+        return Err("Les vérifications ne permettent pas cette mise à jour.".into());
+    }
+    for (relative, expected) in [
+        ("monde-ensemble-profile.json", check.profile_sha256.as_str()),
+        ("paper.jar", check.paper_sha256.as_str()),
+        ("plugins/Geyser-Spigot.jar", check.geyser_sha256.as_str()),
+        (
+            "plugins/Floodgate-Spigot.jar",
+            check.floodgate_sha256.as_str(),
+        ),
+    ] {
+        if hash_regular_file(&server_dir.join(relative)).as_deref() != Some(expected) {
+            return Err("Le serveur a changé depuis le contrôle de compatibilité; relance le contrôle. L’ancien dossier reste intact.".into());
+        }
+    }
+
+    let parent = server_dir.parent().ok_or_else(|| {
+        "Le dossier serveur n’a pas d’emplacement de sauvegarde valide.".to_string()
+    })?;
+    let id = Uuid::new_v4().simple().to_string();
+    let backup_path = parent
+        .join("sauvegardes-monde-ensemble")
+        .join(format!("mise-a-jour-{id}.tar.gz"));
+    progress("Archive complète du monde avant mise à jour…", 12);
+    create_backup(server_dir, &backup_path, true, |step, percent| {
+        progress(step, 12 + percent.saturating_mul(30) / 100)
+    })?;
+
+    let source_size = folder_size(server_dir)?;
+    let free = fs2::available_space(parent).map_err(io_error)?;
+    if free < source_size.saturating_add(512 * 1024 * 1024) {
+        return Err(format!(
+            "La sauvegarde est conservée dans {}, mais l’espace libre ne suffit pas pour préparer une copie complète. Le serveur d’origine reste intact.",
+            backup_path.display()
+        ));
+    }
+
+    progress(
+        "Relecture des catalogues officiels avant téléchargement…",
+        46,
+    );
+    let client = client()?;
+    let supported = supported_versions(&client)?;
+    let runtime = java_major_for(&supported.java)?;
+    if supported.java != check.latest_java
+        || supported.bedrock != check.latest_bedrock
+        || profile
+            .get("java_runtime")
+            .and_then(serde_json::Value::as_u64)
+            != Some(runtime as u64)
+    {
+        return Err("La compatibilité a changé ou demande un runtime Java différent. Le serveur actuel reste intact.".into());
+    }
+    let paper = paper_build(&client, &supported.java)?;
+    let geyser = bridge_build(&client, "geyser", "spigot")?;
+    let floodgate = bridge_build(&client, "floodgate", "spigot")?;
+    if paper.id != check.latest_paper_build
+        || geyser.build != check.latest_geyser_build
+        || floodgate.build != check.latest_floodgate_build
+    {
+        return Err("Les builds officiels ont changé pendant la préparation. Relance le contrôle; l’ancien serveur reste intact.".into());
+    }
+    let paper_download = paper
+        .downloads
+        .get("server:default")
+        .ok_or_else(|| "Le fichier Paper officiel est absent.".to_string())?;
+    let geyser_download = geyser
+        .downloads
+        .get("spigot")
+        .ok_or_else(|| "Le fichier Geyser officiel est absent.".to_string())?;
+    let floodgate_download = floodgate
+        .downloads
+        .get("spigot")
+        .ok_or_else(|| "Le fichier Floodgate officiel est absent.".to_string())?;
+    let artifacts = [
+        Artifact {
+            name: "paper.jar".into(),
+            version: format!("Paper {} build {}", supported.java, paper.id),
+            url: paper_download.url.clone(),
+            checksum: paper_download.checksums.get("sha256").cloned().ok_or_else(|| "L’empreinte Paper SHA-256 est absente.".to_string())?,
+        },
+        Artifact {
+            name: "Geyser-Spigot.jar".into(),
+            version: format!("Geyser {} build {}", geyser.version, geyser.build),
+            url: "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot".into(),
+            checksum: geyser_download.sha256.clone(),
+        },
+        Artifact {
+            name: "Floodgate-Spigot.jar".into(),
+            version: format!("Floodgate {} build {}", floodgate.version, floodgate.build),
+            url: "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot".into(),
+            checksum: floodgate_download.sha256.clone(),
+        },
+    ];
+    let artifact_stage = std::env::temp_dir().join(format!("monde-ensemble-local-update-{id}"));
+    fs::create_dir(&artifact_stage).map_err(io_error)?;
+    let _cleanup_artifacts = RemoveDirectoryOnDrop(artifact_stage.clone());
+    for (index, artifact) in artifacts.iter().enumerate() {
+        progress(
+            &format!("Téléchargement et vérification de {}…", artifact.version),
+            49 + index as u8 * 7,
+        );
+        download_verified(&client, artifact, &artifact_stage.join(&artifact.name))?;
+    }
+
+    let staging = parent.join(format!(".Monde-Ensemble-{id}.preparing"));
+    fs::create_dir(&staging).map_err(io_error)?;
+    let _cleanup_staging = RemoveDirectoryOnDrop(staging.clone());
+    copy_server_tree(server_dir, &staging, progress)?;
+    let staged_check = check_local_update(&staging)?;
+    if !staged_check.ready
+        || staged_check.latest_java != check.latest_java
+        || staged_check.latest_bedrock != check.latest_bedrock
+        || staged_check.latest_paper_build != check.latest_paper_build
+        || staged_check.latest_geyser_build != check.latest_geyser_build
+        || staged_check.latest_floodgate_build != check.latest_floodgate_build
+        || staged_check.profile_sha256 != check.profile_sha256
+        || staged_check.paper_sha256 != check.paper_sha256
+        || staged_check.geyser_sha256 != check.geyser_sha256
+        || staged_check.floodgate_sha256 != check.floodgate_sha256
+    {
+        return Err("Le serveur ou les catalogues ont changé pendant la copie. La mise à jour est annulée; le dossier d’origine reste intact.".into());
+    }
+    for artifact in &artifacts {
+        let destination = match artifact.name.as_str() {
+            "paper.jar" => staging.join("paper.jar"),
+            "Geyser-Spigot.jar" => staging.join("plugins/Geyser-Spigot.jar"),
+            "Floodgate-Spigot.jar" => staging.join("plugins/Floodgate-Spigot.jar"),
+            _ => return Err("Un fichier de mise à jour inattendu a été reçu.".into()),
+        };
+        fs::copy(artifact_stage.join(&artifact.name), destination).map_err(io_error)?;
+    }
+
+    let mut updated_profile = profile;
+    let object = updated_profile
+        .as_object_mut()
+        .ok_or_else(|| "Le profil du serveur est invalide.".to_string())?;
+    object.insert("minecraft_java".into(), serde_json::json!(supported.java));
+    object.insert(
+        "minecraft_bedrock".into(),
+        serde_json::json!(supported.bedrock),
+    );
+    object.insert("paper_build_id".into(), serde_json::json!(paper.id));
+    object.insert("geyser".into(), serde_json::json!(geyser.version));
+    object.insert("geyser_build_id".into(), serde_json::json!(geyser.build));
+    object.insert("floodgate".into(), serde_json::json!(floodgate.version));
+    object.insert(
+        "floodgate_build_id".into(),
+        serde_json::json!(floodgate.build),
+    );
+    object.insert(
+        "geyser_config_sha256".into(),
+        serde_json::json!(hash_file(
+            &staging.join("plugins/Geyser-Spigot/config.yml")
+        )?),
+    );
+    object.insert(
+        "updated_at".into(),
+        serde_json::json!(Utc::now().to_rfc3339()),
+    );
+    fs::write(
+        staging.join("monde-ensemble-profile.json"),
+        serde_json::to_vec_pretty(&updated_profile).map_err(|error| error.to_string())?,
+    )
+    .map_err(io_error)?;
+
+    let log_path = staging.join("serveur.log");
+    if log_path.exists() {
+        fs::rename(
+            &log_path,
+            staging.join(format!("serveur-avant-mise-a-jour-{id}.log")),
+        )
+        .map_err(io_error)?;
+    }
+    let pid_path = staging.join("serveur.pid");
+    if pid_path.exists() {
+        fs::remove_file(pid_path).map_err(io_error)?;
+    }
+
+    let updated_path = unique_folder(parent, "Monde-Ensemble");
+    fs::rename(&staging, &updated_path).map_err(|error| {
+        format!(
+            "La copie mise à jour n’a pas pu être publiée; le serveur d’origine reste intact : {error}"
+        )
+    })?;
+    progress(
+        "Nouvelle copie créée; l’ancien dossier et sa sauvegarde restent conservés.",
+        82,
+    );
+    Ok((updated_path, backup_path))
+}
+
+fn copy_server_tree(
+    source: &Path,
+    destination: &Path,
+    progress: &impl Fn(&str, u8),
+) -> Result<(), String> {
+    let entries = WalkDir::new(source)
+        .follow_links(false)
+        .min_depth(1)
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Impossible de lire le serveur à copier : {error}"))?;
+    let count = entries.len().max(1);
+    for (index, entry) in entries.iter().enumerate() {
+        let relative = entry
+            .path()
+            .strip_prefix(source)
+            .map_err(|error| error.to_string())?;
+        let target = destination.join(relative);
+        if entry.file_type().is_symlink() {
+            return Err(format!(
+                "Le serveur contient un lien symbolique ({}); copie bloquée.",
+                entry.path().display()
+            ));
+        }
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target).map_err(io_error)?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).map_err(io_error)?;
+            }
+            fs::copy(entry.path(), &target).map_err(io_error)?;
+        }
+        if index % 64 == 0 || index + 1 == count {
+            progress(
+                "Copie vérifiée du serveur vers un nouveau dossier…",
+                68 + ((index + 1) * 12 / count) as u8,
+            );
+        }
+    }
+    for directory in entries
+        .iter()
+        .rev()
+        .filter(|entry| entry.file_type().is_dir())
+    {
+        let relative = directory
+            .path()
+            .strip_prefix(source)
+            .map_err(|error| error.to_string())?;
+        fs::set_permissions(
+            destination.join(relative),
+            fs::metadata(directory.path())
+                .map_err(io_error)?
+                .permissions(),
+        )
+        .map_err(io_error)?;
+    }
+    fs::set_permissions(
+        destination,
+        fs::metadata(source).map_err(io_error)?.permissions(),
+    )
+    .map_err(io_error)?;
+    Ok(())
 }
 
 fn rcon_command(profile: &serde_json::Value, command: &str) -> Result<String, String> {
@@ -2479,6 +3118,7 @@ fn configure_server(
     let template = set_yaml(&template, "remote", "auth-type", "floodgate");
     fs::create_dir_all(stage.join("plugins/Geyser-Spigot")).map_err(io_error)?;
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
+    let geyser_config_sha256 = hash_file(&stage.join("plugins/Geyser-Spigot/config.yml"))?;
 
     write_launch_files(stage, heap_gb, remote_linux, java_port, bedrock_port)?;
     let mut profile = serde_json::json!({
@@ -2490,6 +3130,7 @@ fn configure_server(
         "geyser_build_id": geyser.build,
         "floodgate": floodgate.version,
         "floodgate_build_id": floodgate.build,
+        "geyser_config_sha256": geyser_config_sha256,
         "java_runtime": java_major,
         "java_heap_gb": heap_gb,
         "java_port": java_port,
@@ -3031,6 +3672,59 @@ fn hash_file(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn hash_regular_file(path: &Path) -> Option<String> {
+    fs::symlink_metadata(path)
+        .ok()
+        .filter(|metadata| metadata.file_type().is_file())
+        .and_then(|_| hash_file(path).ok())
+}
+
+fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value) -> bool {
+    let config_path = server_dir.join("plugins/Geyser-Spigot/config.yml");
+    let Some(actual_hash) = hash_regular_file(&config_path) else {
+        return false;
+    };
+    if let Some(expected) = profile
+        .get("geyser_config_sha256")
+        .and_then(serde_json::Value::as_str)
+        .filter(|digest| valid_sha256(digest))
+    {
+        return actual_hash == expected;
+    }
+
+    // Older managed profiles did not record a config digest. Compare their
+    // current config with the exact generated defaults from their installed
+    // Geyser jar, so an untouched legacy install can still be recognized.
+    let Some(bedrock_port) = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+    else {
+        return false;
+    };
+    let jar_path = server_dir.join("plugins/Geyser-Spigot.jar");
+    if hash_regular_file(&jar_path).is_none() {
+        return false;
+    }
+    let Ok(file) = File::open(jar_path) else {
+        return false;
+    };
+    let Ok(mut archive) = zip::ZipArchive::new(file) else {
+        return false;
+    };
+    let Ok(mut entry) = archive.by_name("config.yml") else {
+        return false;
+    };
+    let mut template = String::new();
+    if entry.read_to_string(&mut template).is_err() {
+        return false;
+    }
+    let template = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
+    let template = set_yaml(&template, "bedrock", "transport", "nethernet");
+    let template = set_yaml(&template, "remote", "auth-type", "floodgate");
+    format!("{:x}", Sha256::digest(template.as_bytes())) == actual_hash
 }
 
 fn prepare_root(root: &Path) -> Result<PathBuf, String> {

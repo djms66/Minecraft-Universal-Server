@@ -594,10 +594,19 @@ async fn inspect_local_server(server_path: String) -> Result<engine::LocalServer
 }
 
 #[tauri::command]
+async fn check_local_update(server_path: String) -> Result<engine::PiUpdateCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::check_local_update(std::path::Path::new(&server_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn start_local_server(
     server_path: String,
     progress: tauri::ipc::Channel<engine::ProgressMessage>,
-) -> Result<String, String> {
+) -> Result<engine::LocalStartResult, String> {
     tauri::async_runtime::spawn_blocking(move || {
         engine::start_local_server(std::path::Path::new(&server_path), |step, percent| {
             let _ = progress.send(engine::ProgressMessage {
@@ -791,6 +800,7 @@ pub fn run() {
             get_pi_os_recommendation,
             create_server,
             inspect_local_server,
+            check_local_update,
             start_local_server,
             stop_local_server,
             export_local_server_log,

@@ -77,6 +77,7 @@ type PiInstallation = {
   address: string;
 };
 type LocalInstallation = { serverPath: string };
+type LocalStartResult = { server_path: string; message: string };
 type LocalServerStatus = {
   running: boolean;
   ready: boolean;
@@ -170,6 +171,10 @@ function App() {
     });
   const [localServerStatus, setLocalServerStatus] =
     useState<LocalServerStatus | null>(null);
+  const [localUpdateCheck, setLocalUpdateCheck] =
+    useState<PiUpdateCheck | null>(null);
+  const [localUpdateError, setLocalUpdateError] = useState("");
+  const [checkingLocalUpdate, setCheckingLocalUpdate] = useState(false);
   const [localActionMessage, setLocalActionMessage] = useState("");
   const [localStatusError, setLocalStatusError] = useState("");
   const [piStatusError, setPiStatusError] = useState("");
@@ -624,6 +629,23 @@ function App() {
     }
   };
 
+  const checkLocalUpdate = async () => {
+    if (!localInstallation) return;
+    setCheckingLocalUpdate(true);
+    setLocalUpdateError("");
+    setLocalUpdateCheck(null);
+    try {
+      const report = await invoke<PiUpdateCheck>("check_local_update", {
+        serverPath: localInstallation.serverPath,
+      });
+      setLocalUpdateCheck(report);
+    } catch (error) {
+      setLocalUpdateError(String(error));
+    } finally {
+      setCheckingLocalUpdate(false);
+    }
+  };
+
   useEffect(() => {
     if (page === "home" && localInstallation) void refreshLocalStatus();
     // The saved local path is the only input to this read-only status refresh.
@@ -640,13 +662,19 @@ function App() {
       percent: 5,
     });
     try {
-      setLocalActionMessage(
-        await invoke<string>("start_local_server", {
-          serverPath: localInstallation.serverPath,
-          progress: progressChannel(),
+      const result = await invoke<LocalStartResult>("start_local_server", {
+        serverPath: localInstallation.serverPath,
+        progress: progressChannel(),
+      });
+      if (result.server_path !== localInstallation.serverPath) {
+        setLocalInstallation({ serverPath: result.server_path });
+      }
+      setLocalActionMessage(result.message);
+      setLocalServerStatus(
+        await invoke<LocalServerStatus>("inspect_local_server", {
+          serverPath: result.server_path,
         }),
       );
-      await refreshLocalStatus();
     } catch (error) {
       setLocalStatusError(String(error));
     } finally {
@@ -856,7 +884,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.9.0
+          MONDE ENSEMBLE <span>·</span> 0.10.0
         </div>
       </aside>
 
@@ -899,7 +927,11 @@ function App() {
               localServerStatus={localServerStatus}
               localStatusError={localStatusError}
               localActionMessage={localActionMessage}
+              localUpdateCheck={localUpdateCheck}
+              localUpdateError={localUpdateError}
+              checkingLocalUpdate={checkingLocalUpdate}
               onRefreshLocal={refreshLocalStatus}
+              onCheckLocalUpdate={checkLocalUpdate}
               onStartLocal={startLocalServer}
               onStopLocal={stopLocalServer}
               onExportLocalLog={exportLocalLog}
@@ -1678,7 +1710,11 @@ function Home({
   localServerStatus,
   localStatusError,
   localActionMessage,
+  localUpdateCheck,
+  localUpdateError,
+  checkingLocalUpdate,
   onRefreshLocal,
+  onCheckLocalUpdate,
   onStartLocal,
   onStopLocal,
   onExportLocalLog,
@@ -1706,7 +1742,11 @@ function Home({
   localServerStatus: LocalServerStatus | null;
   localStatusError: string;
   localActionMessage: string;
+  localUpdateCheck: PiUpdateCheck | null;
+  localUpdateError: string;
+  checkingLocalUpdate: boolean;
   onRefreshLocal: () => void;
+  onCheckLocalUpdate: () => void;
   onStartLocal: () => void;
   onStopLocal: () => void;
   onExportLocalLog: () => void;
@@ -1819,6 +1859,50 @@ function Home({
                 : "· fermé"}
             </span>
           </div>
+          <div className="pi-actions">
+            <button
+              className="text-button"
+              onClick={onCheckLocalUpdate}
+              disabled={busy || checkingLocalUpdate}
+            >
+              {checkingLocalUpdate
+                ? "Vérification des versions et du serveur…"
+                : "Vérifier une mise à jour sûre"}
+            </button>
+          </div>
+          {localUpdateCheck && (
+            <div
+              className={`pi-update-check ${localUpdateCheck.ready ? "ready" : ""}`}
+              aria-live="polite"
+            >
+              <strong>
+                {localUpdateCheck.ready
+                  ? localUpdateCheck.update_available
+                    ? "Mise à jour coordonnée disponible"
+                    : "Serveur à jour"
+                  : "Mise à jour automatique bloquée pour protéger ce monde"}
+              </strong>
+              <span>
+                Installé : Java {localUpdateCheck.current_java} · Bedrock{" "}
+                {localUpdateCheck.current_bedrock}
+              </span>
+              {localUpdateCheck.ready && localUpdateCheck.update_available && (
+                <span>
+                  Disponible : Java {localUpdateCheck.latest_java} · Bedrock{" "}
+                  {localUpdateCheck.latest_bedrock}. Le contrôle ne modifie pas
+                  le serveur.
+                </span>
+              )}
+              {localUpdateCheck.reasons.map((reason) => (
+                <span key={reason}>{reason}</span>
+              ))}
+            </div>
+          )}
+          {localUpdateError && (
+            <p className="pi-error" role="alert">
+              {localUpdateError}
+            </p>
+          )}
           <div className="pi-actions">
             {localServerStatus?.running ? (
               <button

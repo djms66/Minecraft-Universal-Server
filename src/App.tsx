@@ -113,6 +113,13 @@ type LocalServerStatus = {
 };
 type LocalWhitelistStatus = { enabled: boolean; entries: string };
 type PiWhitelistStatus = { enabled: boolean; entries: string };
+type BedrockPackInstallResult = {
+  name: string;
+  filename: string;
+  minimum_engine_version: string;
+  sha256: string;
+  destination: string;
+};
 type GameSettings = {
   motd: string;
   gamemode: "survival" | "creative" | "adventure" | "spectator";
@@ -4241,6 +4248,14 @@ function Advanced({
   >([]);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginError, setPluginError] = useState("");
+  const [packTarget, setPackTarget] = useState<PluginTarget>(
+    localInstallation ? "local" : "pi",
+  );
+  const [packBusy, setPackBusy] = useState(false);
+  const [packError, setPackError] = useState("");
+  const [packResult, setPackResult] = useState<BedrockPackInstallResult | null>(
+    null,
+  );
   const pluginMinecraftVersion =
     pluginTarget === "local"
       ? localServerStatus?.minecraft_java || ""
@@ -4264,6 +4279,58 @@ function Advanced({
       setPluginLoading(false);
     }
   };
+  const installBedrockPack = async () => {
+    if (busy || packBusy) return;
+    setPackError("");
+    setPackResult(null);
+    let selected: string | string[] | null;
+    try {
+      selected = await open({
+        multiple: false,
+        filters: [
+          {
+            name: "Pack de ressources Bedrock",
+            extensions: ["mcpack", "zip"],
+          },
+        ],
+      });
+    } catch (error) {
+      setPackError(String(error));
+      return;
+    }
+    if (!selected || Array.isArray(selected)) return;
+    setPackBusy(true);
+    try {
+      const result =
+        packTarget === "local"
+          ? await invoke<BedrockPackInstallResult>(
+              "install_local_bedrock_pack",
+              {
+                serverPath: localInstallation!.serverPath,
+                packPath: selected,
+              },
+            )
+          : await invoke<BedrockPackInstallResult>("install_pi_bedrock_pack", {
+              host: piInstallation!.host,
+              username: piInstallation!.username,
+              serverFolder: piInstallation!.serverFolder,
+              packPath: selected,
+            });
+      setPackResult(result);
+    } catch (error) {
+      setPackError(String(error));
+    } finally {
+      setPackBusy(false);
+    }
+  };
+  const packTargetExists =
+    packTarget === "local"
+      ? Boolean(localInstallation)
+      : Boolean(piInstallation);
+  const packTargetRunning =
+    packTarget === "local"
+      ? Boolean(localServerStatus?.running)
+      : Boolean(piServerStatus?.running);
   return (
     <div className="content-column">
       <div className="advanced-intro">
@@ -4362,6 +4429,86 @@ function Advanced({
         piServerStatus={piServerStatus}
         busy={busy}
       />
+      <section className="operation-card advanced-log-card">
+        <div className="eyebrow">PACKS BEDROCK · GEYSER</div>
+        <h3>Ajouter un pack de textures Bedrock</h3>
+        <p className="path-note">
+          Choisis un fichier <code>.mcpack</code> ou <code>.zip</code>. Monde
+          Ensemble vérifie son manifeste Bedrock, son type de pack et sa version
+          minimale déclarée, puis l’ajoute au dossier Geyser sans remplacer un
+          fichier existant. Le serveur doit être arrêté; redémarre-le ensuite
+          pour envoyer le pack aux joueurs Bedrock.
+        </p>
+        <p className="path-note">
+          Un pack Java est un format différent et n’est pas converti par Geyser.
+          La version minimale déclarée ne garantit pas que chaque appareil ou
+          console acceptera le pack. Les mises à jour automatiques resteront
+          suspendues tant que ce pack personnalisé est présent.
+        </p>
+        {localInstallation && piInstallation ? (
+          <label className="plugin-target-picker">
+            Serveur à configurer
+            <select
+              value={packTarget}
+              onChange={(event) => {
+                setPackTarget(event.target.value as PluginTarget);
+                setPackError("");
+                setPackResult(null);
+              }}
+              disabled={packBusy || busy}
+            >
+              <option value="local">Ordinateur · serveur local</option>
+              <option value="pi">Raspberry Pi · serveur distant</option>
+            </select>
+          </label>
+        ) : (
+          <p className="path-note">
+            Serveur :{" "}
+            {localInstallation
+              ? "local"
+              : piInstallation
+                ? "Raspberry Pi"
+                : "aucun serveur enregistré"}
+            .
+          </p>
+        )}
+        {!packTargetExists ? (
+          <p className="path-note">Installe d’abord un serveur géré.</p>
+        ) : packTargetRunning ? (
+          <p className="path-note">
+            Arrête le serveur depuis « Mon monde » avant d’ajouter le pack.
+          </p>
+        ) : (
+          <button
+            className="button secondary"
+            onClick={() => void installBedrockPack()}
+            disabled={packBusy || busy}
+          >
+            {packBusy
+              ? "Vérification et copie du pack…"
+              : "Choisir un pack Bedrock"}
+          </button>
+        )}
+        {packError && (
+          <p className="pi-error" role="alert">
+            {packError}
+          </p>
+        )}
+        {packResult && (
+          <div className="pack-install-result" role="status">
+            <strong>{packResult.name} · ajouté</strong>
+            <span>
+              {packResult.filename} · Bedrock minimum déclaré :{" "}
+              {packResult.minimum_engine_version}
+            </span>
+            <code>{packResult.sha256}</code>
+            <small>{packResult.destination}</small>
+            <small>
+              Redémarre le serveur et essaie avec un client Bedrock compatible.
+            </small>
+          </div>
+        )}
+      </section>
       {piInstallation && (
         <div className="operation-card advanced-log-card">
           <div className="eyebrow">OUTILS DU SERVEUR PI</div>

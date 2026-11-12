@@ -376,6 +376,327 @@ PYCODE"#
     ))
 }
 
+/// Installs a Bedrock-format resource pack in Geyser's documented packs
+/// directory. This does not convert Java packs or claim client compatibility.
+pub fn install_local_bedrock_pack(
+    server_dir: &Path,
+    source: &Path,
+) -> Result<BedrockPackInstallResult, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    local_profile(&server_dir)?;
+    let pack = inspect_bedrock_resource_pack(source)?;
+    let status = inspect_local_server(&server_dir)?;
+    if status.running
+        || status.java_port_open
+        || status.bedrock_tcp_port_open
+        || status.bedrock_udp_port_open
+    {
+        return Err("Arrête le serveur local depuis son tableau de bord avant d’ajouter un pack Bedrock. Aucun fichier n’a été ajouté.".into());
+    }
+    ensure_backup_ports_closed(&server_dir)?;
+    let geyser_dir = server_dir.join("plugins/Geyser-Spigot");
+    require_real_directory(&server_dir.join("plugins"), "Le dossier plugins")?;
+    require_real_directory(&geyser_dir, "Le dossier Geyser")?;
+    let geyser_jar = server_dir.join("plugins/Geyser-Spigot.jar");
+    if hash_regular_file(&geyser_jar).is_none() {
+        return Err(
+            "Le plugin Geyser géré est absent ou invalide; le pack n’a pas été ajouté.".into(),
+        );
+    }
+    let packs_dir = geyser_dir.join("packs");
+    create_or_require_real_directory(&packs_dir, "Le dossier des packs Geyser")?;
+    let destination = packs_dir.join(&pack.filename);
+    if destination.exists() {
+        return Err(format!(
+            "Un fichier nommé {} existe déjà dans Geyser. Renomme le pack pour garder les deux copies.",
+            pack.filename
+        ));
+    }
+    let staging = packs_dir.join(format!(".monde-ensemble-{}.part", Uuid::new_v4().simple()));
+    let _cleanup = RemoveFileOnDrop(staging.clone());
+    copy_verified_pack(&pack, &staging)?;
+    ensure_backup_ports_closed(&server_dir)?;
+    fs::hard_link(&staging, &destination).map_err(|error| {
+        format!(
+            "Le pack n’a pas été publié sans écraser un fichier. Il reste dans son emplacement d’origine. {error}"
+        )
+    })?;
+    let _ = fs::remove_file(&staging);
+    Ok(BedrockPackInstallResult {
+        name: pack.name,
+        filename: pack.filename,
+        minimum_engine_version: pack.minimum_engine_version,
+        sha256: pack.sha256,
+        destination: destination.display().to_string(),
+    })
+}
+
+/// Transfers a validated Bedrock pack to the existing Geyser packs directory
+/// on a managed Pi. A hidden staging file is checked and linked into place only
+/// after the transfer hash and stopped-server checks pass.
+pub fn install_pi_bedrock_pack(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    source: &Path,
+) -> Result<BedrockPackInstallResult, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Adresse ou dossier du serveur Pi invalide.".into());
+    }
+    let pack = inspect_bedrock_resource_pack(source)?;
+    let initial_status = inspect_pi_server(host, username, server_folder)?;
+    if initial_status.running
+        || initial_status.java_port_open
+        || initial_status.bedrock_tcp_port_open
+        || initial_status.bedrock_port_open
+    {
+        return Err("Arrête le serveur Pi depuis son tableau de bord avant d’ajouter un pack Bedrock. Aucun fichier n’a été transféré.".into());
+    }
+
+    let staging_name = format!(".monde-ensemble-pack-{}.part", Uuid::new_v4().simple());
+    let preflight = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; test -d \"$d\" && test ! -L \"$d\"; test -f \"$d/monde-ensemble-profile.json\" && test ! -L \"$d/monde-ensemble-profile.json\"; python3 -c 'import json,sys; assert json.load(open(sys.argv[1])).get(\"application\") == \"Monde Ensemble\"' \"$d/monde-ensemble-profile.json\"; test -d \"$d/plugins\" && test ! -L \"$d/plugins\"; test -d \"$d/plugins/Geyser-Spigot\" && test ! -L \"$d/plugins/Geyser-Spigot\"; test -s \"$d/plugins/Geyser-Spigot.jar\" && test ! -L \"$d/plugins/Geyser-Spigot.jar\"; mkdir -p \"$d/plugins/Geyser-Spigot/packs\"; test ! -L \"$d/plugins/Geyser-Spigot/packs\"; test ! -e \"$d/plugins/Geyser-Spigot/packs/{}\"; pid=\"$(cat \"$d/serveur.pid\" 2>/dev/null || true)\"; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 1; fi",
+        pack.filename
+    );
+    let destination_ssh = format!("{username}@{host}");
+    run_ssh(&destination_ssh, &preflight)?;
+
+    let remote_stage =
+        format!("{destination_ssh}:~/{server_folder}/plugins/Geyser-Spigot/packs/{staging_name}");
+    let scp = scp_command()
+        .args([
+            "-p",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+        ])
+        .arg(&pack.source)
+        .arg(&remote_stage)
+        .output()
+        .map_err(|_| {
+            "L’outil de transfert sécurisé n’est pas disponible sur cet ordinateur.".to_string()
+        })?;
+    if !scp.status.success() {
+        let cleanup = format!(
+            "rm -f -- \"$HOME/{server_folder}/plugins/Geyser-Spigot/packs/{staging_name}\""
+        );
+        let _ = run_ssh(&destination_ssh, &cleanup);
+        return Err("Le transfert du pack Bedrock a échoué. Le serveur n’a pas été modifié; vérifie la connexion au Pi et réessaie.".into());
+    }
+
+    let publish = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; p=\"$d/plugins/Geyser-Spigot/packs\"; test -d \"$d\" && test ! -L \"$d\"; test -d \"$d/plugins\" && test ! -L \"$d/plugins\"; test -d \"$d/plugins/Geyser-Spigot\" && test ! -L \"$d/plugins/Geyser-Spigot\"; test -s \"$d/plugins/Geyser-Spigot.jar\" && test ! -L \"$d/plugins/Geyser-Spigot.jar\"; test -d \"$p\" && test ! -L \"$p\"; test ! -e \"$p/{}\"; test -f \"$p/{staging_name}\" && test ! -L \"$p/{staging_name}\"; test \"$(sha256sum \"$p/{staging_name}\" | cut -d' ' -f1)\" = '{}'; pid=\"$(cat \"$d/serveur.pid\" 2>/dev/null || true)\"; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 1; fi; ln \"$p/{staging_name}\" \"$p/{}\"; rm -- \"$p/{staging_name}\" || true; echo PACK_INSTALLED",
+        pack.filename, pack.sha256, pack.filename
+    );
+    let output = match run_ssh(&destination_ssh, &publish) {
+        Ok(output) => output,
+        Err(error) => {
+            let cleanup = format!(
+                "rm -f -- \"$HOME/{server_folder}/plugins/Geyser-Spigot/packs/{staging_name}\""
+            );
+            let _ = run_ssh(&destination_ssh, &cleanup);
+            return Err(format!(
+                "Le Pi n’a pas confirmé l’installation du pack. Le monde et les autres fichiers restent en place. {error}"
+            ));
+        }
+    };
+    if !output.lines().any(|line| line == "PACK_INSTALLED") {
+        return Err("Le Pi n’a pas confirmé l’installation du pack Bedrock. Le fichier est conservé dans sa zone de préparation pour diagnostic.".into());
+    }
+    let result_destination = format!(
+        "~/{server_folder}/plugins/Geyser-Spigot/packs/{}",
+        pack.filename
+    );
+    Ok(BedrockPackInstallResult {
+        name: pack.name,
+        filename: pack.filename,
+        minimum_engine_version: pack.minimum_engine_version,
+        sha256: pack.sha256,
+        destination: result_destination,
+    })
+}
+
+struct ValidatedBedrockPack {
+    source: PathBuf,
+    name: String,
+    filename: String,
+    minimum_engine_version: String,
+    sha256: String,
+}
+
+fn inspect_bedrock_resource_pack(path: &Path) -> Result<ValidatedBedrockPack, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "Choisis un fichier .mcpack ou .zip accessible.".to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() == 0 || metadata.len() > 512 * 1024 * 1024
+    {
+        return Err("Le pack doit être un fichier normal de 1 octet à 512 Mo maximum.".into());
+    }
+    let filename = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| "Le nom du pack n’est pas lisible.".to_string())?
+        .to_string();
+    if !valid_bedrock_pack_filename(&filename) {
+        return Err(
+            "Le fichier doit se terminer par .mcpack ou .zip et son nom doit rester simple.".into(),
+        );
+    }
+
+    let file = File::open(path).map_err(io_error)?;
+    let mut archive = zip::ZipArchive::new(file)
+        .map_err(|_| "Ce fichier n’est pas une archive de pack Bedrock reconnue.".to_string())?;
+    if archive
+        .file_names()
+        .filter(|name| *name == "manifest.json")
+        .count()
+        != 1
+    {
+        return Err("Le pack doit contenir un seul manifest.json à sa racine.".into());
+    }
+    let mut manifest_file = archive
+        .by_name("manifest.json")
+        .map_err(|_| "Le manifeste du pack est absent.".to_string())?;
+    if manifest_file.size() > 256 * 1024 {
+        return Err("Le manifeste du pack dépasse 256 Ko; installation bloquée.".into());
+    }
+    let mut manifest_text = String::new();
+    manifest_file
+        .read_to_string(&mut manifest_text)
+        .map_err(|_| "Le manifeste du pack n’est pas un texte UTF-8 lisible.".to_string())?;
+    let manifest: serde_json::Value = serde_json::from_str(&manifest_text)
+        .map_err(|_| "Le manifeste du pack n’est pas un JSON valide.".to_string())?;
+    if manifest
+        .get("format_version")
+        .and_then(serde_json::Value::as_u64)
+        != Some(2)
+    {
+        return Err("Seuls les manifests Bedrock version 2 sont acceptés.".into());
+    }
+    let header = manifest
+        .get("header")
+        .and_then(serde_json::Value::as_object)
+        .ok_or_else(|| "Le manifeste Bedrock ne contient pas d’en-tête.".to_string())?;
+    let name = header
+        .get("name")
+        .and_then(serde_json::Value::as_str)
+        .filter(|name| !name.trim().is_empty() && name.chars().count() <= 100)
+        .ok_or_else(|| "Le pack doit avoir un nom lisible de 100 caractères maximum.".to_string())?
+        .to_string();
+    let uuid = header
+        .get("uuid")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "L’en-tête Bedrock ne contient pas d’identifiant valide.".to_string())?;
+    Uuid::parse_str(uuid).map_err(|_| "L’identifiant du pack Bedrock est invalide.".to_string())?;
+    validate_pack_version(header.get("version"))?;
+    let minimum_engine_version =
+        parse_pack_version(header.get("min_engine_version")).ok_or_else(|| {
+            "Le manifeste ne déclare pas une version minimale Bedrock reconnue.".to_string()
+        })?;
+    let modules = manifest
+        .get("modules")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Le manifeste ne contient pas de modules Bedrock.".to_string())?;
+    let resource_module = modules.iter().any(|module| {
+        module.get("type").and_then(serde_json::Value::as_str) == Some("resources")
+            && module
+                .get("uuid")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|uuid| Uuid::parse_str(uuid).is_ok())
+            && validate_pack_version(module.get("version")).is_ok()
+    });
+    if !resource_module {
+        return Err("Ce fichier n’est pas un pack de ressources Bedrock valide.".into());
+    }
+    let source = path.canonicalize().map_err(io_error)?;
+    Ok(ValidatedBedrockPack {
+        source,
+        name,
+        filename,
+        minimum_engine_version,
+        sha256: hash_file(path)?,
+    })
+}
+
+fn validate_pack_version(value: Option<&serde_json::Value>) -> Result<(), String> {
+    parse_pack_version(value)
+        .map(|_| ())
+        .ok_or_else(|| "Le manifeste contient une version de pack invalide.".into())
+}
+
+fn parse_pack_version(value: Option<&serde_json::Value>) -> Option<String> {
+    let parts = value?.as_array()?;
+    if parts.len() != 3 {
+        return None;
+    }
+    let numbers = parts
+        .iter()
+        .map(serde_json::Value::as_u64)
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("{}.{}.{}", numbers[0], numbers[1], numbers[2]))
+}
+
+fn valid_bedrock_pack_filename(filename: &str) -> bool {
+    let lowercase = filename.to_ascii_lowercase();
+    (lowercase.ends_with(".mcpack") || lowercase.ends_with(".zip"))
+        && filename.len() <= 160
+        && filename
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._-+ ".contains(&byte))
+}
+
+fn copy_verified_pack(pack: &ValidatedBedrockPack, destination: &Path) -> Result<(), String> {
+    let mut source = File::open(&pack.source).map_err(io_error)?;
+    let mut target = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(io_error)?;
+    io::copy(&mut source, &mut target).map_err(io_error)?;
+    target.sync_all().map_err(io_error)?;
+    drop(target);
+    if hash_file(destination)? != pack.sha256 {
+        let _ = fs::remove_file(destination);
+        return Err(
+            "Le contrôle SHA-256 du pack Bedrock a échoué; aucun pack n’a été installé.".into(),
+        );
+    }
+    Ok(())
+}
+
+fn require_real_directory(path: &Path, label: &str) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| format!("{label} est absent ou illisible; le serveur n’a pas été modifié."))?;
+    if !metadata.file_type().is_dir() {
+        return Err(format!(
+            "{label} n’est pas un dossier normal; opération bloquée."
+        ));
+    }
+    Ok(())
+}
+
+fn create_or_require_real_directory(path: &Path, label: &str) -> Result<(), String> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.file_type().is_dir() => Ok(()),
+        Ok(_) => Err(format!(
+            "{label} n’est pas un dossier normal; opération bloquée."
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            fs::create_dir(path).map_err(io_error)
+        }
+        Err(_) => Err(format!("{label} est illisible; opération bloquée.")),
+    }
+}
+
 fn read_server_properties(path: &Path) -> Result<String, String> {
     let metadata = fs::symlink_metadata(path)
         .map_err(|_| "Le fichier server.properties est absent ou illisible.".to_string())?;
@@ -558,6 +879,15 @@ pub struct PaperPluginInstallResult {
     pub plugin_name: String,
     pub plugin_version: String,
     pub sha512: String,
+}
+
+#[derive(Serialize)]
+pub struct BedrockPackInstallResult {
+    pub name: String,
+    pub filename: String,
+    pub minimum_engine_version: String,
+    pub sha256: String,
+    pub destination: String,
 }
 
 #[derive(Serialize)]
@@ -6628,13 +6958,14 @@ fn io_error(error: impl std::fmt::Display) -> String {
 mod tests {
     use super::{
         GameSettings, LocalStartResult, RemoveDirOnDrop, add_identity_file, apply_game_settings,
-        artifact_hash_matches, java_major_for, parse_game_settings, parse_supported_versions_page,
+        artifact_hash_matches, copy_verified_pack, hash_file, inspect_bedrock_resource_pack,
+        java_major_for, parse_game_settings, parse_supported_versions_page,
         record_managed_artifact_hashes, restore_backup, safe_archive_path, safe_version,
-        shell_single_quote, start_updated_local_copy_with_fallback, valid_plugin_filename,
-        validate_game_settings,
+        shell_single_quote, start_updated_local_copy_with_fallback, valid_bedrock_pack_filename,
+        valid_plugin_filename, validate_game_settings,
     };
     use flate2::{Compression, write::GzEncoder};
-    use std::{fs, fs::File, path::Path, process::Command};
+    use std::{fs, fs::File, io::Write, path::Path, process::Command};
     use tar::{Builder, Header};
 
     fn test_directory() -> (std::path::PathBuf, RemoveDirOnDrop) {
@@ -6662,6 +6993,76 @@ mod tests {
         archive.append(&header, contents).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    fn write_pack_zip(path: &Path, manifest: &str) {
+        let file = File::create(path).unwrap();
+        let mut archive = zip::ZipWriter::new(file);
+        archive
+            .start_file("manifest.json", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        archive.write_all(manifest.as_bytes()).unwrap();
+        archive.finish().unwrap();
+    }
+
+    #[test]
+    fn bedrock_pack_import_requires_a_valid_resource_manifest_and_declares_minimum() {
+        let (directory, _cleanup) = test_directory();
+        let pack_path = directory.join("Shared textures.mcpack");
+        write_pack_zip(
+            &pack_path,
+            r#"{
+                "format_version": 2,
+                "header": {
+                    "name": "Shared textures",
+                    "uuid": "f0a1b2c3-d4e5-4678-9abc-def012345678",
+                    "version": [1, 0, 0],
+                    "min_engine_version": [1, 21, 0]
+                },
+                "modules": [{
+                    "type": "resources",
+                    "uuid": "a0a1b2c3-d4e5-4678-9abc-def012345678",
+                    "version": [1, 0, 0]
+                }]
+            }"#,
+        );
+        let pack = inspect_bedrock_resource_pack(&pack_path).unwrap();
+        assert_eq!(pack.name, "Shared textures");
+        assert_eq!(pack.filename, "Shared textures.mcpack");
+        assert_eq!(pack.minimum_engine_version, "1.21.0");
+        assert_eq!(pack.sha256.len(), 64);
+    }
+
+    #[test]
+    fn bedrock_pack_import_rejects_java_pack_or_unsafe_filename() {
+        let (directory, _cleanup) = test_directory();
+        let java_path = directory.join("Java pack.zip");
+        write_pack_zip(
+            &java_path,
+            r#"{"pack":{"pack_format":1,"description":"Java"}}"#,
+        );
+        assert!(inspect_bedrock_resource_pack(&java_path).is_err());
+        assert!(valid_bedrock_pack_filename("pack.mcpack"));
+        assert!(valid_bedrock_pack_filename("pack.zip"));
+        assert!(!valid_bedrock_pack_filename("../pack.mcpack"));
+        assert!(!valid_bedrock_pack_filename("pack.mcpack.sh"));
+    }
+
+    #[test]
+    fn bedrock_pack_copy_checks_hash_and_never_replaces_an_existing_file() {
+        let (directory, _cleanup) = test_directory();
+        let source = directory.join("Pack.mcpack");
+        write_pack_zip(
+            &source,
+            r#"{"format_version":2,"header":{"name":"Pack","uuid":"f0a1b2c3-d4e5-4678-9abc-def012345678","version":[1,0,0],"min_engine_version":[1,21,0]},"modules":[{"type":"resources","uuid":"a0a1b2c3-d4e5-4678-9abc-def012345678","version":[1,0,0]}]}"#,
+        );
+        let pack = inspect_bedrock_resource_pack(&source).unwrap();
+        let destination = directory.join("staged.mcpack");
+        copy_verified_pack(&pack, &destination).unwrap();
+        assert_eq!(hash_file(&destination).unwrap(), pack.sha256);
+
+        assert!(copy_verified_pack(&pack, &destination).is_err());
+        assert_eq!(hash_file(&destination).unwrap(), pack.sha256);
     }
 
     #[test]

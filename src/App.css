@@ -2318,6 +2318,23 @@ button {
   color: #c3e879;
   white-space: nowrap;
 }
+.pack-install-result {
+  display: grid;
+  gap: 6px;
+  margin-top: 12px;
+  padding: 12px;
+  border-left: 3px solid #a6c66a;
+  background: #30382f;
+  color: #d9ded3;
+  overflow-wrap: anywhere;
+}
+.pack-install-result strong {
+  color: #e4eadb;
+}
+.pack-install-result code,
+.pack-install-result small {
+  color: #acb2a6;
+}
 @media (max-width: 800px) {
   .pi-first-steps {
     grid-template-columns: 1fr 1fr;

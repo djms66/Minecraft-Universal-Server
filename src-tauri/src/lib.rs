@@ -621,6 +621,40 @@ async fn install_pi_paper_plugin_copy(
 }
 
 #[tauri::command]
+async fn install_local_bedrock_pack(
+    server_path: String,
+    pack_path: String,
+) -> Result<engine::BedrockPackInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::install_local_bedrock_pack(
+            std::path::Path::new(&server_path),
+            std::path::Path::new(&pack_path),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn install_pi_bedrock_pack(
+    host: String,
+    username: String,
+    server_folder: String,
+    pack_path: String,
+) -> Result<engine::BedrockPackInstallResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::install_pi_bedrock_pack(
+            &host,
+            &username,
+            &server_folder,
+            std::path::Path::new(&pack_path),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn get_pi_os_recommendation() -> Result<engine::PiOsRecommendation, String> {
     tauri::async_runtime::spawn_blocking(engine::pi_os_recommendation)
         .await
@@ -1072,6 +1106,8 @@ pub fn run() {
             search_paper_plugins,
             install_paper_plugin_copy,
             install_pi_paper_plugin_copy,
+            install_local_bedrock_pack,
+            install_pi_bedrock_pack,
             get_pi_os_recommendation,
             create_server,
             inspect_local_server,

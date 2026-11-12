@@ -65,6 +65,10 @@ Pour un Pi neuf, branche sa carte SD ou son SSD à l’ordinateur qui exécute l
 
 Sur Windows, l’installation de l’outil officiel peut déclencher la confirmation administrateur de Windows ; sur Mac/Linux, l’écriture du support demande l’autorisation du système. Cette étape est imposée par l’écriture d’un disque. L’application conserve la protection de Raspberry Pi Imager contre l’écriture sur le disque système.
 
+## Builds par plateforme
+
+Le workflow GitHub Actions produit séparément un DMG et une archive macOS Apple Silicon, un installateur Windows x64, puis des paquets Debian Linux x64 et ARM64. Les sorties restent des artefacts de compilation, pas des versions certifiées : elles doivent encore être ouvertes et vérifiées sur chaque système cible. Le paquet ARM64 est destiné à un Linux graphique compatible avec les dépendances Tauri ; Raspberry Pi OS Lite est sans interface de bureau et ne lance pas cette application graphique.
+
 ## Compiler
 
 Prérequis : Node.js, Rust et les prérequis de compilation Tauri correspondant au système.

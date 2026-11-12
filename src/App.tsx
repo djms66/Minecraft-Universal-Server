@@ -80,10 +80,13 @@ type LocalInstallation = { serverPath: string };
 type LocalServerStatus = {
   running: boolean;
   ready: boolean;
+  java_port_open: boolean;
   minecraft_java: string;
   minecraft_bedrock: string;
   java_port: number;
   bedrock_port: number;
+  bedrock_tcp_port_open: boolean;
+  bedrock_udp_port_open: boolean;
   address: string;
   players: string;
   log: string;
@@ -92,6 +95,7 @@ type PiServerStatus = {
   running: boolean;
   ready: boolean;
   java_port_open: boolean;
+  bedrock_tcp_port_open: boolean;
   bedrock_port_open: boolean;
   autostart_configured: boolean;
   minecraft_java: string;
@@ -676,6 +680,54 @@ function App() {
     }
   };
 
+  const exportLocalLog = async () => {
+    if (!localInstallation) return;
+    const outputFile = await save({
+      defaultPath: "Monde-Ensemble-journal-complet.log",
+      filters: [{ name: "Journal du serveur", extensions: ["log"] }],
+    });
+    if (!outputFile) return;
+    setBusy(true);
+    setLocalStatusError("");
+    try {
+      setLocalActionMessage(
+        await invoke<string>("export_local_server_log", {
+          serverPath: localInstallation.serverPath,
+          outputFile,
+        }),
+      );
+    } catch (error) {
+      setLocalStatusError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const exportPiLog = async () => {
+    if (!piInstallation) return;
+    const outputFile = await save({
+      defaultPath: "Monde-Ensemble-journal-complet-Pi.log",
+      filters: [{ name: "Journal du serveur", extensions: ["log"] }],
+    });
+    if (!outputFile) return;
+    setBusy(true);
+    setPiStatusError("");
+    try {
+      setPiActionMessage(
+        await invoke<string>("export_pi_server_log", {
+          host: piInstallation.host,
+          username: piInstallation.username,
+          serverFolder: piInstallation.serverFolder,
+          outputFile,
+        }),
+      );
+    } catch (error) {
+      setPiStatusError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (piServerStatus?.address && piInstallation) {
       setPiInstallation((current) =>
@@ -804,7 +856,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.8.0
+          MONDE ENSEMBLE <span>·</span> 0.9.0
         </div>
       </aside>
 
@@ -850,6 +902,7 @@ function App() {
               onRefreshLocal={refreshLocalStatus}
               onStartLocal={startLocalServer}
               onStopLocal={stopLocalServer}
+              onExportLocalLog={exportLocalLog}
               piInstallation={piInstallation}
               piServerStatus={piServerStatus}
               piStatusError={piStatusError}
@@ -859,6 +912,7 @@ function App() {
               onRefreshPi={() => refreshPiStatus(true)}
               onStartPi={startPiServer}
               onStopPi={stopPiServer}
+              onExportPiLog={exportPiLog}
               onCheckPiUpdate={checkPiUpdate}
               piUpdateCheck={piUpdateCheck}
               piUpdateError={piUpdateError}
@@ -1627,6 +1681,7 @@ function Home({
   onRefreshLocal,
   onStartLocal,
   onStopLocal,
+  onExportLocalLog,
   piInstallation,
   piServerStatus,
   piStatusError,
@@ -1636,6 +1691,7 @@ function Home({
   onRefreshPi,
   onStartPi,
   onStopPi,
+  onExportPiLog,
   onCheckPiUpdate,
   piUpdateCheck,
   piUpdateError,
@@ -1653,6 +1709,7 @@ function Home({
   onRefreshLocal: () => void;
   onStartLocal: () => void;
   onStopLocal: () => void;
+  onExportLocalLog: () => void;
   piInstallation: PiInstallation | null;
   piServerStatus: PiServerStatus | null;
   piStatusError: string;
@@ -1662,6 +1719,7 @@ function Home({
   onRefreshPi: () => void;
   onStartPi: () => void;
   onStopPi: () => void;
+  onExportPiLog: () => void;
   onCheckPiUpdate: () => void;
   piUpdateCheck: PiUpdateCheck | null;
   piUpdateError: string;
@@ -1739,6 +1797,28 @@ function Home({
               </span>
             )}
           </div>
+          <div className="pi-checks">
+            <span className={localServerStatus?.ready ? "ok" : ""}>
+              Java TCP{" "}
+              {localServerStatus?.java_port_open ? "· ouvert" : "· fermé"}
+            </span>
+            <span
+              className={localServerStatus?.bedrock_tcp_port_open ? "ok" : ""}
+            >
+              Signal Bedrock TCP{" "}
+              {localServerStatus?.bedrock_tcp_port_open
+                ? "· ouvert"
+                : "· fermé"}
+            </span>
+            <span
+              className={localServerStatus?.bedrock_udp_port_open ? "ok" : ""}
+            >
+              Jeu Bedrock UDP{" "}
+              {localServerStatus?.bedrock_udp_port_open
+                ? "· ouvert"
+                : "· fermé"}
+            </span>
+          </div>
           <div className="pi-actions">
             {localServerStatus?.running ? (
               <button
@@ -1778,11 +1858,28 @@ function Home({
             </p>
           )}
           {localServerStatus?.log && (
-            <details className="pi-log">
-              <summary>Journal récent du serveur</summary>
-              <pre>{localServerStatus.log}</pre>
-            </details>
+            <>
+              <details className="pi-log">
+                <summary>Journal récent du serveur</summary>
+                <pre>{localServerStatus.log}</pre>
+              </details>
+              <button
+                className="text-button"
+                onClick={onExportLocalLog}
+                disabled={busy}
+              >
+                Exporter le journal complet
+              </button>
+            </>
           )}
+          {localServerStatus?.running &&
+            !localServerStatus.bedrock_tcp_port_open && (
+              <p className="pi-help">
+                Le signalement Bedrock TCP ne répond pas. Les clients Bedrock
+                récents peuvent afficher Terracotta / InitialConnection-149 si
+                NetherNet ou ce port n’est pas accessible.
+              </p>
+            )}
         </section>
       )}
       {piInstallation && (
@@ -1865,8 +1962,14 @@ function Home({
                 ? "· disponible"
                 : "· non vérifié"}
             </span>
+            <span className={piServerStatus?.bedrock_tcp_port_open ? "ok" : ""}>
+              Signal Bedrock TCP{" "}
+              {piServerStatus?.bedrock_tcp_port_open
+                ? "· disponible"
+                : "· non vérifié"}
+            </span>
             <span className={piServerStatus?.bedrock_port_open ? "ok" : ""}>
-              Bedrock{" "}
+              Jeu Bedrock UDP{" "}
               {piServerStatus?.bedrock_port_open
                 ? "· disponible"
                 : "· non vérifié"}
@@ -1989,16 +2092,27 @@ function Home({
             )}
           {piServerStatus && !piServerStatus.ready && !piStatusError && (
             <p className="pi-help">
-              {piServerStatus.running
-                ? "Minecraft n’a pas encore confirmé son démarrage. Ouvre le journal pour voir la cause."
-                : "Le Pi ne répond pas ou le serveur est arrêté. Vérifie qu’il est allumé et connecté au même réseau, puis actualise."}
+              {piServerStatus.running && !piServerStatus.bedrock_tcp_port_open
+                ? "Le signalement Bedrock TCP ne répond pas. Vérifie NetherNet dans Geyser et l’accès au port TCP Bedrock; des clients récents peuvent afficher Terracotta / InitialConnection-149."
+                : piServerStatus.running
+                  ? "Minecraft n’a pas encore confirmé son démarrage. Ouvre le journal pour voir la cause."
+                  : "Le Pi ne répond pas ou le serveur est arrêté. Vérifie qu’il est allumé et connecté au même réseau, puis actualise."}
             </p>
           )}
           {piServerStatus?.log && (
-            <details className="pi-log">
-              <summary>Journal récent · utile en cas de problème</summary>
-              <pre>{piServerStatus.log}</pre>
-            </details>
+            <>
+              <details className="pi-log">
+                <summary>Journal récent · utile en cas de problème</summary>
+                <pre>{piServerStatus.log}</pre>
+              </details>
+              <button
+                className="text-button"
+                onClick={onExportPiLog}
+                disabled={busy}
+              >
+                Exporter le journal complet
+              </button>
+            </>
           )}
           <p className="pi-network-note">
             Adresse actuelle du Pi sur ton réseau. Pour qu’elle ne change
@@ -2221,9 +2335,12 @@ function Compatibility({
           <strong>Bedrock 1.26.62 · InitialConnection-149</strong>
           <p>
             L’erreur InitialConnection-149 seule ne permet pas d’identifier la
-            cause. Ce panneau ne lit pas encore les journaux du serveur existant
-            et ne prétend donc pas l’avoir corrigé. Pour l’installation neuve,
-            l’application affiche et règle les versions et ports utilisés.
+            cause. Geyser doit être configuré en NetherNet pour les clients
+            Bedrock récents; le signalement utilise TCP et le jeu utilise UDP.
+            L’application contrôle maintenant les deux ports, puis affiche le
+            journal du serveur géré pour trouver où la connexion bloque. Ce
+            contrôle local ne vérifie pas les règles du routeur ni les réseaux
+            externes.
           </p>
         </div>
       </div>

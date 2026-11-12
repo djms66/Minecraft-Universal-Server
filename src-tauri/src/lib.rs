@@ -620,6 +620,21 @@ async fn stop_local_server(server_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn export_local_server_log(
+    server_path: String,
+    output_file: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::export_local_server_log(
+            std::path::Path::new(&server_path),
+            std::path::Path::new(&output_file),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn install_pi(
     host: String,
     username: String,
@@ -697,6 +712,25 @@ async fn stop_pi_server(
 }
 
 #[tauri::command]
+async fn export_pi_server_log(
+    host: String,
+    username: String,
+    server_folder: String,
+    output_file: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::export_pi_server_log(
+            &host,
+            &username,
+            &server_folder,
+            std::path::Path::new(&output_file),
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn backup_server(
     source: String,
     output_file: String,
@@ -759,11 +793,13 @@ pub fn run() {
             inspect_local_server,
             start_local_server,
             stop_local_server,
+            export_local_server_log,
             install_pi,
             inspect_pi_server,
             check_pi_update,
             start_pi_server,
             stop_pi_server,
+            export_pi_server_log,
             backup_server,
             restore_server
         ])

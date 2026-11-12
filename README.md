@@ -1,4 +1,4 @@
-# Monde Ensemble 0.8.0
+# Monde Ensemble 0.9.0
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -7,8 +7,9 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;
-- démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done » et vérifie les ports Java TCP et Bedrock UDP avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
+- démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done » et vérifie les ports Java TCP, Bedrock TCP (signalement NetherNet) et Bedrock UDP avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
 - mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de les démarrer ou de les arrêter proprement avec le contrôle RCON limité à la boucle locale ;
+- conserve un aperçu lisible des dernières lignes et permet d’exporter le journal complet local ou Pi vers un nouveau fichier sans écraser une copie existante ;
 - choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
 - adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
 - crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive qui porte déjà le même nom ;
@@ -36,10 +37,9 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 - Elle n’a pas encore configuré une réservation DHCP dans la Freebox : l’adresse affichée est celle observée sur le réseau et peut changer. Pour une adresse durable, réserve l’adresse du Pi dans le routeur ; l’application ne prétend pas l’avoir fixée.
 - La mise à jour coordonnée est limitée aux serveurs Pi créés par Monde Ensemble. Le serveur doit être arrêté depuis l’application ; un mod, plugin non géré, pack de données, pack client, lien symbolique, runtime Java incompatible, espace insuffisant ou catalogue indisponible reporte la mise à jour et conserve la version actuelle. La mise à jour locale Mac/Windows n’est pas encore gérée.
 - Une mise à jour de Paper peut modifier les données de monde au premier démarrage. L’application conserve donc une archive complète avant lancement et ne valide la mise à jour qu’après le signal serveur prêt et l’ouverture des ports Java et Bedrock. Les sauvegardes automatiques s’accumulent et exigent de l’espace libre; l’application ne supprime pas les anciennes copies.
-- L’application ne configure pas encore de réservation DHCP dans la Freebox : l’adresse actuelle peut encore changer.
 - La mise à jour des serveurs locaux Mac/Windows n’est pas encore gérée. Les profils locaux créés avant la version 0.8.0 n’ont pas le contrôle RCON local nécessaire aux boutons de démarrage et d’arrêt.
 - La gestion des joueurs, l’ajout guidé de mods/plugins et l’installation de packs compatibles ne sont pas encore intégrés.
-- Le diagnostic de l’erreur Bedrock `InitialConnection-149` n’est pas encore intégré. Le journal du serveur seul ne permet pas toujours de distinguer un problème réseau, d’authentification ou de compatibilité côté client.
+- Le contrôle du serveur repère maintenant l’absence du port TCP Bedrock, mais ne vérifie pas la redirection du routeur, le filtrage opérateur, l’authentification Microsoft, ni la compatibilité de chaque appareil. Le diagnostic `InitialConnection-149` reste donc partiel.
 - Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.
 - Une compilation sur Mac ne valide pas les installateurs Windows ou Raspberry Pi. Il faut encore compiler et vérifier ces cibles sur leurs machines correspondantes.
 
@@ -48,6 +48,8 @@ Ces limites sont affichées dans l’application afin de ne pas présenter les v
 ## Compatibilité du profil neuf
 
 Le profil utilise un serveur Java Paper avec les versions officielles de Geyser et Floodgate consultées au moment de la préparation. Il permet le jeu partagé Java/Bedrock pour les versions indiquées par le catalogue Geyser. Les versions Bedrock peuvent différer des versions Java. L’application ne prétend pas que les mods, packs, extensions ou consoles fonctionnent tous sans configuration.
+
+Pour les clients Bedrock 26.60 et plus récents, Geyser doit utiliser NetherNet : l’installation configure ce transport et vérifie que le port Bedrock répond en TCP pour le signalement et en UDP pour le jeu. Le contrôle à domicile ne peut pas confirmer une redirection de routeur, un pare-feu externe, un filtrage opérateur ou un accès Internet.
 
 ## Raspberry Pi
 

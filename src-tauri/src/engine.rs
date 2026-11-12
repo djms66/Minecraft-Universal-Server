@@ -17,7 +17,7 @@ use std::{
     io::{self, Read, Write},
     net::{TcpListener, TcpStream, UdpSocket},
     path::{Component, Path, PathBuf},
-    process::Command,
+    process::{Command, Stdio},
     time::Duration,
 };
 use tar::{Archive, Builder, EntryType};
@@ -37,11 +37,14 @@ const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmwa
 
 fn available_game_port(primary: u16, alternate: u16, udp: bool) -> Result<u16, String> {
     let can_bind = |port| {
-        let address = format!("0.0.0.0:{port}");
         if udp {
-            UdpSocket::bind(address).is_ok()
+            // Bedrock on recent clients uses UDP for gameplay and TCP for
+            // NetherNet signaling on the same port. Reserve only a port that
+            // is available for both transports before creating the profile.
+            UdpSocket::bind(("0.0.0.0", port)).is_ok()
+                && TcpListener::bind(("0.0.0.0", port)).is_ok()
         } else {
-            TcpListener::bind(address).is_ok()
+            TcpListener::bind(("0.0.0.0", port)).is_ok()
         }
     };
     if can_bind(primary) {
@@ -145,6 +148,7 @@ pub struct PiServerStatus {
     pub running: bool,
     pub ready: bool,
     pub java_port_open: bool,
+    pub bedrock_tcp_port_open: bool,
     pub bedrock_port_open: bool,
     pub autostart_configured: bool,
     pub minecraft_java: String,
@@ -164,10 +168,13 @@ pub struct PiServerStatus {
 pub struct LocalServerStatus {
     pub running: bool,
     pub ready: bool,
+    pub java_port_open: bool,
     pub minecraft_java: String,
     pub minecraft_bedrock: String,
     pub java_port: u16,
     pub bedrock_port: u16,
+    pub bedrock_tcp_port_open: bool,
+    pub bedrock_udp_port_open: bool,
     pub address: String,
     pub players: String,
     pub log: String,
@@ -564,6 +571,13 @@ fn start_local_server_and_wait(
                     "Le journal indique un démarrage, mais le port Java {java_port} ne répond pas."
                 ));
             }
+            if !tcp_port_open(bedrock_port) {
+                terminate_local_process(&mut child);
+                let _ = fs::remove_file(&pid_file);
+                return Err(format!(
+                    "Le serveur Java est prêt, mais le signalement Bedrock TCP {bedrock_port} ne répond pas."
+                ));
+            }
             if udp_port_available(bedrock_port) {
                 terminate_local_process(&mut child);
                 let _ = fs::remove_file(&pid_file);
@@ -697,14 +711,18 @@ pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, Stri
         && java_port > 0
         && bedrock_port > 0
         && tcp_port_open(java_port)
+        && tcp_port_open(bedrock_port)
         && !udp_port_available(bedrock_port);
     Ok(LocalServerStatus {
         running,
         ready,
+        java_port_open: tcp_port_open(java_port),
         minecraft_java: text("minecraft_java"),
         minecraft_bedrock: text("minecraft_bedrock"),
         java_port,
         bedrock_port,
+        bedrock_tcp_port_open: tcp_port_open(bedrock_port),
+        bedrock_udp_port_open: !udp_port_available(bedrock_port),
         address: local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
         players: players.unwrap_or_default(),
         log,
@@ -760,6 +778,133 @@ pub fn stop_local_server(server_dir: &Path) -> Result<String, String> {
     Err("Le serveur a reçu l’ordre de sauvegarder et de s’arrêter, mais son port reste actif. Aucun arrêt forcé n’a été tenté.".into())
 }
 
+pub fn export_local_server_log(server_dir: &Path, output_file: &Path) -> Result<String, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier de serveur local enregistré est introuvable.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_slice(
+        &fs::read(server_dir.join("monde-ensemble-profile.json"))
+            .map_err(|_| "Le profil du serveur local est illisible.".to_string())?,
+    )
+    .map_err(|_| "Le profil du serveur local est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier n’a pas été créé par Monde Ensemble.".into());
+    }
+    let source = server_dir.join("serveur.log");
+    if !fs::symlink_metadata(&source)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+    {
+        return Err("Le journal du serveur n’est pas un fichier normal; export bloqué.".into());
+    }
+    let mut input = File::open(&source)
+        .map_err(|_| "Le journal complet du serveur local est introuvable.".to_string())?;
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_file)
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::AlreadyExists => {
+                "Ce fichier existe déjà. Choisis un autre nom pour ne rien écraser.".to_string()
+            }
+            _ => io_error(error),
+        })?;
+    io::copy(&mut input, &mut output).map_err(io_error)?;
+    output.sync_all().map_err(io_error)?;
+    Ok(format!(
+        "Journal complet enregistré · {}",
+        output_file.display()
+    ))
+}
+
+pub fn export_pi_server_log(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    output_file: &Path,
+) -> Result<String, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Le serveur Pi enregistré n’est pas reconnu.".into());
+    }
+    let output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_file)
+        .map_err(|error| match error.kind() {
+            io::ErrorKind::AlreadyExists => {
+                "Ce fichier existe déjà. Choisis un autre nom pour ne rien écraser.".to_string()
+            }
+            _ => io_error(error),
+        })?;
+    let mut cleanup = RemoveFileOnDrop(output_file.to_path_buf());
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "p=\"$HOME/{server_folder}/serveur.log\"; test -f \"$p\" && test ! -L \"$p\" && cat -- \"$p\""
+    );
+    let mut child = Command::new("ssh")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            &destination,
+            &command,
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(output))
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|_| "L’outil d’accès sécurisé SSH n’est pas disponible.".to_string())?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(45);
+    loop {
+        if let Some(status) = child.try_wait().map_err(io_error)? {
+            if !status.success() {
+                let detail = child
+                    .stderr
+                    .take()
+                    .and_then(|mut stream| {
+                        let mut value = String::new();
+                        stream.read_to_string(&mut value).ok().map(|_| value)
+                    })
+                    .unwrap_or_default();
+                return Err(if detail.is_empty() {
+                    "Le Pi n’a pas pu fournir son journal complet. Aucun fichier existant n’a été modifié.".into()
+                } else {
+                    format!(
+                        "Le journal du Pi n’a pas été exporté : {}",
+                        detail.chars().take(500).collect::<String>()
+                    )
+                });
+            }
+            cleanup.0 = PathBuf::new();
+            return Ok(format!(
+                "Journal complet enregistré · {}",
+                output_file.display()
+            ));
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(
+                "L’export du journal dépasse 45 secondes. Le fichier incomplet a été retiré."
+                    .into(),
+            );
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 /// Restarts only an application-managed local server and waits for its
 /// authenticated RCON endpoint, Java port, and startup log before reporting ready.
 pub fn start_local_server(
@@ -805,7 +950,8 @@ pub fn start_local_server(
         .and_then(serde_json::Value::as_u64)
         .and_then(|port| u16::try_from(port).ok())
         .ok_or_else(|| "Le port Bedrock du serveur est illisible.".to_string())?;
-    if tcp_port_open(java_port) || !udp_port_available(bedrock_port) {
+    if tcp_port_open(java_port) || tcp_port_open(bedrock_port) || !udp_port_available(bedrock_port)
+    {
         return Err("Un autre service utilise déjà un port réservé au serveur. Aucun processus n’a été démarré.".into());
     }
     let runtime_name = if cfg!(windows) { "java.exe" } else { "java" };
@@ -1249,7 +1395,7 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
     let output = run_ssh(&destination, &command)?;
     let (header, after_profile) = output
@@ -1275,8 +1421,10 @@ pub fn inspect_pi_server(
         ready: get("RUNNING=") == "yes"
             && get("READY=") == "yes"
             && get("JAVA_PORT=") == "yes"
+            && get("BEDROCK_TCP=") == "yes"
             && get("BEDROCK_PORT=") == "yes",
         java_port_open: get("JAVA_PORT=") == "yes",
+        bedrock_tcp_port_open: get("BEDROCK_TCP=") == "yes",
         bedrock_port_open: get("BEDROCK_PORT=") == "yes",
         autostart_configured: get("AUTOSTART=") == "yes",
         minecraft_java: profile
@@ -1770,7 +1918,7 @@ start_game() {{
 wait_ready() {{
   start_lines="$1"
   for i in $(seq 1 60); do
-    if tail -n +$((start_lines + 1)) "$d/serveur.log" 2>/dev/null | grep -q 'Done (' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$' && ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then return 0; fi
+    if tail -n +$((start_lines + 1)) "$d/serveur.log" 2>/dev/null | grep -q 'Done (' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$' && ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then return 0; fi
     if ! server_process_running; then return 1; fi
     sleep 2
   done
@@ -1925,7 +2073,12 @@ pub fn start_pi_server(
         );
         for attempt in 0..40 {
             match inspect_pi_server(host, username, server_folder) {
-                Ok(status) if status.ready && status.java_port_open && status.bedrock_port_open => {
+                Ok(status)
+                    if status.ready
+                        && status.java_port_open
+                        && status.bedrock_tcp_port_open
+                        && status.bedrock_port_open =>
+                {
                     progress("Serveur prêt et ports vérifiés.", 100);
                     return Ok(update_note.unwrap_or_else(|| {
                         format!(

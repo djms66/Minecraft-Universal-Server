@@ -3309,10 +3309,26 @@ function Compatibility({
               Internet de la console se dégrade, remets le DNS en automatique.
             </p>
           </div>
+          <div>
+            <strong>Mode expert · compte Xbox dédié</strong>
+            <p>
+              MCXboxBroadcast peut faire apparaître le serveur dans la liste
+              d’amis de la console. Cette méthode demande de configurer un
+              compte Xbox séparé et un relais côté serveur; Monde Ensemble ne
+              crée pas ce compte et ne configure pas ce relais.
+            </p>
+          </div>
         </div>
         <small>
-          Ces relais ne sont ni installés ni testés par Monde Ensemble. Méthodes
-          et limites à jour : geysermc.org/wiki/geyser/using-geyser-with-consoles/
+          Ces méthodes externes ne sont ni installées ni testées par Monde
+          Ensemble.{" "}
+          <a
+            href="https://geysermc.org/wiki/geyser/using-geyser-with-consoles/"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Lire le guide officiel de GeyserMC
+          </a>
         </small>
       </section>
       <div className="release-summary">

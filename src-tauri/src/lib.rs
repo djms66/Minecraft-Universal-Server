@@ -735,6 +735,27 @@ async fn set_local_whitelist_enabled(server_path: String, enabled: bool) -> Resu
 }
 
 #[tauri::command]
+async fn local_game_settings(server_path: String) -> Result<engine::GameSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::local_game_settings(std::path::Path::new(&server_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn save_local_game_settings(
+    server_path: String,
+    settings: engine::GameSettings,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::save_local_game_settings(std::path::Path::new(&server_path), &settings)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn export_local_server_log(
     server_path: String,
     output_file: String,
@@ -839,6 +860,33 @@ async fn set_pi_whitelist_enabled(
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         engine::set_pi_whitelist_enabled(&host, &username, &server_folder, enabled)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn pi_game_settings(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<engine::GameSettings, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::pi_game_settings(&host, &username, &server_folder)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn save_pi_game_settings(
+    host: String,
+    username: String,
+    server_folder: String,
+    settings: engine::GameSettings,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::save_pi_game_settings(&host, &username, &server_folder, &settings)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -1033,10 +1081,14 @@ pub fn run() {
             local_whitelist_status,
             change_local_whitelist,
             set_local_whitelist_enabled,
+            local_game_settings,
+            save_local_game_settings,
             prepare_pi_player_management,
             pi_whitelist_status,
             change_pi_whitelist,
             set_pi_whitelist_enabled,
+            pi_game_settings,
+            save_pi_game_settings,
             export_local_server_log,
             install_pi,
             inspect_pi_server,

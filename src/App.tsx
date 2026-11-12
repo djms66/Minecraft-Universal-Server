@@ -113,6 +113,16 @@ type LocalServerStatus = {
 };
 type LocalWhitelistStatus = { enabled: boolean; entries: string };
 type PiWhitelistStatus = { enabled: boolean; entries: string };
+type GameSettings = {
+  motd: string;
+  gamemode: "survival" | "creative" | "adventure" | "spectator";
+  difficulty: "peaceful" | "easy" | "normal" | "hard";
+  max_players: number;
+  view_distance: number;
+  simulation_distance: number;
+  pvp: boolean;
+  allow_nether: boolean;
+};
 type PiServerStatus = {
   running: boolean;
   ready: boolean;
@@ -890,7 +900,8 @@ function App() {
   };
 
   useEffect(() => {
-    if (page === "home" && piInstallation) void refreshPiStatus(false);
+    if ((page === "home" || page === "advanced") && piInstallation)
+      void refreshPiStatus(false);
     // A status check runs when the saved server dashboard is opened.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, piInstallation?.serverFolder]);
@@ -995,7 +1006,8 @@ function App() {
   };
 
   useEffect(() => {
-    if (page === "home" && localInstallation) void refreshLocalStatus();
+    if ((page === "home" || page === "advanced") && localInstallation)
+      void refreshLocalStatus();
     // The saved local path is the only input to this read-only status refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, localInstallation?.serverPath]);
@@ -3809,6 +3821,288 @@ function OperationStatus({
   );
 }
 
+function GameSettingsPanel({
+  localInstallation,
+  localServerStatus,
+  piInstallation,
+  piServerStatus,
+  busy,
+}: {
+  localInstallation: LocalInstallation | null;
+  localServerStatus: LocalServerStatus | null;
+  piInstallation: PiInstallation | null;
+  piServerStatus: PiServerStatus | null;
+  busy: boolean;
+}) {
+  const [target, setTarget] = useState<PluginTarget>(
+    localInstallation ? "local" : "pi",
+  );
+  const [settings, setSettings] = useState<GameSettings | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const [message, setMessage] = useState("");
+  const serverRunning =
+    target === "local"
+      ? localServerStatus?.running
+      : piServerStatus?.running;
+  const serverVerified =
+    target === "local" ? Boolean(localServerStatus) : Boolean(piServerStatus);
+
+  useEffect(() => {
+    let cancelled = false;
+    setSettings(null);
+    setError("");
+    setMessage("");
+    const command =
+      target === "local" && localInstallation
+        ? invoke<GameSettings>("local_game_settings", {
+            serverPath: localInstallation.serverPath,
+          })
+        : target === "pi" && piInstallation
+          ? invoke<GameSettings>("pi_game_settings", {
+              host: piInstallation.host,
+              username: piInstallation.username,
+              serverFolder: piInstallation.serverFolder,
+            })
+          : null;
+    if (!command) return;
+    setLoading(true);
+    void command
+      .then((value) => {
+        if (!cancelled) setSettings(value);
+      })
+      .catch((reason) => {
+        if (!cancelled) setError(String(reason));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    target,
+    localInstallation?.serverPath,
+    piInstallation?.host,
+    piInstallation?.username,
+    piInstallation?.serverFolder,
+  ]);
+
+  const change = <K extends keyof GameSettings>(
+    key: K,
+    value: GameSettings[K],
+  ) => {
+    setSettings((current) => (current ? { ...current, [key]: value } : current));
+    setMessage("");
+  };
+
+  const saveSettings = async () => {
+    if (!settings || serverRunning || !serverVerified) return;
+    setSaving(true);
+    setError("");
+    setMessage("");
+    try {
+      const result =
+        target === "local" && localInstallation
+          ? await invoke<string>("save_local_game_settings", {
+              serverPath: localInstallation.serverPath,
+              settings,
+            })
+          : target === "pi" && piInstallation
+            ? await invoke<string>("save_pi_game_settings", {
+                host: piInstallation.host,
+                username: piInstallation.username,
+                serverFolder: piInstallation.serverFolder,
+                settings,
+              })
+            : "";
+      setMessage(result);
+    } catch (reason) {
+      setError(String(reason));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const hasServer = Boolean(localInstallation || piInstallation);
+  return (
+    <section className="operation-card advanced-log-card game-settings-card">
+      <div className="eyebrow">MODE AVANCÉ · RÉGLAGES DU MONDE</div>
+      <h3>Configurer le jeu</h3>
+      <p className="path-note">
+        Ces options modifient uniquement les règles du jeu. Une copie complète
+        de <code>server.properties</code> est créée avant chaque enregistrement.
+        Les ports, la sécurité, la liste d’accès et le contrôle du serveur
+        restent protégés par l’application.
+      </p>
+      {!hasServer ? (
+        <p className="path-note">
+          Installe ou enregistre d’abord un serveur pour afficher ses réglages.
+        </p>
+      ) : (
+        <>
+          {localInstallation && piInstallation ? (
+            <label className="plugin-target-picker">
+              Serveur à configurer
+              <select
+                value={target}
+                onChange={(event) => setTarget(event.target.value as PluginTarget)}
+                disabled={loading || saving || busy}
+              >
+                <option value="local">Ordinateur · serveur local</option>
+                <option value="pi">Raspberry Pi · serveur distant</option>
+              </select>
+            </label>
+          ) : (
+            <p className="settings-target-label">
+              Cible : {localInstallation ? "serveur local" : "Raspberry Pi"}
+            </p>
+          )}
+          {loading && <p className="path-note">Lecture des réglages…</p>}
+          {error && <p className="pi-error" role="alert">{error}</p>}
+          {settings && (
+            <>
+              <div className="game-settings-grid">
+                <label className="game-setting-wide">
+                  Nom affiché dans la liste Minecraft
+                  <input
+                    value={settings.motd}
+                    maxLength={120}
+                    onChange={(event) => change("motd", event.target.value)}
+                    disabled={saving || busy}
+                  />
+                </label>
+                <label>
+                  Mode de jeu par défaut
+                  <select
+                    value={settings.gamemode}
+                    onChange={(event) =>
+                      change("gamemode", event.target.value as GameSettings["gamemode"])
+                    }
+                    disabled={saving || busy}
+                  >
+                    <option value="survival">Survie</option>
+                    <option value="creative">Créatif</option>
+                    <option value="adventure">Aventure</option>
+                    <option value="spectator">Spectateur</option>
+                  </select>
+                </label>
+                <label>
+                  Difficulté
+                  <select
+                    value={settings.difficulty}
+                    onChange={(event) =>
+                      change("difficulty", event.target.value as GameSettings["difficulty"])
+                    }
+                    disabled={saving || busy}
+                  >
+                    <option value="peaceful">Paisible</option>
+                    <option value="easy">Facile</option>
+                    <option value="normal">Normale</option>
+                    <option value="hard">Difficile</option>
+                  </select>
+                </label>
+                <label>
+                  Joueurs maximum
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={settings.max_players}
+                    onChange={(event) =>
+                      change("max_players", Number(event.target.value))
+                    }
+                    disabled={saving || busy}
+                  />
+                </label>
+                <label>
+                  Distance d’affichage · chunks
+                  <input
+                    type="number"
+                    min={2}
+                    max={16}
+                    value={settings.view_distance}
+                    onChange={(event) =>
+                      change("view_distance", Number(event.target.value))
+                    }
+                    disabled={saving || busy}
+                  />
+                </label>
+                <label>
+                  Distance de simulation · chunks
+                  <input
+                    type="number"
+                    min={2}
+                    max={16}
+                    value={settings.simulation_distance}
+                    onChange={(event) =>
+                      change("simulation_distance", Number(event.target.value))
+                    }
+                    disabled={saving || busy}
+                  />
+                </label>
+              </div>
+              <p className="path-note">
+                Des distances plus grandes chargent davantage de terrain et
+                peuvent ralentir un Raspberry Pi. Commence à 8 chunks
+                d’affichage et 6 de simulation, puis augmente si le serveur reste fluide.
+              </p>
+              <div className="game-settings-toggles">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={settings.pvp}
+                    onChange={(event) => change("pvp", event.target.checked)}
+                    disabled={saving || busy}
+                  />
+                  <span>Combat entre joueurs (PvP)</span>
+                </label>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={settings.allow_nether}
+                    onChange={(event) =>
+                      change("allow_nether", event.target.checked)
+                    }
+                    disabled={saving || busy}
+                  />
+                  <span>Activer le Nether</span>
+                </label>
+              </div>
+              {!serverVerified ? (
+                <p className="path-note">
+                  Attends la confirmation de l’état du serveur avant de modifier
+                  ses réglages.
+                </p>
+              ) : serverRunning ? (
+                <p className="path-note">
+                  Arrête le serveur depuis « Mon monde » avant d’enregistrer.
+                  Rien ne change pendant une partie.
+                </p>
+              ) : (
+                <button
+                  className="button primary"
+                  onClick={() => void saveSettings()}
+                  disabled={saving || busy || loading}
+                >
+                  {saving ? "Sauvegarde des réglages…" : "Enregistrer les réglages"}
+                </button>
+              )}
+              {message && <p className="settings-save-message">{message}</p>}
+              <small className="path-note">
+                Le redémarrage du serveur est nécessaire. En cas de problème,
+                la copie précédente de la configuration reste dans le dossier
+                du serveur.
+              </small>
+            </>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Advanced({
   system,
   localInstallation,
@@ -3977,6 +4271,13 @@ function Advanced({
           <b>Sinon, version présente conservée</b>
         </div>
       </div>
+      <GameSettingsPanel
+        localInstallation={localInstallation}
+        localServerStatus={localServerStatus}
+        piInstallation={piInstallation}
+        piServerStatus={piServerStatus}
+        busy={busy}
+      />
       {piInstallation && (
         <div className="operation-card advanced-log-card">
           <div className="eyebrow">OUTILS DU SERVEUR PI</div>

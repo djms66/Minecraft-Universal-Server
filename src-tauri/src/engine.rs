@@ -223,6 +223,307 @@ pub struct LocalServerStatus {
     pub log: String,
 }
 
+pub fn local_game_settings(server_dir: &Path) -> Result<GameSettings, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    local_profile(&server_dir)?;
+    let properties = read_server_properties(&server_dir.join("server.properties"))?;
+    parse_game_settings(&properties)
+}
+
+pub fn save_local_game_settings(
+    server_dir: &Path,
+    settings: &GameSettings,
+) -> Result<String, String> {
+    validate_game_settings(settings)?;
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    local_profile(&server_dir)?;
+    if inspect_local_server(&server_dir)?.running {
+        return Err(
+            "Arrête le serveur depuis son tableau de bord avant de modifier ses réglages.".into(),
+        );
+    }
+    let properties_path = server_dir.join("server.properties");
+    let previous = read_server_properties(&properties_path)?;
+    let updated = apply_game_settings(&previous, settings)?;
+    let backup_path = server_dir.join(format!(
+        "server.properties.before-settings-{}",
+        Uuid::new_v4().simple()
+    ));
+    write_new_private_file(&backup_path, previous.as_bytes())?;
+    let staged_path = server_dir.join(format!(
+        ".server.properties.{}.tmp",
+        Uuid::new_v4().simple()
+    ));
+    let _cleanup = RemoveFileOnDrop(staged_path.clone());
+    write_new_private_file(&staged_path, updated.as_bytes())?;
+    fs::rename(&staged_path, &properties_path).map_err(|error| {
+        format!(
+            "Les réglages n’ont pas été appliqués. La copie précédente est conservée dans {} : {error}",
+            backup_path.display()
+        )
+    })?;
+    Ok(format!(
+        "Réglages enregistrés. Le serveur doit être redémarré pour les appliquer. Copie de secours : {}",
+        backup_path.display()
+    ))
+}
+
+pub fn pi_game_settings(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+) -> Result<GameSettings, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Adresse ou dossier du serveur Pi invalide.".into());
+    }
+    let command = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; test -d \"$d\" && test ! -L \"$d\"; test -f \"$d/monde-ensemble-profile.json\" && test ! -L \"$d/monde-ensemble-profile.json\"; test -f \"$d/server.properties\" && test ! -L \"$d/server.properties\"; test \"$(wc -c < \"$d/server.properties\")\" -le 1048576; python3 -c 'import json,sys; p=json.load(open(sys.argv[1])); assert p.get(\"application\") == \"Monde Ensemble\"' \"$d/monde-ensemble-profile.json\"; cat -- \"$d/server.properties\""
+    );
+    let properties = run_ssh(&format!("{username}@{host}"), &command)?;
+    parse_game_settings(&properties)
+}
+
+pub fn save_pi_game_settings(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    settings: &GameSettings,
+) -> Result<String, String> {
+    validate_game_settings(settings)?;
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Adresse ou dossier du serveur Pi invalide.".into());
+    }
+    if inspect_pi_server(host, username, server_folder)?.running {
+        return Err(
+            "Arrête le serveur Pi depuis son tableau de bord avant de modifier ses réglages."
+                .into(),
+        );
+    }
+    let settings_json = serde_json::to_string(settings).map_err(|error| error.to_string())?;
+    let backup_id = Uuid::new_v4().simple().to_string();
+    let command = format!(
+        r#"set -eu
+umask 077
+d="$HOME/{server_folder}"
+test -d "$d" && test ! -L "$d"
+test -f "$d/monde-ensemble-profile.json" && test ! -L "$d/monde-ensemble-profile.json"
+test -f "$d/server.properties" && test ! -L "$d/server.properties"
+pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+case "$pid" in ''|*[!0-9]*) pid=;; esac
+if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 0; fi
+python3 - "$d" {settings_json} {backup_id} <<'PYCODE'
+import json, os, pathlib, shutil, sys, tempfile
+root=pathlib.Path(sys.argv[1]); settings=json.loads(sys.argv[2]); suffix=sys.argv[3]
+profile=root/'monde-ensemble-profile.json'; props=root/'server.properties'
+data=json.loads(profile.read_text(encoding='utf-8'))
+if data.get('application') != 'Monde Ensemble': raise SystemExit('PROFILE_NOT_MANAGED')
+if props.stat().st_size > 1048576: raise SystemExit('PROPERTIES_TOO_LARGE')
+lines=props.read_text(encoding='utf-8').splitlines(); keys={{'motd':'motd','gamemode':'gamemode','difficulty':'difficulty','max_players':'max-players','view_distance':'view-distance','simulation_distance':'simulation-distance','pvp':'pvp','allow_nether':'allow-nether'}}
+values={{key:str(settings[field]).lower() if isinstance(settings[field], bool) else str(settings[field]) for field,key in keys.items()}}
+backup=root/f'server.properties.before-settings-{{suffix}}'
+with backup.open('xb') as out, props.open('rb') as source: shutil.copyfileobj(source,out); out.flush(); os.fsync(out.fileno())
+seen=set(); result=[]
+for line in lines:
+    key=line.split('=',1)[0]
+    if key in values:
+        if key not in seen: result.append(f'{{key}}={{values[key]}}'); seen.add(key)
+    else: result.append(line)
+for key,value in values.items():
+    if key not in seen: result.append(f'{{key}}={{value}}')
+fd,temp=tempfile.mkstemp(prefix='.server.properties.',dir=root)
+try:
+    with os.fdopen(fd,'w',encoding='utf-8',newline='\n') as out:
+        out.write('\n'.join(result)+'\n'); out.flush(); os.fsync(out.fileno())
+    os.chmod(temp,0o600); os.replace(temp,props); os.chmod(props,0o600)
+except BaseException:
+    try: os.unlink(temp)
+    except FileNotFoundError: pass
+    shutil.copy2(backup,props)
+    raise
+print('SETTINGS_SAVED')
+print(f'BACKUP={{backup.name}}')
+PYCODE"#
+    );
+    let command = command.replace(&settings_json, &shell_single_quote(&settings_json));
+    let output = run_ssh(&format!("{username}@{host}"), &command)?;
+    if output.lines().any(|line| line == "SERVER_RUNNING") {
+        return Err(
+            "Le serveur Pi a redémarré entre les contrôles. Rien n’a été modifié; arrête-le puis réessaie.".into(),
+        );
+    }
+    if !output.lines().any(|line| line == "SETTINGS_SAVED") {
+        return Err(format!(
+            "Le Pi n’a pas confirmé l’enregistrement. Le réglage d’origine est conservé. {}",
+            output.trim()
+        ));
+    }
+    let backup = output
+        .lines()
+        .find_map(|line| line.strip_prefix("BACKUP="))
+        .unwrap_or("copie de secours créée sur le Pi");
+    Ok(format!(
+        "Réglages enregistrés sur le Pi. Redémarre le serveur pour les appliquer. Copie de secours : {backup}"
+    ))
+}
+
+fn read_server_properties(path: &Path) -> Result<String, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|_| "Le fichier server.properties est absent ou illisible.".to_string())?;
+    if !metadata.file_type().is_file() || metadata.len() > 1024 * 1024 {
+        return Err(
+            "Le fichier server.properties n’est pas un fichier normal ou dépasse 1 Mo.".into(),
+        );
+    }
+    fs::read_to_string(path)
+        .map_err(|_| "Le fichier server.properties n’est pas un texte lisible.".into())
+}
+
+fn parse_game_settings(properties: &str) -> Result<GameSettings, String> {
+    let value = |name: &str| {
+        properties.lines().rev().find_map(|line| {
+            line.split_once('=')
+                .filter(|(key, _)| *key == name)
+                .map(|(_, value)| value.trim())
+        })
+    };
+    let parse_number = |name: &str, fallback: &str| -> Result<u16, String> {
+        value(name)
+            .unwrap_or(fallback)
+            .parse::<u16>()
+            .map_err(|_| format!("Le réglage {name} dans server.properties est invalide."))
+    };
+    let parse_bool = |name: &str, fallback: bool| -> Result<bool, String> {
+        match value(name).unwrap_or(if fallback { "true" } else { "false" }) {
+            "true" => Ok(true),
+            "false" => Ok(false),
+            _ => Err(format!(
+                "Le réglage {name} dans server.properties est invalide."
+            )),
+        }
+    };
+    let settings = GameSettings {
+        motd: value("motd").unwrap_or("A Minecraft Server").to_string(),
+        gamemode: value("gamemode").unwrap_or("survival").to_string(),
+        difficulty: value("difficulty").unwrap_or("easy").to_string(),
+        max_players: parse_number("max-players", "20")?,
+        view_distance: u8::try_from(parse_number("view-distance", "10")?)
+            .map_err(|_| "La distance d’affichage Minecraft est invalide.".to_string())?,
+        simulation_distance: u8::try_from(parse_number("simulation-distance", "10")?)
+            .map_err(|_| "La distance de simulation Minecraft est invalide.".to_string())?,
+        pvp: parse_bool("pvp", true)?,
+        allow_nether: parse_bool("allow-nether", true)?,
+    };
+    validate_game_settings(&settings)?;
+    Ok(settings)
+}
+
+fn validate_game_settings(settings: &GameSettings) -> Result<(), String> {
+    if settings.motd.trim().is_empty()
+        || settings.motd.len() > 120
+        || settings.motd.chars().any(char::is_control)
+    {
+        return Err(
+            "Le nom affiché doit contenir de 1 à 120 caractères sur une seule ligne.".into(),
+        );
+    }
+    if !matches!(
+        settings.gamemode.as_str(),
+        "survival" | "creative" | "adventure" | "spectator"
+    ) {
+        return Err("Choisis un mode de jeu Minecraft reconnu.".into());
+    }
+    if !matches!(
+        settings.difficulty.as_str(),
+        "peaceful" | "easy" | "normal" | "hard"
+    ) {
+        return Err("Choisis une difficulté Minecraft reconnue.".into());
+    }
+    if !(1..=1000).contains(&settings.max_players) {
+        return Err("Le nombre maximal de joueurs doit être compris entre 1 et 1000.".into());
+    }
+    if !(2..=16).contains(&settings.view_distance)
+        || !(2..=16).contains(&settings.simulation_distance)
+    {
+        return Err("Les distances d’affichage et de simulation doivent être comprises entre 2 et 16 chunks.".into());
+    }
+    Ok(())
+}
+
+fn apply_game_settings(properties: &str, settings: &GameSettings) -> Result<String, String> {
+    validate_game_settings(settings)?;
+    let updates = [
+        ("motd", settings.motd.clone()),
+        ("gamemode", settings.gamemode.clone()),
+        ("difficulty", settings.difficulty.clone()),
+        ("max-players", settings.max_players.to_string()),
+        ("view-distance", settings.view_distance.to_string()),
+        (
+            "simulation-distance",
+            settings.simulation_distance.to_string(),
+        ),
+        ("pvp", settings.pvp.to_string()),
+        ("allow-nether", settings.allow_nether.to_string()),
+    ];
+    let mut seen = HashSet::new();
+    let mut output = Vec::new();
+    for line in properties.lines() {
+        let key = line.split_once('=').map(|(key, _)| key).unwrap_or_default();
+        if let Some((_, value)) = updates.iter().find(|(candidate, _)| *candidate == key) {
+            if seen.insert(key.to_string()) {
+                output.push(format!("{key}={value}"));
+            }
+        } else {
+            output.push(line.to_string());
+        }
+    }
+    for (key, value) in updates {
+        if seen.insert(key.to_string()) {
+            output.push(format!("{key}={value}"));
+        }
+    }
+    Ok(format!("{}\n", output.join("\n")))
+}
+
+fn write_new_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path).map_err(io_error)?;
+    set_private_file_permissions(path)?;
+    file.write_all(contents).map_err(io_error)?;
+    file.sync_all().map_err(io_error)?;
+    set_private_file_permissions(path)
+}
+
+/// Gameplay options exposed in expert mode. Ports, authentication, RCON,
+/// whitelist and world identity remain app-managed because other controls rely
+/// on them for secure cross-play and safe updates.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct GameSettings {
+    pub motd: String,
+    pub gamemode: String,
+    pub difficulty: String,
+    pub max_players: u16,
+    pub view_distance: u8,
+    pub simulation_distance: u8,
+    pub pvp: bool,
+    pub allow_nether: bool,
+}
+
 #[derive(Serialize)]
 pub struct LocalStartResult {
     pub server_path: String,
@@ -4669,6 +4970,10 @@ fn valid_remote_name(value: &str) -> bool {
         && !value.starts_with('-')
 }
 
+fn shell_single_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
+}
+
 fn run_ssh(destination: &str, command: &str) -> Result<String, String> {
     run_ssh_timeout(destination, command, 8)
 }
@@ -6322,10 +6627,11 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalStartResult, RemoveDirOnDrop, add_identity_file, artifact_hash_matches,
-        java_major_for, parse_supported_versions_page, record_managed_artifact_hashes,
-        restore_backup, safe_archive_path, safe_version, start_updated_local_copy_with_fallback,
-        valid_plugin_filename,
+        GameSettings, LocalStartResult, RemoveDirOnDrop, add_identity_file, apply_game_settings,
+        artifact_hash_matches, java_major_for, parse_game_settings, parse_supported_versions_page,
+        record_managed_artifact_hashes, restore_backup, safe_archive_path, safe_version,
+        shell_single_quote, start_updated_local_copy_with_fallback, valid_plugin_filename,
+        validate_game_settings,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, path::Path, process::Command};
@@ -6374,6 +6680,54 @@ mod tests {
             .collect();
         assert_eq!(args[0], "-i");
         assert_eq!(args[1], identity.to_string_lossy());
+    }
+
+    #[test]
+    fn expert_game_settings_preserve_managed_and_unknown_properties() {
+        let original = "# keep this comment\nmotd=Old\nrcon.password=keep-this-secret\nserver-port=25566\ncustom-option=yes\nview-distance=8\nview-distance=10\n";
+        let parsed = parse_game_settings(original).unwrap();
+        assert_eq!(parsed.motd, "Old");
+        assert_eq!(parsed.view_distance, 10);
+        let settings = GameSettings {
+            motd: "Our shared world".into(),
+            gamemode: "survival".into(),
+            difficulty: "normal".into(),
+            max_players: 24,
+            view_distance: 8,
+            simulation_distance: 6,
+            pvp: false,
+            allow_nether: true,
+        };
+        let changed = apply_game_settings(original, &settings).unwrap();
+        assert!(changed.contains("# keep this comment\n"));
+        assert!(changed.contains("rcon.password=keep-this-secret\n"));
+        assert!(changed.contains("server-port=25566\n"));
+        assert!(changed.contains("custom-option=yes\n"));
+        assert_eq!(changed.matches("view-distance=").count(), 1);
+        assert!(changed.contains("view-distance=8\n"));
+        assert!(changed.contains("simulation-distance=6\n"));
+        assert!(changed.contains("pvp=false\n"));
+    }
+
+    #[test]
+    fn expert_game_settings_reject_invalid_values_and_quote_remote_json() {
+        let mut settings = GameSettings {
+            motd: "Good world".into(),
+            gamemode: "survival".into(),
+            difficulty: "normal".into(),
+            max_players: 20,
+            view_distance: 8,
+            simulation_distance: 6,
+            pvp: true,
+            allow_nether: true,
+        };
+        assert!(validate_game_settings(&settings).is_ok());
+        settings.motd = "invalid\nserver-port=1".into();
+        assert!(validate_game_settings(&settings).is_err());
+        settings.motd = "Good world".into();
+        settings.gamemode = "../survival".into();
+        assert!(validate_game_settings(&settings).is_err());
+        assert_eq!(shell_single_quote("name's world"), "'name'\"'\"'s world'");
     }
 
     #[test]

@@ -977,6 +977,30 @@ async fn restore_server(
     .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn restore_pi_server(
+    host: String,
+    username: String,
+    archive: String,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::restore_pi_backup(
+            &host,
+            &username,
+            std::path::Path::new(&archive),
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1014,7 +1038,8 @@ pub fn run() {
             export_pi_server_log,
             backup_server,
             backup_pi_server,
-            restore_server
+            restore_server,
+            restore_pi_server
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Monde Ensemble");

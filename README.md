@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.4
+# Monde Ensemble 0.18.5
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -18,6 +18,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
 - crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive existante ; vérifie que les ports Minecraft configurés restent libres pendant la copie du monde ;
 - vérifie l’intégrité et les chemins d’une archive avant restauration, puis crée une nouvelle copie ; si son profil Monde Ensemble est reconnu et que ses ports sont libres, la charge automatiquement dans le tableau de bord ;
+- restaure une archive vers un Raspberry Pi déjà configuré en créant un dossier serveur neuf, en vérifiant l’empreinte, en adaptant Java à Linux ARM64 et à sa mémoire, puis en contrôlant la copie à distance ; l’ancien dossier reste disponible et la copie restaurée n’est pas démarrée automatiquement ;
 - recherche les Raspberry Pi qui annoncent SSH sur le réseau local et affiche leur modèle et leur adresse ;
 - repère en lecture seule les cartes SD et supports USB externes sur Mac, Windows ou Linux pour préparer un futur parcours Pi vierge ;
 - lit le catalogue Raspberry Pi officiel pour proposer l’image Raspberry Pi OS Lite 64 bits avec le format de démarrage requis, sa date de publication et sa taille ;
@@ -59,7 +60,7 @@ Pour les clients Bedrock 26.60 et plus récents, Geyser doit utiliser NetherNet 
 
 ## Raspberry Pi
 
-Les serveurs Pi créés par cette version disposent aussi d’une sauvegarde complète vers l’ordinateur et d’une liste d’accès Java/Bedrock gérée depuis le tableau de bord. Le contrôle RCON reste limité à la boucle locale du Pi et chaque action passe par un tunnel SSH temporaire. Les installations Pi plus anciennes affichent un message dédié au lieu de modifier leur configuration en silence.
+Les serveurs Pi créés par cette version disposent d’une sauvegarde complète vers l’ordinateur, d’une restauration de sauvegarde vers un nouveau dossier Pi et d’une liste d’accès Java/Bedrock gérée depuis le tableau de bord. Le contrôle RCON reste limité à la boucle locale du Pi et chaque action passe par un tunnel SSH temporaire. Les installations Pi plus anciennes affichent un message dédié au lieu de modifier leur configuration en silence. La restauration vers Pi exige une archive contenant un profil Monde Ensemble reconnu et Paper, Geyser et Floodgate ; elle refuse les liens, les chemins dangereux, un serveur actif, une architecture non ARM64 ou un espace insuffisant. La copie restaurée reste arrêtée jusqu’à ce que l’utilisateur la démarre depuis le tableau de bord.
 
 Sur un Pi déjà démarré, choisis « Sur un Raspberry Pi », saisis le nom de son compte, puis sélectionne « Trouver mon Pi ». L’application cherche sur le réseau local; si plusieurs Pi répondent, choisis celui qui convient. Elle utilise uniquement une clé SSH déjà approuvée et refuse les connexions qui demandent un mot de passe ou une clé inconnue. Ensuite, confirme l’EULA et choisis « Installer et démarrer le serveur ». La confirmation indique l’adresse et les ports. Les clients du même réseau local utilisent cette adresse; l’accès depuis l’extérieur demande aussi un réglage du routeur.
 

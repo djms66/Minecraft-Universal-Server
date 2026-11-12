@@ -467,6 +467,68 @@ function App() {
     }
   };
 
+  const restoreWorldToPi = async () => {
+    if (!piInstallation || !restoreArchive) return;
+    resetOperation();
+    setBusy(true);
+    try {
+      const currentStatus = await invoke<PiServerStatus>("inspect_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+      });
+      setPiServerStatus(currentStatus);
+      if (
+        currentStatus.running ||
+        currentStatus.java_port_open ||
+        currentStatus.bedrock_tcp_port_open ||
+        currentStatus.bedrock_port_open
+      ) {
+        throw new Error(
+          "Arrête d’abord le serveur Pi. Une restauration est bloquée tant qu’un serveur Minecraft utilise les ports.",
+        );
+      }
+      const result = await invoke<OperationResult>("restore_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        archive: restoreArchive,
+        progress: progressChannel(),
+      });
+      setOperationResult(result);
+      const installation = {
+        ...piInstallation,
+        serverFolder: result.path,
+        previousServerFolder: piInstallation.serverFolder,
+      };
+      try {
+        const restoredStatus = await invoke<PiServerStatus>(
+          "inspect_pi_server",
+          {
+            host: installation.host,
+            username: installation.username,
+            serverFolder: installation.serverFolder,
+          },
+        );
+        setPiInstallation(installation);
+        setPiServerStatus(restoredStatus);
+        setPiStatusError("");
+        setPiActionMessage(
+          "La copie restaurée est sélectionnée. Elle est arrêtée et prête à vérifier avant de jouer; ton serveur précédent reste disponible dans le mode avancé.",
+        );
+        setPage("home");
+      } catch {
+        setOperationResult({
+          ...result,
+          detail: `${result.detail}. Le dossier a été créé, mais son tableau de bord n’a pas pu être rechargé. Nom du dossier : ${result.path}`,
+        });
+      }
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const testPi = async () => {
     setBusy(true);
     setPiVerified(false);
@@ -1338,7 +1400,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.4
+          MONDE ENSEMBLE <span>·</span> 0.18.5
         </div>
       </aside>
 
@@ -1927,6 +1989,7 @@ function App() {
               onBackup={createBackup}
               onBackupPi={createPiBackup}
               onRestore={restoreWorld}
+              onRestorePi={restoreWorldToPi}
             />
           )}
           {page === "advanced" && (
@@ -3261,6 +3324,7 @@ function Backups({
   onBackup,
   onBackupPi,
   onRestore,
+  onRestorePi,
 }: {
   source: string;
   output: string;
@@ -3281,6 +3345,7 @@ function Backups({
   onBackup: () => void;
   onBackupPi: () => void;
   onRestore: () => void;
+  onRestorePi: () => void;
 }) {
   return (
     <div className="content-column">
@@ -3387,6 +3452,40 @@ function Backups({
               : "Vérifier et restaurer"}
         </button>
       </div>
+      {piInstallation && (
+        <div className="operation-card">
+          <div className="eyebrow">TRANSFÉRER SUR LE RASPBERRY PI</div>
+          <h3>Restaurer aussi sur le Pi</h3>
+          <p>
+            Utilise l’archive choisie ci-dessus. Monde Ensemble vérifie son
+            intégrité, adapte Java au Pi et crée un dossier serveur neuf. Le
+            serveur actuel reste conservé; la nouvelle copie reste arrêtée.
+          </p>
+          <button
+            className="button primary action-button"
+            disabled={
+              busy ||
+              !archive ||
+              Boolean(
+                piServerStatus?.running ||
+                piServerStatus?.java_port_open ||
+                piServerStatus?.bedrock_tcp_port_open ||
+                piServerStatus?.bedrock_port_open,
+              )
+            }
+            onClick={onRestorePi}
+          >
+            {piServerStatus?.running ||
+            piServerStatus?.java_port_open ||
+            piServerStatus?.bedrock_tcp_port_open ||
+            piServerStatus?.bedrock_port_open
+              ? "Arrête le serveur Pi avant la restauration"
+              : busy
+                ? "Vérification et transfert en cours…"
+                : "Vérifier et restaurer sur le Pi"}
+          </button>
+        </div>
+      )}
       {progress && (
         <OperationStatus progress={progress} result={result} error={error} />
       )}

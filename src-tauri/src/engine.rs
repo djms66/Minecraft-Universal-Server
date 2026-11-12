@@ -301,6 +301,14 @@ impl Drop for RemoveFileOnDrop {
     }
 }
 
+struct RemoveDirOnDrop(PathBuf);
+
+impl Drop for RemoveDirOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 struct RemoveDirectoryOnDrop(PathBuf);
 
 impl Drop for RemoveDirectoryOnDrop {
@@ -4284,7 +4292,7 @@ pub fn stop_pi_server(host: &str, username: &str, server_folder: &str) -> Result
 }
 
 fn valid_server_folder(value: &str) -> bool {
-    Regex::new(r"^Monde-Ensemble-[a-f0-9]{32}/server$")
+    Regex::new(r"^Monde-Ensemble-[a-zA-Z0-9-]+/server$")
         .map(|pattern| pattern.is_match(value))
         .unwrap_or(false)
 }
@@ -5303,6 +5311,336 @@ pub fn restore_backup(
     })
 }
 
+/// Restores a verified archive to a new sibling server on an already configured Pi.
+/// The existing installation is never replaced, and the restored server is not started.
+pub fn restore_pi_backup(
+    host: &str,
+    username: &str,
+    archive_path: &Path,
+    progress: impl Fn(&str, u8),
+) -> Result<OperationResult, String> {
+    if !valid_remote_name(host) || !valid_remote_name(username) {
+        return Err("Nom du Raspberry Pi ou compte invalide.".into());
+    }
+    let archive_hash_before = hash_file(archive_path)?;
+    let manifest_path = PathBuf::from(format!("{}.sha256", archive_path.display()));
+    if manifest_path.is_file() {
+        let manifest = fs::read_to_string(&manifest_path).map_err(io_error)?;
+        let expected = manifest.split_whitespace().next().unwrap_or_default();
+        if !valid_sha256(expected) || !expected.eq_ignore_ascii_case(&archive_hash_before) {
+            return Err(
+                "Le contrôle d’intégrité de la sauvegarde a échoué. Restauration bloquée.".into(),
+            );
+        }
+    }
+
+    progress("Vérification de l’archive et de l’espace sur le Pi…", 3);
+    let inspect = run_ssh(&format!("{username}@{host}"), REMOTE_PROBE_COMMAND)?;
+    let facts = parse_remote_facts(&inspect)?;
+    if facts.architecture != "aarch64" {
+        return Err(format!(
+            "{} utilise {}. La restauration du serveur demande un Raspberry Pi OS 64 bits.",
+            facts.model, facts.architecture
+        ));
+    }
+    if facts.memory_gb < MINIMUM_SERVER_MEMORY_GB {
+        return Err(format!(
+            "{} n’a que {:.1} Go de mémoire. Il faut au moins 2 Go pour ce serveur.",
+            facts.model, facts.memory_gb
+        ));
+    }
+    if [
+        facts.java_default_busy,
+        facts.java_alternate_busy,
+        facts.bedrock_default_busy,
+        facts.bedrock_alternate_busy,
+        facts.rcon_default_busy,
+        facts.rcon_alternate_busy,
+    ]
+    .iter()
+    .any(|busy| *busy)
+    {
+        return Err("Un port Minecraft est déjà utilisé sur le Pi. Arrête le serveur actif avant de restaurer une copie.".into());
+    }
+
+    let source = File::open(archive_path)
+        .map_err(|error| format!("La sauvegarde choisie est inaccessible : {error}"))?;
+    let mut archive = Archive::new(GzDecoder::new(source));
+    let mut validated = Vec::new();
+    let mut paths = HashSet::new();
+    let mut total = 0u64;
+    for item in archive
+        .entries()
+        .map_err(|error| format!("Cette sauvegarde ne peut pas être lue : {error}"))?
+    {
+        let entry = item.map_err(|error| format!("Archive endommagée : {error}"))?;
+        let kind = entry.header().entry_type();
+        if kind != EntryType::Regular && kind != EntryType::Directory {
+            return Err(
+                "La sauvegarde contient un lien ou un fichier spécial; restauration bloquée."
+                    .into(),
+            );
+        }
+        let path = entry.path().map_err(io_error)?.into_owned();
+        if !safe_archive_path(&path) || !paths.insert(path.clone()) {
+            return Err(
+                "La sauvegarde contient un chemin dangereux ou en double; restauration bloquée."
+                    .into(),
+            );
+        }
+        let size = entry.size();
+        total = total.saturating_add(size);
+        if total > MAX_RESTORE_BYTES {
+            return Err("La sauvegarde dépasse la taille maximale acceptée.".into());
+        }
+        validated.push((path, kind, size));
+    }
+    if validated.is_empty()
+        || !validated
+            .iter()
+            .any(|(path, _, _)| path.starts_with("server/"))
+    {
+        return Err("Cette sauvegarde n’a pas la structure attendue (dossier server).".into());
+    }
+    let compressed_size = fs::metadata(archive_path).map_err(io_error)?.len();
+    let required_space = total
+        .saturating_add(compressed_size)
+        .saturating_add(512 * 1024 * 1024);
+    if facts.free_gb < 2 || required_space > facts.free_gb.saturating_mul(1024 * 1024 * 1024) {
+        return Err(format!(
+            "Il reste environ {} Go libres sur le Pi, trop peu pour restaurer cette copie en conservant l’installation existante.",
+            facts.free_gb
+        ));
+    }
+
+    let staging = std::env::temp_dir().join(format!(
+        "monde-ensemble-pi-restore-{}",
+        Uuid::new_v4().simple()
+    ));
+    fs::create_dir(&staging).map_err(io_error)?;
+    let _cleanup = RemoveDirOnDrop(staging.clone());
+    let extract_root = staging.join("extrait");
+    fs::create_dir(&extract_root).map_err(io_error)?;
+    progress("Contrôle et préparation d’une copie propre…", 12);
+    extract_validated(archive_path, &extract_root, &validated, &progress)?;
+    let restored_root = extract_root.join("server");
+    let profile_path = restored_root.join("monde-ensemble-profile.json");
+    let profile: serde_json::Value = serde_json::from_slice(&fs::read(&profile_path).map_err(io_error)?)
+        .map_err(|_| "Le profil du serveur est absent ou illisible; cette sauvegarde ne peut pas être adaptée au Pi.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+        || !restored_root.join("paper.jar").is_file()
+        || !restored_root.join("plugins/Geyser-Spigot.jar").is_file()
+        || !restored_root.join("plugins/Floodgate-Spigot.jar").is_file()
+        || !restored_root.join("server.properties").is_file()
+    {
+        return Err("Cette sauvegarde ne contient pas un serveur Monde Ensemble complet (Paper, Geyser et Floodgate). Elle reste inchangée.".into());
+    }
+    let java_major = profile
+        .get("java_runtime")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .or_else(|| {
+            profile
+                .get("minecraft_java")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|version| java_major_for(version).ok())
+        })
+        .ok_or_else(|| {
+            "La sauvegarde ne précise pas une version Java compatible connue.".to_string()
+        })?;
+    let java_port = profile
+        .get("java_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(JAVA_DEFAULT_PORT);
+    let bedrock_port = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(BEDROCK_DEFAULT_PORT);
+    let heap_limit = (facts.memory_gb.floor() as u8)
+        .saturating_sub(1)
+        .clamp(1, 6);
+    let heap_gb = profile
+        .get("java_heap_gb")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u8::try_from(value).ok())
+        .filter(|heap| (1..=heap_limit).contains(heap))
+        .unwrap_or(heap_limit.min(2));
+    progress(
+        "Téléchargement du Java officiel adapté au Raspberry Pi…",
+        65,
+    );
+    let client = client()?;
+    let runtime = runtime_package(&client, java_major, true)?;
+    let runtime_archive = staging.join(&runtime.name);
+    download_url_verified(&client, &runtime.link, &runtime.checksum, &runtime_archive)?;
+    let portable_runtime = staging.join("runtime-pi");
+    unpack_runtime(&runtime_archive, portable_runtime.clone())?;
+    fs::remove_file(&runtime_archive).map_err(io_error)?;
+    let original_runtime = restored_root.join("runtime");
+    if original_runtime.exists() {
+        fs::remove_dir_all(&original_runtime).map_err(io_error)?;
+    }
+    fs::rename(&portable_runtime, &original_runtime).map_err(io_error)?;
+    let profile_file = fs::read(&profile_path).map_err(io_error)?;
+    let mut profile: serde_json::Value = serde_json::from_slice(&profile_file).map_err(io_error)?;
+    let object = profile
+        .as_object_mut()
+        .ok_or_else(|| "Le profil du serveur est invalide.".to_string())?;
+    object.insert("java_runtime".into(), serde_json::json!(java_major));
+    object.insert("java_heap_gb".into(), serde_json::json!(heap_gb));
+    object.insert("restored_for".into(), serde_json::json!("linux-aarch64"));
+    object.insert(
+        "restored_at".into(),
+        serde_json::json!(Utc::now().to_rfc3339()),
+    );
+    fs::write(
+        &profile_path,
+        serde_json::to_vec_pretty(&profile).map_err(|error| error.to_string())?,
+    )
+    .map_err(io_error)?;
+    write_launch_files(&restored_root, heap_gb, true, java_port, bedrock_port)?;
+    let _ = fs::remove_file(restored_root.join("demarrer.bat"));
+    set_private_file_permissions(&restored_root.join("server.properties"))?;
+    set_private_file_permissions(&profile_path)?;
+
+    let upload_archive = staging.join("serveur-pi.tar.gz");
+    let output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&upload_archive)
+        .map_err(io_error)?;
+    let encoder = GzEncoder::new(output, Compression::default());
+    let mut builder = Builder::new(encoder);
+    builder
+        .append_dir_all("server", &restored_root)
+        .map_err(io_error)?;
+    let encoder = builder.into_inner().map_err(io_error)?;
+    encoder.finish().map_err(io_error)?;
+    let archive_hash_after = hash_file(archive_path)?;
+    if archive_hash_after != archive_hash_before {
+        return Err(
+            "La sauvegarde source a changé pendant sa vérification; aucune copie n’a été envoyée."
+                .into(),
+        );
+    }
+    let upload_hash = hash_file(&upload_archive)?;
+    let id = Uuid::new_v4().simple().to_string();
+    let remote_archive = format!(".monde-ensemble-restauration-{id}.tar.gz");
+    let server_folder = format!("Monde-Ensemble-Restaure-{id}/server");
+    let destination = format!("{username}@{host}");
+    progress("Envoi chiffré et vérification de la copie sur le Pi…", 84);
+    let mut child = Command::new("scp")
+        .args([
+            "-p",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            upload_archive.to_string_lossy().as_ref(),
+            &format!("{destination}:{remote_archive}"),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            "L’outil de transfert sécurisé n’est pas disponible sur cet ordinateur.".to_string()
+        })?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(1800);
+    let transfer = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status.success(),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(io_error(error));
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break false;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    };
+    if !transfer {
+        let _ = run_ssh(
+            &destination,
+            &format!("rm -f -- \"$HOME/{remote_archive}\""),
+        );
+        return Err("Le transfert sécurisé a échoué ou a dépassé 30 minutes. Le serveur existant reste intact.".into());
+    }
+    let remote_script = format!(
+        r#"set -eu
+umask 077
+a="$HOME/{remote_archive}"
+test -f "$a" && test ! -L "$a"
+test "$(sha256sum "$a" | cut -d' ' -f1)" = "{upload_hash}"
+tar -tzf "$a" >/dev/null
+final="$HOME/Monde-Ensemble-Restaure-{id}"
+stage="$HOME/.Monde-Ensemble-Restaure-{id}.preparing"
+test ! -e "$final" && test ! -e "$stage"
+mkdir "$stage"
+trap 'rm -rf -- "$stage"; rm -f -- "$a"' EXIT
+tar -xzf "$a" -C "$stage"
+d="$stage/server"
+test -d "$d" && test ! -L "$d"
+test -s "$d/paper.jar" && test -s "$d/plugins/Geyser-Spigot.jar" && test -s "$d/plugins/Floodgate-Spigot.jar"
+find "$d/runtime" -type f -name java -print -quit | grep -q .
+test -s "$d/monde-ensemble-profile.json"
+grep -Fq '"application": "Monde Ensemble"' "$d/monde-ensemble-profile.json"
+if find "$d" -type l -print -quit | grep -q .; then exit 6; fi
+chmod 600 "$d/server.properties" "$d/monde-ensemble-profile.json"
+mv -- "$stage/server" "$final/server"
+rmdir "$stage"
+rm -f -- "$a"
+trap - EXIT
+printf 'RESTORED=%s\n' 'Monde-Ensemble-Restaure-{id}/server'
+"#
+    );
+    let uploaded = match run_ssh_timeout(&destination, &remote_script, 240) {
+        Ok(output) => output,
+        Err(error) => {
+            let cleanup = format!(
+                "rm -rf -- \"$HOME/.Monde-Ensemble-Restaure-{id}.preparing\"; rm -f -- \"$HOME/{remote_archive}\""
+            );
+            let _ = run_ssh(&destination, &cleanup);
+            return Err(format!(
+                "Le Pi n’a pas confirmé la copie complète; son installation précédente reste intacte. {error}"
+            ));
+        }
+    };
+    if !uploaded
+        .lines()
+        .any(|line| line.trim() == format!("RESTORED={server_folder}"))
+    {
+        return Err("Le Pi n’a pas confirmé le nom de la copie restaurée. Le serveur existant reste intact.".into());
+    }
+    progress(
+        "Nouvelle copie vérifiée sur le Pi. Elle n’a pas été démarrée.",
+        100,
+    );
+    Ok(OperationResult {
+        path: server_folder,
+        detail: format!(
+            "Copie restaurée sur le Pi · {} · Java {java_major} ARM64 · {heap_gb} Go attribués · l’ancien serveur est conservé · cette copie reste arrêtée",
+            facts.model
+        ),
+        sha256: Some(archive_hash_before),
+    })
+}
+
 fn extract_validated(
     archive_path: &Path,
     staging: &Path,
@@ -5330,6 +5668,10 @@ fn extract_validated(
         }
         let relative = path.strip_prefix("server").unwrap_or(&path);
         if relative.as_os_str().is_empty() {
+            // Archives made by tar/append_dir_all commonly include an explicit
+            // root `server/` directory. It is validated even though the
+            // staging directory already exists and needs no extraction.
+            extracted_count += 1;
             continue;
         }
         let destination = staging.join("server").join(relative);
@@ -5499,7 +5841,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.18.4")
+        .user_agent("MondeEnsemble/0.18.5")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

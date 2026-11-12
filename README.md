@@ -1,4 +1,4 @@
-# Monde Ensemble 0.6.0
+# Monde Ensemble 0.6.1
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -7,7 +7,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;
-- règle des ports distincts (Java 25566, Bedrock 19133) pour éviter de perturber un serveur existant ;
+- choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
 - adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
 - crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive qui porte déjà le même nom ;
 - vérifie le contrôle d’intégrité et les chemins d’une archive avant restauration, puis restaure dans un nouveau dossier ;

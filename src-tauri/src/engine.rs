@@ -15,6 +15,7 @@ use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
     io::{self, Read},
+    net::{TcpListener, UdpSocket},
     path::{Component, Path, PathBuf},
     process::Command,
     time::Duration,
@@ -23,10 +24,32 @@ use tar::{Archive, Builder, EntryType};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-const GAME_PORT: u16 = 25566;
-const BEDROCK_PORT: u16 = 19133;
+const JAVA_DEFAULT_PORT: u16 = 25565;
+const BEDROCK_DEFAULT_PORT: u16 = 19132;
+const JAVA_ALTERNATE_PORT: u16 = 25566;
+const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
-const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; printf '\nIP='; hostname -I | awk '{print $1}'; printf '\nPORT_25566='; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE '[:.]25566$'; then echo busy; else echo free; fi; printf 'PORT_19133='; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE '[:.]19133$'; then echo busy; else echo free; fi"#;
+const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; printf '\nIP='; hostname -I | awk '{print $1}'; for p in 25565 25566 19132 19133; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
+
+fn available_game_port(primary: u16, alternate: u16, udp: bool) -> Result<u16, String> {
+    let can_bind = |port| {
+        let address = format!("0.0.0.0:{port}");
+        if udp {
+            UdpSocket::bind(address).is_ok()
+        } else {
+            TcpListener::bind(address).is_ok()
+        }
+    };
+    if can_bind(primary) {
+        return Ok(primary);
+    }
+    if can_bind(alternate) {
+        return Ok(alternate);
+    }
+    Err(format!(
+        "Les ports Minecraft {primary} et {alternate} sont déjà utilisés. Ferme l’autre serveur puis réessaie."
+    ))
+}
 
 #[derive(Clone, Serialize)]
 pub struct ProgressMessage {
@@ -82,6 +105,8 @@ pub struct PiServerStatus {
     pub autostart_configured: bool,
     pub minecraft_java: String,
     pub minecraft_bedrock: String,
+    pub java_port: u16,
+    pub bedrock_port: u16,
     pub address: String,
     pub log: String,
 }
@@ -351,10 +376,12 @@ pub fn install_local(
     // Keep enough memory for the operating system and the desktop. The cap is
     // deliberately conservative for a beginner-friendly shared server.
     let heap_gb = ((memory_gb * 0.4).floor() as u8).clamp(1, 6);
+    let java_port = available_game_port(JAVA_DEFAULT_PORT, JAVA_ALTERNATE_PORT, false)?;
+    let bedrock_port = available_game_port(BEDROCK_DEFAULT_PORT, BEDROCK_ALTERNATE_PORT, true)?;
     let root = prepare_root(destination_root)?;
     let staging = root.join(format!(".monde-ensemble-{}.preparing", Uuid::new_v4()));
     fs::create_dir(&staging).map_err(io_error)?;
-    let result = build_fresh_server(&staging, heap_gb, false, &progress);
+    let result = build_fresh_server(&staging, heap_gb, false, java_port, bedrock_port, &progress);
     let artifacts = match result {
         Ok(artifacts) => artifacts,
         Err(error) => {
@@ -368,8 +395,8 @@ pub fn install_local(
         format!("Impossible de terminer l’installation dans le dossier choisi : {error}")
     })?;
     let profile = format!(
-        "Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {}",
-        artifacts.0, artifacts.1, artifacts.2, artifacts.3
+        "Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · ports Java {} / Bedrock {}",
+        artifacts.0, artifacts.1, artifacts.2, artifacts.3, artifacts.4, artifacts.5
     );
     progress(
         "Installation préparée dans un nouveau dossier; rien n’a été remplacé.",
@@ -424,26 +451,32 @@ pub fn install_remote_pi(
     if facts.ip.is_empty() {
         return Err("Le Pi a répondu, mais son adresse locale n’a pas pu être détectée. Aucun fichier n’a été envoyé.".into());
     }
-    if facts.java_port_busy || facts.bedrock_port_busy {
-        let ports = [
-            (facts.java_port_busy, GAME_PORT),
-            (facts.bedrock_port_busy, BEDROCK_PORT),
-        ]
-        .into_iter()
-        .filter_map(|(busy, port)| busy.then_some(port.to_string()))
-        .collect::<Vec<_>>()
-        .join(", ");
-        return Err(format!(
-            "Le port {ports} est déjà utilisé sur le Pi. L’installation est bloquée pour ne pas perturber un autre serveur."
-        ));
-    }
+    let java_port = select_remote_port(
+        facts.java_default_busy,
+        facts.java_alternate_busy,
+        JAVA_DEFAULT_PORT,
+        JAVA_ALTERNATE_PORT,
+    )?;
+    let bedrock_port = select_remote_port(
+        facts.bedrock_default_busy,
+        facts.bedrock_alternate_busy,
+        BEDROCK_DEFAULT_PORT,
+        BEDROCK_ALTERNATE_PORT,
+    )?;
     let heap_gb = ((facts.memory_gb * 0.4).floor() as u8).clamp(1, 6);
     let id = Uuid::new_v4().simple().to_string();
     let local_stage = std::env::temp_dir().join(format!("monde-ensemble-{id}"));
     fs::create_dir(&local_stage).map_err(io_error)?;
     let _cleanup_stage = RemoveDirectoryOnDrop(local_stage.clone());
     progress("Préparation du profil Linux ARM64 compatible…", 8);
-    let profile = build_fresh_server(&local_stage, heap_gb, true, &progress)?;
+    let profile = build_fresh_server(
+        &local_stage,
+        heap_gb,
+        true,
+        java_port,
+        bedrock_port,
+        &progress,
+    )?;
 
     let package_path = local_stage.with_extension("tar.gz");
     let _cleanup_package = RemoveFileOnDrop(package_path.clone());
@@ -536,7 +569,7 @@ pub fn install_remote_pi(
     Ok(OperationResult {
         path: format!("{username}@{host}:~/Monde-Ensemble-{id}/server"),
         detail: format!(
-            "Serveur démarré et prêt · démarrage automatique après redémarrage {} · {} · Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{GAME_PORT} · mobile/tablette Bedrock : {ip}:{BEDROCK_PORT} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.",
+            "Serveur démarré et prêt · démarrage automatique après redémarrage {} · {} · Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{} · mobile/tablette Bedrock : {ip}:{} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.",
             if autostart_configured {
                 "configuré"
             } else {
@@ -548,7 +581,9 @@ pub fn install_remote_pi(
             profile.2,
             profile.3,
             java_major_for(&profile.0)?,
-            heap_gb
+            heap_gb,
+            profile.4,
+            profile.5
         ),
         sha256: None,
     })
@@ -637,7 +672,7 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]25566$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]19133$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
     let output = run_ssh(&destination, &command)?;
     let (header, after_profile) = output
@@ -674,6 +709,14 @@ pub fn inspect_pi_server(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string(),
+        java_port: profile
+            .get("java_port")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(JAVA_ALTERNATE_PORT as u64) as u16,
+        bedrock_port: profile
+            .get("bedrock_port")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(BEDROCK_ALTERNATE_PORT as u64) as u16,
         address: get("IP=").to_string(),
         log: log.to_string(),
     })
@@ -690,7 +733,7 @@ pub fn start_pi_server(host: &str, username: &str, server_folder: &str) -> Resul
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "set -eu; d=\"$HOME/{server_folder}\"; if ! test -x \"$d/demarrer.sh\"; then echo 'LANCEUR_ABSENT'; exit 0; fi; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo 'DEJA_LANCE'; exit 0; fi; if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.]({GAME_PORT}|{BEDROCK_PORT})$'; then echo 'PORT_OCCUPE'; exit 0; fi; cd \"$d\"; nohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; echo 'DEMARRAGE_LANCE'"
+        "set -eu; d=\"$HOME/{server_folder}\"; if ! test -x \"$d/demarrer.sh\"; then echo 'LANCEUR_ABSENT'; exit 0; fi; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo 'DEJA_LANCE'; exit 0; fi; if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo 'PORT_OCCUPE'; exit 0; fi; cd \"$d\"; nohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; echo 'DEMARRAGE_LANCE'"
     );
     let output = run_ssh(&destination, &command)?;
     if output.lines().any(|line| line == "PORT_OCCUPE") {
@@ -711,14 +754,33 @@ fn valid_server_folder(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn select_remote_port(
+    primary_busy: bool,
+    alternate_busy: bool,
+    primary: u16,
+    alternate: u16,
+) -> Result<u16, String> {
+    if !primary_busy {
+        Ok(primary)
+    } else if !alternate_busy {
+        Ok(alternate)
+    } else {
+        Err(format!(
+            "Les ports Minecraft {primary} et {alternate} sont déjà utilisés sur le Pi. Ferme l’autre serveur puis réessaie. Aucun fichier n’a été envoyé."
+        ))
+    }
+}
+
 struct RemoteFacts {
     model: String,
     memory_gb: f64,
     free_gb: u64,
     architecture: String,
     ip: String,
-    java_port_busy: bool,
-    bedrock_port_busy: bool,
+    java_default_busy: bool,
+    java_alternate_busy: bool,
+    bedrock_default_busy: bool,
+    bedrock_alternate_busy: bool,
 }
 
 fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
@@ -746,8 +808,10 @@ fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
             .map_err(|_| "Espace libre du Pi illisible.".to_string())?,
         architecture: required("ARCH")?.trim().to_string(),
         ip: required("IP")?.trim().to_string(),
-        java_port_busy: required("PORT_25566")?.trim() == "busy",
-        bedrock_port_busy: required("PORT_19133")?.trim() == "busy",
+        java_default_busy: required("PORT_25565")?.trim() == "busy",
+        java_alternate_busy: required("PORT_25566")?.trim() == "busy",
+        bedrock_default_busy: required("PORT_19132")?.trim() == "busy",
+        bedrock_alternate_busy: required("PORT_19133")?.trim() == "busy",
     })
 }
 
@@ -808,8 +872,10 @@ fn build_fresh_server(
     stage: &Path,
     heap_gb: u8,
     remote_linux: bool,
+    java_port: u16,
+    bedrock_port: u16,
     progress: &impl Fn(&str, u8),
-) -> Result<(String, String, String, String), String> {
+) -> Result<(String, String, String, String, u16, u16), String> {
     let client = client()?;
     progress("Lecture des versions compatibles auprès de GeyserMC…", 3);
     let supported = supported_versions(&client)?;
@@ -888,6 +954,8 @@ fn build_fresh_server(
         java_major,
         heap_gb,
         remote_linux,
+        java_port,
+        bedrock_port,
         &geyser,
         &floodgate,
     )?;
@@ -896,6 +964,8 @@ fn build_fresh_server(
         supported.bedrock,
         geyser.version,
         floodgate.version,
+        java_port,
+        bedrock_port,
     ))
 }
 
@@ -959,13 +1029,15 @@ fn configure_server(
     java_major: u8,
     heap_gb: u8,
     remote_linux: bool,
+    java_port: u16,
+    bedrock_port: u16,
     geyser: &BridgeBuild,
     floodgate: &BridgeBuild,
 ) -> Result<(), String> {
     let eula = format!("# EULA acceptée séparément dans l’application Monde Ensemble\neula=true\n");
     fs::write(stage.join("eula.txt"), eula).map_err(io_error)?;
     let properties = format!(
-        "motd=Monde Ensemble\nserver-port={GAME_PORT}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nview-distance=8\nsimulation-distance=6\n"
+        "motd=Monde Ensemble\nserver-port={java_port}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nview-distance=8\nsimulation-distance=6\n"
     );
     fs::write(stage.join("server.properties"), properties).map_err(io_error)?;
 
@@ -979,13 +1051,13 @@ fn configure_server(
         .map_err(|_| "Le modèle officiel de configuration Geyser est absent.".to_string())?
         .read_to_string(&mut template)
         .map_err(io_error)?;
-    let template = set_yaml(&template, "bedrock", "port", &BEDROCK_PORT.to_string());
+    let template = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
     let template = set_yaml(&template, "bedrock", "transport", "nethernet");
     let template = set_yaml(&template, "remote", "auth-type", "floodgate");
     fs::create_dir_all(stage.join("plugins/Geyser-Spigot")).map_err(io_error)?;
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
 
-    write_launch_files(stage, heap_gb, remote_linux)?;
+    write_launch_files(stage, heap_gb, remote_linux, java_port, bedrock_port)?;
     let profile = serde_json::json!({
         "application": "Monde Ensemble",
         "minecraft_java": java_version,
@@ -995,8 +1067,8 @@ fn configure_server(
         "floodgate": floodgate.version,
         "java_runtime": java_major,
         "java_heap_gb": heap_gb,
-        "java_port": GAME_PORT,
-        "bedrock_port": BEDROCK_PORT,
+        "java_port": java_port,
+        "bedrock_port": bedrock_port,
         "plugins": ["Geyser-Spigot", "Floodgate-Spigot"],
         "created_at": Utc::now().to_rfc3339(),
     });
@@ -1035,7 +1107,13 @@ fn set_yaml(source: &str, section: &str, key: &str, value: &str) -> String {
     lines.join("\n") + "\n"
 }
 
-fn write_launch_files(stage: &Path, heap_gb: u8, remote_linux: bool) -> Result<(), String> {
+fn write_launch_files(
+    stage: &Path,
+    heap_gb: u8,
+    remote_linux: bool,
+    java_port: u16,
+    bedrock_port: u16,
+) -> Result<(), String> {
     if cfg!(windows) && !remote_linux {
         let script = format!(
             "@echo off\r\ncd /d \"%~dp0\"\r\nfor /r runtime %%J in (java.exe) do set JAVA_BIN=%%J\r\nif not defined JAVA_BIN echo Java inclus introuvable & exit /b 1\r\n\"%JAVA_BIN%\" -Xms1G -Xmx{heap_gb}G -jar paper.jar --nogui\r\npause\r\n"
@@ -1064,7 +1142,7 @@ fn write_launch_files(stage: &Path, heap_gb: u8, remote_linux: bool) -> Result<(
         }
     }
     let notes = format!(
-        "MONDE ENSEMBLE — NOUVELLE INSTALLATION\n\nMinecraft Java : {GAME_PORT} (TCP)\nMinecraft Bedrock : {BEDROCK_PORT} (UDP et TCP)\nLes deux éditions rejoignent le même monde avec Paper, Geyser et Floodgate.\n\nJava : démarrer avec demarrer.bat ou demarrer.sh.\nLe serveur n’a pas été démarré par l’application.\n\nLes consoles peuvent demander une méthode d’accès supplémentaire. Les mods qui exigent une installation chez les joueurs et les packs Java ne sont pas universels.\n"
+        "MONDE ENSEMBLE — NOUVELLE INSTALLATION\n\nMinecraft Java : {java_port} (TCP)\nMinecraft Bedrock : {bedrock_port} (UDP et TCP)\nLes deux éditions rejoignent le même monde avec Paper, Geyser et Floodgate.\n\nJava : démarrer avec demarrer.bat ou demarrer.sh.\nLe serveur n’a pas été démarré par l’application.\n\nLes consoles peuvent demander une méthode d’accès supplémentaire. Les mods qui exigent une installation chez les joueurs et les packs Java ne sont pas universels.\n"
     );
     fs::write(stage.join("LIRE AVANT DE JOUER.txt"), notes).map_err(io_error)
 }

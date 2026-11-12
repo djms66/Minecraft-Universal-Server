@@ -53,6 +53,8 @@ type PiServerStatus = {
   autostart_configured: boolean;
   minecraft_java: string;
   minecraft_bedrock: string;
+  java_port: number;
+  bedrock_port: number;
   address: string;
   log: string;
 };
@@ -320,28 +322,26 @@ function App() {
       )?.[0];
       const address = result.detail.match(/(?:\d{1,3}\.){3}\d{1,3}/)?.[0];
       if (serverFolder && address) {
-        setPiInstallation({
+          const installation = {
           host: piHost,
           username: piUser,
           serverFolder,
           address,
-        });
-        setPiServerStatus({
-          running: true,
-          ready: true,
-          java_port_open: true,
-          bedrock_port_open: true,
-          autostart_configured: result.detail.includes(
-            "démarrage automatique après redémarrage configuré",
-          ),
-          minecraft_java:
-            result.detail.match(/Minecraft Java ([^·]+)/)?.[1]?.trim() ?? "",
-          minecraft_bedrock:
-            result.detail.match(/Bedrock compatible ([^·]+)/)?.[1]?.trim() ?? "",
-          address,
-          log: "",
-        });
-        setPiStatusError("");
+          };
+          setPiInstallation(installation);
+          try {
+            const status = await invoke<PiServerStatus>("inspect_pi_server", {
+              host: installation.host,
+              username: installation.username,
+              serverFolder: installation.serverFolder,
+            });
+            setPiServerStatus(status);
+            setPiStatusError("");
+          } catch (error) {
+            setPiStatusError(
+              `Le serveur est installé, mais son tableau de bord n’a pas pu être actualisé : ${String(error)}`,
+            );
+          }
       }
     } catch (error) {
       setOperationError(String(error));
@@ -471,7 +471,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.6.0
+          MONDE ENSEMBLE <span>·</span> 0.6.1
         </div>
       </aside>
 
@@ -1102,13 +1102,16 @@ function Home({
           <div className="pi-connect-grid">
             <div>
               <small>ORDINATEUR · JAVA</small>
-              <strong>{piServerStatus?.address || piInstallation.address}:25566</strong>
+              <strong>
+                {piServerStatus?.address || piInstallation.address}:
+                {piServerStatus?.java_port || 25565}
+              </strong>
               <span>Dans Minecraft : Multijoueur → Ajouter un serveur</span>
             </div>
             <div>
               <small>TÉLÉPHONE · TABLETTE · BEDROCK</small>
               <strong>{piServerStatus?.address || piInstallation.address}</strong>
-              <span>Port : 19133 · Ajouter un serveur</span>
+              <span>Port : {piServerStatus?.bedrock_port || 19132} · Ajouter un serveur</span>
             </div>
           </div>
           <div className="pi-version-line">

@@ -18,6 +18,7 @@ use std::{
     net::{TcpListener, TcpStream, UdpSocket},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
+    sync::OnceLock,
     time::Duration,
 };
 use tar::{Archive, Builder, EntryType};
@@ -33,6 +34,41 @@ const BEDROCK_DEFAULT_PORT: u16 = 19132;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+static APP_DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+
+/// Stores the app-owned location used for first-boot Raspberry Pi SSH access.
+pub fn configure_app_data_directory(path: PathBuf) {
+    let _ = APP_DATA_DIRECTORY.set(path);
+}
+
+/// Runs SSH with the app's Pi key when one has been provisioned. Existing
+/// OpenSSH identities remain available for Pi installations made earlier.
+pub fn ssh_command() -> Command {
+    let mut command = Command::new("ssh");
+    add_managed_identity(&mut command);
+    command
+}
+
+fn scp_command() -> Command {
+    let mut command = Command::new("scp");
+    add_managed_identity(&mut command);
+    command
+}
+
+fn add_managed_identity(command: &mut Command) {
+    let Some(directory) = APP_DATA_DIRECTORY.get() else {
+        return;
+    };
+    let identity = directory.join("ssh").join("monde-ensemble-pi");
+    add_identity_file(command, &identity);
+}
+
+fn add_identity_file(command: &mut Command, identity: &Path) {
+    if identity.is_file() {
+        command.arg("-i").arg(identity);
+    }
+}
+
 const REMOTE_NETWORK_IDENTITY_COMMAND: &str = r#"network_interface="$(ip -4 route show default 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"; network_ip=""; if [ -n "$network_interface" ]; then network_ip="$(ip -o -4 address show dev "$network_interface" scope global 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; if [ -z "$network_ip" ]; then network_interface="$(ip -o -4 address show scope global up 2>/dev/null | awk 'NR == 1 { print $2 }')"; network_ip="$(ip -o -4 address show dev "$network_interface" scope global up 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; network_mac=""; if [ -n "$network_interface" ] && [ -r "/sys/class/net/$network_interface/address" ]; then network_mac="$(cat "/sys/class/net/$network_interface/address")"; fi; printf 'IP=%s\nNETWORK_INTERFACE=%s\nMAC_ADDRESS=%s\n' "$network_ip" "$network_interface" "$network_mac""#;
 const REMOTE_PROBE_COMMAND_TEMPLATE: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; @NETWORK_IDENTITY@; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
 
@@ -1248,7 +1284,7 @@ pub fn install_pi_paper_plugin_copy(
         fs::set_permissions(&local_plugin, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
     }
     progress("Transfert chiffré du plugin vers le Pi…", 30);
-    let scp = Command::new("scp")
+    let scp = scp_command()
         .args([
             "-p",
             "-o",
@@ -2595,7 +2631,7 @@ fn with_pi_rcon<T>(
     let local_port = listener.local_addr().map_err(io_error)?.port();
     drop(listener);
     let forward = format!("127.0.0.1:{local_port}:127.0.0.1:{remote_port}");
-    let mut child = Command::new("ssh")
+    let mut child = ssh_command()
         .args([
             "-N",
             "-L",
@@ -2718,7 +2754,7 @@ pub fn export_pi_server_log(
     let command = format!(
         "p=\"$HOME/{server_folder}/serveur.log\"; test -f \"$p\" && test ! -L \"$p\" && cat -- \"$p\""
     );
-    let mut child = Command::new("ssh")
+    let mut child = ssh_command()
         .args([
             "-o",
             "BatchMode=yes",
@@ -3502,7 +3538,7 @@ pub fn install_remote_pi(
     }
     let remote_archive = format!("Monde-Ensemble-{id}.tar.gz");
     progress("Envoi sécurisé des fichiers vérifiés au Pi…", 84);
-    let scp = Command::new("scp")
+    let scp = scp_command()
         .args([
             "-p",
             "-o",
@@ -4214,7 +4250,7 @@ fn update_pi_server_if_ready(
     let destination = format!("{username}@{host}");
     let remote_archive = format!("Monde-Ensemble-update-{id}.tar.gz");
     progress("Envoi chiffré des fichiers contrôlés au Pi…", 65);
-    let scp = Command::new("scp")
+    let scp = scp_command()
         .args([
             "-p",
             "-o",
@@ -4656,7 +4692,7 @@ fn run_ssh_timeout_policy(
     } else {
         "StrictHostKeyChecking=yes"
     };
-    let output = Command::new("ssh")
+    let output = ssh_command()
         .args([
             "-o",
             "BatchMode=yes",
@@ -5330,7 +5366,7 @@ sha256sum "$a" | awk '{{print $1}}'
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
     }
-    let mut child = Command::new("scp")
+    let mut child = scp_command()
         .args([
             "-p",
             "-o",
@@ -5805,7 +5841,7 @@ pub fn restore_pi_backup(
     let server_folder = format!("Monde-Ensemble-Restaure-{id}/server");
     let destination = format!("{username}@{host}");
     progress("Envoi chiffré et vérification de la copie sur le Pi…", 84);
-    let mut child = Command::new("scp")
+    let mut child = scp_command()
         .args([
             "-p",
             "-o",
@@ -6286,13 +6322,13 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocalStartResult, RemoveDirOnDrop, artifact_hash_matches, java_major_for,
-        parse_supported_versions_page, record_managed_artifact_hashes, restore_backup,
-        safe_archive_path, safe_version, start_updated_local_copy_with_fallback,
+        LocalStartResult, RemoveDirOnDrop, add_identity_file, artifact_hash_matches,
+        java_major_for, parse_supported_versions_page, record_managed_artifact_hashes,
+        restore_backup, safe_archive_path, safe_version, start_updated_local_copy_with_fallback,
         valid_plugin_filename,
     };
     use flate2::{Compression, write::GzEncoder};
-    use std::{fs, fs::File, path::Path};
+    use std::{fs, fs::File, path::Path, process::Command};
     use tar::{Builder, Header};
 
     fn test_directory() -> (std::path::PathBuf, RemoveDirOnDrop) {
@@ -6320,6 +6356,24 @@ mod tests {
         archive.append(&header, contents).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn ssh_identity_is_used_only_when_the_app_owned_key_exists() {
+        let (directory, _cleanup) = test_directory();
+        let identity = directory.join("monde-ensemble-pi");
+        let mut command = Command::new("ssh");
+        add_identity_file(&mut command, &identity);
+        assert!(command.get_args().next().is_none());
+
+        fs::write(&identity, "private key placeholder").unwrap();
+        add_identity_file(&mut command, &identity);
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
+        assert_eq!(args[0], "-i");
+        assert_eq!(args[1], identity.to_string_lossy());
     }
 
     #[test]

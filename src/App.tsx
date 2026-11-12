@@ -147,7 +147,7 @@ function App() {
   const [advanced, setAdvanced] = useState(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
-  const [target, setTarget] = useState<"this" | "pi">("this");
+  const [target, setTarget] = useState<"this" | "pi">("pi");
   const [piHost, setPiHost] = useState("");
   const [piUser, setPiUser] = useState("");
   const [piVerified, setPiVerified] = useState(false);
@@ -1553,10 +1553,12 @@ function App() {
                     <div className="pi-fresh-entry">
                       <div className="eyebrow">NOUVEAU PI · PARCOURS DÉBUTANT</div>
                       <p>
-                        Tu peux préparer la carte ou le SSD ici. L’application
-                        choisit le système, crée le compte sécurisé et retrouve
-                        ensuite le Pi automatiquement : pas besoin de saisir son
-                        IP ni de configurer SSH.
+                        Ton Pi peut être neuf, allumé et sans stockage : il n’a
+                        encore rien à démarrer. Branche sa carte vide au Mac qui
+                        exécute cette application. Elle y écrit le système, le
+                        réseau et l’accès sécurisé ; aucun serveur ne s’installe
+                        sur le Mac. Tu n’as pas à préparer le Pi ni à saisir son
+                        IP ou à configurer SSH.
                       </p>
                       <button
                         className="button secondary"
@@ -1746,9 +1748,11 @@ function App() {
                         Préparer le Raspberry Pi depuis cette application
                       </h4>
                       <p>
-                        Branche sa carte SD ou son SSD à cet ordinateur, puis
-                        lance la détection. L’application choisira le système
-                        compatible et vérifiera le support avant de l’effacer.
+                        Cette préparation se fait sur le Mac avec la carte SD ou
+                        le SSD vide branché. Le Pi n’a pas besoin de système,
+                        de Wi-Fi ni de SSH pour commencer. L’application choisit
+                        le système compatible et vérifie le support avant de
+                        l’effacer.
                       </p>
                       <button
                         className="button secondary"
@@ -1947,10 +1951,12 @@ function App() {
                           <strong>Carte prête · vérification terminée</strong>
                           <p>{piFlashResult.detail}</p>
                           <p>
-                            Le premier démarrage peut prendre quelques minutes.
-                            Laisse le Pi branché au même routeur et allumé ;
-                            l’application le recherchera automatiquement avant
-                            d’installer le serveur.
+                            Éteins le Pi avant d’insérer la carte, puis relie-le
+                            au même routeur (câble ou Wi-Fi configuré) et
+                            rallume-le. Attends quelques minutes ; l’application
+                            le recherchera et installera le serveur sur le Pi.
+                            Le Mac ne sert qu’à préparer la carte et piloter
+                            l’installation.
                           </p>
                           <button
                             className="button primary"
@@ -1959,7 +1965,7 @@ function App() {
                           >
                             {busy
                               ? "Recherche automatique du Pi…"
-                              : "Le Pi est allumé · terminer l’installation"}
+                              : "Le Pi a redémarré · terminer l’installation"}
                           </button>
                           <small>
                             Outil officiel Raspberry Pi Imager{" "}

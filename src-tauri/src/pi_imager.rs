@@ -85,7 +85,7 @@ pub fn flash_pi_os(
         return Err("Le catalogue Raspberry Pi n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
     }
     validate_wifi(wifi_ssid, wifi_password, wifi_country)?;
-    let ssh_key = ensure_ssh_public_key()?;
+    let ssh_key = ensure_ssh_public_key(app_data)?;
 
     let run_id = uuid::Uuid::new_v4().simple().to_string();
     let hostname = format!("monde-ensemble-{run_id}");
@@ -148,7 +148,7 @@ pub fn flash_pi_os(
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
     Ok(PiFlashResult {
         detail: format!(
-            "Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}. Insère maintenant le support dans le Pi, {}, puis allume-le. L’application pourra alors terminer la configuration du serveur.",
+            "Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}. Éteins le Pi avant d’insérer le support, {}, puis rallume-le. L’application pourra ensuite retrouver le Pi et installer le serveur sur celui-ci.",
             first_boot_network_instructions(wifi_ssid)
         ),
         log_path: log_path.display().to_string(),
@@ -674,33 +674,26 @@ fn user_data(public_key: &str, hostname: &str) -> String {
     )
 }
 
-fn ensure_ssh_public_key() -> Result<String, String> {
-    let home = std::env::var_os("HOME")
-        .or_else(|| std::env::var_os("USERPROFILE"))
-        .map(PathBuf::from)
-        .ok_or_else(|| {
-            "Le dossier personnel de cet ordinateur n’a pas pu être détecté.".to_string()
-        })?;
-    let ssh_dir = home.join(".ssh");
+fn ensure_ssh_public_key(app_data: &Path) -> Result<String, String> {
+    let ssh_dir = app_data.join("ssh");
     fs::create_dir_all(&ssh_dir).map_err(io_error)?;
-    for name in ["id_ed25519", "id_ecdsa", "id_rsa"] {
-        let private_key = ssh_dir.join(name);
-        let public_key = ssh_dir.join(format!("{name}.pub"));
-        if public_key.is_file() && private_key.is_file() {
+    restrict_directory_permissions(&ssh_dir)?;
+    let private_key = ssh_dir.join("monde-ensemble-pi");
+    let public_key = ssh_dir.join("monde-ensemble-pi.pub");
+    match (private_key.exists(), public_key.exists()) {
+        (true, true) => {
             let content = fs::read_to_string(&public_key).map_err(io_error)?;
-            if content.lines().any(valid_ssh_public_key) {
-                return Ok(content
-                    .lines()
-                    .find(|line| valid_ssh_public_key(line))
-                    .unwrap_or_default()
-                    .to_string());
-            }
+            let key = content
+                .lines()
+                .find(|line| valid_ssh_public_key(line))
+                .ok_or_else(|| "La clé SSH privée de l’application existe, mais sa clé publique est illisible. Aucun fichier existant n’a été remplacé.".to_string())?;
+            restrict_file_permissions(&private_key)?;
+            return Ok(key.to_string());
         }
-    }
-    let private_key = ssh_dir.join("id_ed25519");
-    let public_key = ssh_dir.join("id_ed25519.pub");
-    if private_key.exists() {
-        return Err("Une clé SSH existe déjà mais son fichier public n’est pas lisible. L’application n’écrasera jamais cette clé. Consulte le mode expert pour préparer l’accès SSH.".into());
+        (true, false) | (false, true) => {
+            return Err("Le dossier SSH privé de l’application contient une clé incomplète. Aucun fichier existant n’a été remplacé.".into());
+        }
+        (false, false) => {}
     }
     let output = Command::new("ssh-keygen")
         .args(["-q", "-t", "ed25519", "-N", "", "-C", "monde-ensemble", "-f"])
@@ -710,12 +703,24 @@ fn ensure_ssh_public_key() -> Result<String, String> {
     if !output.status.success() {
         return Err("La clé d’accès SSH au Raspberry Pi n’a pas pu être créée. Aucune clé existante n’a été modifiée.".into());
     }
+    restrict_file_permissions(&private_key)?;
     let content = fs::read_to_string(&public_key).map_err(io_error)?;
     content
         .lines()
         .find(|line| valid_ssh_public_key(line))
         .map(str::to_string)
         .ok_or_else(|| "La clé SSH créée est illisible. Aucun support n’a été modifié.".into())
+}
+
+fn restrict_directory_permissions(path: &Path) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700)).map_err(io_error)?;
+    }
+    #[cfg(not(unix))]
+    let _ = path;
+    Ok(())
 }
 
 fn valid_ssh_public_key(line: &str) -> bool {

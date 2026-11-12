@@ -58,7 +58,7 @@ fn probe_ssh(host: String, username: String) -> Result<String, String> {
     }
 
     let destination = format!("{username}@{host}");
-    let output = Command::new("ssh")
+    let output = engine::ssh_command()
         .args([
             "-o", "BatchMode=yes",
             "-o", "ConnectTimeout=7",
@@ -1008,6 +1008,11 @@ async fn restore_pi_server(
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let app_data = app.path().app_data_dir()?;
+            engine::configure_app_data_directory(app_data);
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             inspect_system,
             probe_ssh,

@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.18
+# Monde Ensemble 0.18.19
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -12,7 +12,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - permet d’ajouter ou de retirer des comptes Java et des gamertags Bedrock de la liste d’accès d’un serveur local, puis de l’activer après avoir vérifié qu’elle contient au moins un joueur ; l’application n’ouvre pas temporairement la liste pour laisser entrer un Bedrock inconnu ;
 - compare à la demande les versions locales aux catalogues officiels et bloque la validation d’une mise à jour si des mods, extensions, packs, liens, configuration Geyser modifiée ou runtime incompatible sont détectés ; ce contrôle est en lecture seule ; enregistre aussi les empreintes SHA-256 du Paper, de Geyser et de Floodgate ; pour un ancien profil sans empreinte, vérifie le build installé auprès des catalogues officiels avant d’autoriser la mise à jour ;
 - en mode avancé, recherche dans Modrinth les plugins Paper déclarés pour la version Java exacte ; sur un serveur local ou Pi arrêté, crée une sauvegarde et une nouvelle copie avec un plugin publié sans dépendance obligatoire, vérifie son SHA-512 et permet de revenir à l’ancienne copie ;
-- au démarrage demandé d’un serveur local géré, met à jour Paper, Geyser et Floodgate ensemble uniquement si les catalogues et les contenus sont compatibles ; crée une archive complète, prépare une nouvelle copie du serveur et conserve le dossier précédent ; en cas de blocage, démarre la version actuelle ;
+- au démarrage demandé d’un serveur local géré, met à jour Paper, Geyser et Floodgate ensemble uniquement si les catalogues et les contenus sont compatibles ; crée une archive complète, prépare une nouvelle copie du serveur et conserve le dossier précédent ; en cas de blocage ou si la nouvelle copie ne confirme pas son démarrage, relance et vérifie l’ancienne version ; la copie candidate et l’archive restent conservées pour diagnostic ;
 - applique la même mise à jour coordonnée aux serveurs locaux gérés sur Mac et Windows, après validation du profil, des contenus, de l’espace libre et des ports ; vérifie la nouvelle copie au démarrage et conserve l’ancienne pour retour arrière ;
 - conserve un aperçu lisible des dernières lignes et permet d’exporter le journal complet local ou Pi vers un nouveau fichier sans écraser une copie existante ;
 - choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;

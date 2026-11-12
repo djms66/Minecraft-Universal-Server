@@ -2777,6 +2777,59 @@ pub fn start_local_server(
     start_local_server_impl(server_dir, &progress, true)
 }
 
+fn start_updated_local_copy_with_fallback(
+    original_dir: &Path,
+    updated_dir: &Path,
+    backup_path: &Path,
+    candidate_result: Result<LocalStartResult, String>,
+    stop_candidate: impl FnOnce(&Path) -> Result<String, String>,
+    start_original: impl FnOnce(&Path) -> Result<LocalStartResult, String>,
+    progress: &impl Fn(&str, u8),
+) -> Result<LocalStartResult, String> {
+    match candidate_result {
+        Ok(result) => Ok(LocalStartResult {
+            server_path: result.server_path,
+            message: format!(
+                "Mise à jour coordonnée démarrée. L’ancien serveur reste conservé. Sauvegarde : {} · {}",
+                backup_path.display(),
+                result.message
+            ),
+        }),
+        Err(candidate_error) => {
+            progress(
+                "La nouvelle copie n’a pas démarré; retour à la version précédente…",
+                84,
+            );
+            let stop_result = stop_candidate(updated_dir);
+            match start_original(original_dir) {
+                Ok(result) => Ok(LocalStartResult {
+                    server_path: result.server_path,
+                    message: format!(
+                        "Mise à jour reportée : la nouvelle copie n’a pas démarré. L’ancienne version a été relancée et vérifiée. Sauvegarde : {} · Copie candidate conservée pour diagnostic : {} · {}",
+                        backup_path.display(),
+                        updated_dir.display(),
+                        result.message
+                    ),
+                }),
+                Err(original_error) => {
+                    let stop_detail = stop_result
+                        .err()
+                        .map(|error| format!(" Arrêt sécurisé de la copie candidate : {error}."))
+                        .unwrap_or_default();
+                    Err(format!(
+                        "La mise à jour n’a pas démarré. L’ancienne version et sa sauvegarde restent intactes, mais le démarrage de l’ancienne version a aussi échoué. Sauvegarde : {} · Copie candidate : {} · Échec de la nouvelle copie : {}.{} Détail de l’ancienne version : {}",
+                        backup_path.display(),
+                        updated_dir.display(),
+                        candidate_error,
+                        stop_detail,
+                        original_error
+                    ))
+                }
+            }
+        }
+    }
+}
+
 fn start_local_server_impl(
     server_dir: &Path,
     progress: &impl Fn(&str, u8),
@@ -2821,21 +2874,17 @@ fn start_local_server_impl(
                 progress("Compatibilité prête; création d’une copie sauvegardée…", 5);
                 match prepare_local_update_copy(&server_dir, &check, progress) {
                     Ok((updated_dir, backup)) => {
-                        let result = start_local_server_impl(&updated_dir, progress, false)
-                            .map_err(|error| {
-                                format!(
-                                    "La nouvelle copie n’a pas confirmé son démarrage. Le dossier et la sauvegarde d’origine restent intacts. Nouvelle copie : {} · {error}",
-                                    updated_dir.display()
-                                )
-                            })?;
-                        return Ok(LocalStartResult {
-                            server_path: result.server_path,
-                            message: format!(
-                                "Mise à jour coordonnée démarrée. L’ancien serveur reste conservé. Sauvegarde : {} · {}",
-                                backup.display(),
-                                result.message
-                            ),
-                        });
+                        let candidate_result =
+                            start_local_server_impl(&updated_dir, progress, false);
+                        return start_updated_local_copy_with_fallback(
+                            &server_dir,
+                            &updated_dir,
+                            &backup,
+                            candidate_result,
+                            stop_local_server,
+                            |original| start_local_server_impl(original, progress, false),
+                            progress,
+                        );
                     }
                     Err(error) => {
                         update_note = format!(
@@ -6199,8 +6248,9 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RemoveDirOnDrop, artifact_hash_matches, java_major_for, parse_supported_versions_page,
-        record_managed_artifact_hashes, restore_backup, safe_archive_path, safe_version,
+        LocalStartResult, RemoveDirOnDrop, artifact_hash_matches, java_major_for,
+        parse_supported_versions_page, record_managed_artifact_hashes, restore_backup,
+        safe_archive_path, safe_version, start_updated_local_copy_with_fallback,
         valid_plugin_filename,
     };
     use flate2::{Compression, write::GzEncoder};
@@ -6316,6 +6366,77 @@ mod tests {
         assert!(
             artifact_hash_matches("Paper", &recorded, Some("invalid"), Some(&recorded)).is_err()
         );
+    }
+
+    #[test]
+    fn failed_local_update_starts_and_reports_the_verified_original_copy() {
+        let (root, _cleanup) = test_directory();
+        let original = root.join("Monde-Ensemble-original");
+        let candidate = root.join("Monde-Ensemble-candidate");
+        let backup = root.join("sauvegardes/avant-mise-a-jour.tar.gz");
+        let mut candidate_stopped = false;
+        let mut original_started = false;
+
+        let result = start_updated_local_copy_with_fallback(
+            &original,
+            &candidate,
+            &backup,
+            Err("le signal serveur prêt est absent".into()),
+            |path| {
+                assert_eq!(path, candidate);
+                candidate_stopped = true;
+                Ok("copie candidate arrêtée proprement".into())
+            },
+            |path| {
+                assert_eq!(path, original);
+                original_started = true;
+                Ok(LocalStartResult {
+                    server_path: path.display().to_string(),
+                    message: "Java et Bedrock vérifiés".into(),
+                })
+            },
+            &|_, _| {},
+        )
+        .unwrap();
+
+        assert!(candidate_stopped);
+        assert!(original_started);
+        assert_eq!(result.server_path, original.display().to_string());
+        assert!(
+            result
+                .message
+                .contains("ancienne version a été relancée et vérifiée")
+        );
+        assert!(result.message.contains(&backup.display().to_string()));
+        assert!(result.message.contains(&candidate.display().to_string()));
+        assert!(result.message.contains("Java et Bedrock vérifiés"));
+    }
+
+    #[test]
+    fn failed_local_update_preserves_diagnostics_when_original_cannot_start() {
+        let (root, _cleanup) = test_directory();
+        let original = root.join("Monde-Ensemble-original");
+        let candidate = root.join("Monde-Ensemble-candidate");
+        let backup = root.join("sauvegardes/avant-mise-a-jour.tar.gz");
+
+        let error = match start_updated_local_copy_with_fallback(
+            &original,
+            &candidate,
+            &backup,
+            Err("mise à jour candidate impossible".into()),
+            |_| Err("serveur candidat toujours actif".into()),
+            |_| Err("port Java déjà utilisé".into()),
+            &|_, _| {},
+        ) {
+            Ok(_) => panic!("le fallback devait signaler l’échec du serveur d’origine"),
+            Err(error) => error,
+        };
+
+        assert!(error.contains(&backup.display().to_string()));
+        assert!(error.contains(&candidate.display().to_string()));
+        assert!(error.contains("mise à jour candidate impossible"));
+        assert!(error.contains("serveur candidat toujours actif"));
+        assert!(error.contains("port Java déjà utilisé"));
     }
 
     #[test]

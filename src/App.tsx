@@ -604,7 +604,13 @@ function App() {
       return;
     }
     const confirmed = window.confirm(
-      `Le support « ${device.name} » (${device.size}) va être entièrement effacé pour préparer le Raspberry Pi. Les autres disques ne seront pas ciblés. Continuer ?`,
+      "Vérifie le support : " +
+        device.name +
+        ", " +
+        device.size +
+        ", identifiant " +
+        device.id +
+        ". Il sera entièrement effacé pour préparer le Raspberry Pi. Débranche les autres cartes et disques externes avant de continuer. Confirmer l’effacement ?",
     );
     if (!confirmed) return;
     resetOperation();
@@ -1400,7 +1406,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.8
+          MONDE ENSEMBLE <span>·</span> 0.18.9
         </div>
       </aside>
 
@@ -1811,62 +1817,76 @@ function App() {
                           </p>
                         )}
                       {piBootTargets.length > 0 && (
-                        <ul className="pi-storage-list">
-                          {piBootTargets.map((device) => (
-                            <li key={device.id}>
-                              <div>
-                                <strong>{device.name}</strong>
-                                <span>
-                                  {device.size} · {device.connection}
-                                </span>
-                              </div>
-                              {piOsRecommendation && device.size_bytes > 0 && (
-                                <em
-                                  className={
-                                    device.size_bytes >=
+                        <>
+                          {piBootTargets.length > 1 && (
+                            <p className="pi-help">
+                              Pour éviter d’effacer le mauvais support,
+                              débranche les autres cartes SD et disques
+                              externes. L’application n’autorisera l’écriture
+                              que lorsqu’un seul support sera détecté.
+                            </p>
+                          )}
+                          <ul className="pi-storage-list">
+                            {piBootTargets.map((device) => (
+                              <li key={device.id}>
+                                <div>
+                                  <strong>{device.name}</strong>
+                                  <span>
+                                    {device.size} · {device.connection} ·{" "}
+                                    {device.id}
+                                  </span>
+                                </div>
+                                {piBootTargets.length === 1 &&
+                                  piOsRecommendation &&
+                                  device.size_bytes > 0 && (
+                                    <em
+                                      className={
+                                        device.size_bytes >=
+                                        Math.ceil(
+                                          piOsRecommendation.image_size_gb +
+                                            piOsRecommendation.initial_server_storage_gb,
+                                        ) *
+                                          1_000_000_000
+                                          ? "storage-ready"
+                                          : "storage-small"
+                                      }
+                                    >
+                                      {device.size_bytes >=
+                                      Math.ceil(
+                                        piOsRecommendation.image_size_gb +
+                                          piOsRecommendation.initial_server_storage_gb,
+                                      ) *
+                                        1_000_000_000
+                                        ? "Assez de place pour l’OS et le serveur"
+                                        : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go`}
+                                    </em>
+                                  )}
+                                {piBootTargets.length === 1 &&
+                                  piOsRecommendation &&
+                                  device.size_bytes >=
                                     Math.ceil(
                                       piOsRecommendation.image_size_gb +
                                         piOsRecommendation.initial_server_storage_gb,
                                     ) *
-                                      1_000_000_000
-                                      ? "storage-ready"
-                                      : "storage-small"
-                                  }
-                                >
-                                  {device.size_bytes >=
-                                  Math.ceil(
-                                    piOsRecommendation.image_size_gb +
-                                      piOsRecommendation.initial_server_storage_gb,
-                                  ) *
-                                    1_000_000_000
-                                    ? "Assez de place pour l’OS et le serveur"
-                                    : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go`}
-                                </em>
-                              )}
-                              {piOsRecommendation &&
-                                device.size_bytes >=
-                                  Math.ceil(
-                                    piOsRecommendation.image_size_gb +
-                                      piOsRecommendation.initial_server_storage_gb,
-                                  ) *
-                                    1_000_000_000 && (
-                                  <button
-                                    className="button secondary pi-flash-button"
-                                    onClick={() => flashPiOs(device)}
-                                    disabled={
-                                      busy ||
-                                      Boolean(piFlashResult) ||
-                                      !piOsRecommendation.download_sha256
-                                    }
-                                  >
-                                    {busy
-                                      ? "Préparation en cours…"
-                                      : "Effacer et préparer ce support"}
-                                  </button>
-                                )}
-                            </li>
-                          ))}
-                        </ul>
+                                      1_000_000_000 && (
+                                    <button
+                                      className="button secondary pi-flash-button"
+                                      onClick={() => flashPiOs(device)}
+                                      disabled={
+                                        busy ||
+                                        Boolean(piFlashResult) ||
+                                        !piOsRecommendation.download_sha256
+                                      }
+                                    >
+                                      {busy
+                                        ? "Préparation en cours…"
+                                        : "Effacer et préparer ce support"}
+                                    </button>
+                                  )}
+                              </li>
+                            ))}
+                          </ul>
+                        </>
                       )}
                       {piOsRecommendation && (
                         <p className="pi-storage-guidance">

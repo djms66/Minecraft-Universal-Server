@@ -153,6 +153,9 @@ async fn prepare_pi_sd(
             return Err("Le catalogue Raspberry Pi a changé depuis l’affichage. Actualise la recommandation avant d’écrire la carte.".into());
         }
         let targets = discover_pi_boot_targets()?;
+        if targets.len() != 1 {
+            return Err("Pour éviter d’effacer le mauvais disque, laisse uniquement la carte SD ou le SSD destiné au Raspberry Pi connecté, puis relance la détection. Aucun support n’a été modifié.".into());
+        }
         let target = targets
             .into_iter()
             .find(|target| {

@@ -297,7 +297,7 @@ fn verified_asset(
     }
     progress("Téléchargement de l’outil officiel Raspberry Pi…", 10);
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MondeEnsemble/0.18.8")
+        .user_agent("MondeEnsemble/0.18.9")
         .timeout(Duration::from_secs(180))
         .build()
         .map_err(|error| format!("Connexion impossible au téléchargement officiel : {error}"))?;

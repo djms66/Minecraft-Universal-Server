@@ -866,6 +866,32 @@ async fn backup_server(
 }
 
 #[tauri::command]
+async fn backup_pi_server(
+    host: String,
+    username: String,
+    server_folder: String,
+    output_file: String,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<engine::OperationResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::create_pi_backup(
+            &host,
+            &username,
+            &server_folder,
+            std::path::Path::new(&output_file),
+            |step, percent| {
+                let _ = progress.send(engine::ProgressMessage {
+                    step: step.to_string(),
+                    percent,
+                });
+            },
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn restore_server(
     archive: String,
     destination_root: String,
@@ -920,6 +946,7 @@ pub fn run() {
             stop_pi_server,
             export_pi_server_log,
             backup_server,
+            backup_pi_server,
             restore_server
         ])
         .run(tauri::generate_context!())

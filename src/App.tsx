@@ -352,6 +352,31 @@ function App() {
     }
   };
 
+  const createPiBackup = async () => {
+    if (!piInstallation) return;
+    resetOperation();
+    setBusy(true);
+    try {
+      const output = await save({
+        defaultPath: `Monde-Ensemble-Sauvegarde-Pi-${new Date().toISOString().slice(0, 10)}.tar.gz`,
+        filters: [{ name: "Archive compressée", extensions: ["gz"] }],
+      });
+      if (!output) return;
+      const result = await invoke<OperationResult>("backup_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+        outputFile: output,
+        progress: progressChannel(),
+      });
+      setOperationResult(result);
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const restoreWorld = async () => {
     resetOperation();
     setBusy(true);
@@ -1074,7 +1099,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.12.0
+          MONDE ENSEMBLE <span>·</span> 0.13.0
         </div>
       </aside>
 
@@ -1641,6 +1666,8 @@ function App() {
             <Backups
               source={backupSource}
               output={backupOutput}
+              piInstallation={piInstallation}
+              piServerStatus={piServerStatus}
               stopped={backupStopped}
               setStopped={setBackupStopped}
               archive={restoreArchive}
@@ -1653,6 +1680,7 @@ function App() {
               onChooseArchive={selectArchive}
               onChooseDestination={() => selectFolder(setRestoreDestination)}
               onBackup={createBackup}
+              onBackupPi={createPiBackup}
               onRestore={restoreWorld}
             />
           )}
@@ -2951,6 +2979,8 @@ function Compatibility({
 function Backups({
   source,
   output,
+  piInstallation,
+  piServerStatus,
   stopped,
   setStopped,
   archive,
@@ -2963,10 +2993,13 @@ function Backups({
   onChooseArchive,
   onChooseDestination,
   onBackup,
+  onBackupPi,
   onRestore,
 }: {
   source: string;
   output: string;
+  piInstallation: PiInstallation | null;
+  piServerStatus: PiServerStatus | null;
   stopped: boolean;
   setStopped: (stopped: boolean) => void;
   archive: string;
@@ -2979,6 +3012,7 @@ function Backups({
   onChooseArchive: () => void;
   onChooseDestination: () => void;
   onBackup: () => void;
+  onBackupPi: () => void;
   onRestore: () => void;
 }) {
   return (
@@ -2994,6 +3028,28 @@ function Backups({
           </p>
         </div>
       </div>
+      {piInstallation && (
+        <div className="operation-card">
+          <div className="eyebrow">SERVEUR RASPBERRY PI</div>
+          <h3>Copier le monde du Pi ici</h3>
+          <p>
+            Arrête d’abord le serveur depuis son tableau de bord. L’application
+            vérifie l’espace, prépare une copie complète sur le Pi, la transfère
+            de façon sécurisée et contrôle son empreinte.
+          </p>
+          <button
+            className="button primary action-button"
+            disabled={busy || Boolean(piServerStatus?.running)}
+            onClick={onBackupPi}
+          >
+            {piServerStatus?.running
+              ? "Arrête le serveur avant la sauvegarde"
+              : busy
+                ? "Sauvegarde en cours…"
+                : "Choisir où enregistrer la sauvegarde du Pi"}
+          </button>
+        </div>
+      )}
       <div className="operation-card">
         <div className="eyebrow">01 · SAUVEGARDER</div>
         <h3>Créer une copie complète</h3>

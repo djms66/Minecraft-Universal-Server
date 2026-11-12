@@ -3831,6 +3831,229 @@ pub fn create_backup(
     })
 }
 
+pub fn create_pi_backup(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    output_file: &Path,
+    progress: impl Fn(&str, u8),
+) -> Result<OperationResult, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Le serveur Pi enregistré n’est pas reconnu.".into());
+    }
+    let output_parent = output_file
+        .parent()
+        .ok_or_else(|| "Choisis l’emplacement de la sauvegarde.".to_string())?;
+    if !output_parent.is_dir() {
+        return Err("Le dossier choisi pour la sauvegarde est introuvable.".into());
+    }
+    let manifest_path = PathBuf::from(format!("{}.sha256", output_file.display()));
+    if output_file.exists() || manifest_path.exists() {
+        return Err("Ce nom de sauvegarde existe déjà. Choisis un autre nom pour conserver les deux copies.".into());
+    }
+    let destination = format!("{username}@{host}");
+    let id = Uuid::new_v4().simple().to_string();
+    let remote_archive = format!(".Monde-Ensemble-Sauvegarde-{id}.tar.gz");
+    progress(
+        "Vérification de l’arrêt du serveur et de l’espace disponible…",
+        5,
+    );
+    let parent_folder = server_folder
+        .strip_suffix("/server")
+        .ok_or_else(|| "Dossier Pi invalide.".to_string())?;
+    let inspect = format!(
+        r#"set -eu
+d="$HOME/{server_folder}"
+test -d "$d" && test ! -L "$d"
+test -f "$d/monde-ensemble-profile.json" && test ! -L "$d/monde-ensemble-profile.json"
+grep -Fq '"application": "Monde Ensemble"' "$d/monde-ensemble-profile.json"
+if find "$d" -type l -print -quit | grep -q .; then echo SYMLINK_FOUND; exit 6; fi
+pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+case "$pid" in ''|*[!0-9]*) pid=;; esac
+if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 7; fi
+printf 'TOTAL='; du -sb "$d" | awk '{{print $1}}'
+printf 'FREE='; df -B1 --output=avail "$HOME" | tail -1 | tr -dc '0-9'
+"#
+    );
+    let inspect = run_ssh(&destination, &inspect).map_err(|error| {
+        if error.contains("SERVER_RUNNING") { "Arrête le serveur depuis le tableau de bord avant la sauvegarde. Rien n’a été copié.".to_string() }
+        else if error.contains("SYMLINK_FOUND") { "Le dossier Pi contient un lien symbolique. La sauvegarde est bloquée pour éviter de copier des fichiers inattendus.".to_string() }
+        else { error }
+    })?;
+    let values = inspect
+        .lines()
+        .filter_map(|line| line.split_once('='))
+        .collect::<std::collections::HashMap<_, _>>();
+    let total = values
+        .get("TOTAL")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| "Taille du serveur Pi illisible.".to_string())?;
+    let remote_free = values
+        .get("FREE")
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| "Espace libre du Pi illisible.".to_string())?;
+    if remote_free < total.saturating_add(64 * 1024 * 1024) {
+        return Err("Le Pi manque d’espace pour préparer une archive complète temporaire; aucun fichier du monde n’a été modifié.".into());
+    }
+    let local_free = fs2::available_space(output_parent).map_err(io_error)?;
+    if local_free < total.saturating_add(64 * 1024 * 1024) {
+        return Err(
+            "Le disque de sauvegarde manque d’espace pour recevoir le monde complet.".into(),
+        );
+    }
+
+    progress("Création de l’archive complète sur le Pi…", 20);
+    let create = format!(
+        r#"set -eu
+umask 077
+d="$HOME/{server_folder}"
+a="$HOME/{remote_archive}"
+test ! -e "$a"
+tar -czf "$a" -C "$HOME/{parent_folder}" server
+sha256sum "$a" | awk '{{print $1}}'
+"#
+    );
+    let remote_hash = run_ssh_timeout(&destination, &create, 240)
+        .map_err(|error| {
+            let cleanup = format!("rm -f -- \"$HOME/{remote_archive}\"");
+            let _ = run_ssh(&destination, &cleanup);
+            format!(
+                "La sauvegarde Pi n’a pas pu être préparée; le monde n’a pas été modifié. {error}"
+            )
+        })?
+        .trim()
+        .to_string();
+    if remote_hash.len() != 64
+        || !remote_hash
+            .chars()
+            .all(|character| character.is_ascii_hexdigit())
+    {
+        let _ = run_ssh(
+            &destination,
+            &format!("rm -f -- \"$HOME/{remote_archive}\""),
+        );
+        return Err("Le Pi n’a pas fourni une empreinte de sauvegarde valide.".into());
+    }
+    progress("Transfert chiffré de l’archive vers cet ordinateur…", 55);
+    let staging = output_file.with_extension(format!("{id}.preparing.tar.gz"));
+    let _cleanup = RemoveFileOnDrop(staging.clone());
+    let staging_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&staging)
+        .map_err(io_error)?;
+    drop(staging_file);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
+    }
+    let mut child = Command::new("scp")
+        .args([
+            "-p",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            &format!("{destination}:{remote_archive}"),
+            staging.to_string_lossy().as_ref(),
+        ])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| {
+            let _ = run_ssh(
+                &destination,
+                &format!("rm -f -- \"$HOME/{remote_archive}\""),
+            );
+            "L’outil de transfert sécurisé n’est pas disponible sur cet ordinateur.".to_string()
+        })?;
+    let deadline = std::time::Instant::now() + Duration::from_secs(1800);
+    let transfer_status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = run_ssh(
+                    &destination,
+                    &format!("rm -f -- \"$HOME/{remote_archive}\""),
+                );
+                return Err(io_error(error));
+            }
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(250)),
+        }
+    };
+    let cleanup_result = run_ssh(
+        &destination,
+        &format!("rm -f -- \"$HOME/{remote_archive}\""),
+    );
+    if transfer_status.is_none() {
+        return Err("Le transfert dépasse 30 minutes. Le fichier incomplet est retiré; vérifie le Pi avant de réessayer.".into());
+    }
+    if !transfer_status.is_some_and(|status| status.success()) {
+        return Err("Le transfert sécurisé de la sauvegarde a échoué. Le fichier incomplet local sera retiré.".into());
+    }
+    if cleanup_result.is_err() {
+        return Err(format!(
+            "L’archive a été transférée, mais le Pi n’a pas confirmé le retrait de sa copie temporaire ({remote_archive}). Vérifie l’espace du Pi avant de réessayer."
+        ));
+    }
+    progress(
+        "Vérification de l’intégrité et publication de la sauvegarde…",
+        88,
+    );
+    let checksum = hash_file(&staging)?;
+    if !checksum.eq_ignore_ascii_case(&remote_hash) {
+        return Err("L’empreinte de l’archive transférée ne correspond pas à celle du Pi. Sauvegarde rejetée.".into());
+    }
+    fs::hard_link(&staging, output_file).map_err(|error| {
+        format!("Impossible de créer la sauvegarde sans écraser un fichier existant : {error}")
+    })?;
+    fs::remove_file(&staging).map_err(io_error)?;
+    let manifest = format!(
+        "{checksum}  {}\n",
+        output_file
+            .file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+    );
+    let mut manifest_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&manifest_path)
+        .map_err(|error| {
+            let _ = fs::remove_file(output_file);
+            format!("Impossible de créer le contrôle d’intégrité : {error}")
+        })?;
+    manifest_file
+        .write_all(manifest.as_bytes())
+        .map_err(|error| {
+            let _ = fs::remove_file(&manifest_path);
+            let _ = fs::remove_file(output_file);
+            error.to_string()
+        })?;
+    progress("Sauvegarde Pi vérifiée et terminée.", 100);
+    Ok(OperationResult {
+        path: output_file.display().to_string(),
+        detail: format!("Sauvegarde complète du Pi · {total} octets avant compression"),
+        sha256: Some(checksum),
+    })
+}
+
 pub fn restore_backup(
     archive_path: &Path,
     destination_root: &Path,

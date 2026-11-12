@@ -617,6 +617,19 @@ async fn inspect_pi_server(
 }
 
 #[tauri::command]
+async fn check_pi_update(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<engine::PiUpdateCheck, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::check_pi_update(&host, &username, &server_folder)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn start_pi_server(
     host: String,
     username: String,
@@ -691,6 +704,7 @@ pub fn run() {
             create_server,
             install_pi,
             inspect_pi_server,
+            check_pi_update,
             start_pi_server,
             backup_server,
             restore_server

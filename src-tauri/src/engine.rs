@@ -64,12 +64,31 @@ pub struct ProgressMessage {
 #[derive(Serialize)]
 pub struct CompatibilityReport {
     pub paper_version: String,
+    pub paper_build_id: u64,
     pub geyser_version: String,
+    pub geyser_build_id: u64,
     pub floodgate_version: String,
+    pub floodgate_build_id: u64,
     pub bedrock_versions: String,
     pub java_version: String,
     pub checked_at: String,
     pub source: String,
+}
+
+#[derive(Serialize)]
+pub struct PiUpdateCheck {
+    pub ready: bool,
+    pub update_available: bool,
+    pub current_java: String,
+    pub current_bedrock: String,
+    pub current_geyser: String,
+    pub current_floodgate: String,
+    pub latest_java: String,
+    pub latest_bedrock: String,
+    pub latest_geyser: String,
+    pub latest_floodgate: String,
+    pub reasons: Vec<String>,
+    pub checked_at: String,
 }
 
 #[derive(Serialize)]
@@ -213,8 +232,11 @@ pub fn compatibility() -> Result<CompatibilityReport, String> {
 
     Ok(CompatibilityReport {
         paper_version: format!("{} · build {}", supported.java, paper.id),
+        paper_build_id: paper.id,
         geyser_version: format!("{} · build {}", geyser.version, geyser.build),
+        geyser_build_id: geyser.build,
         floodgate_version: format!("{} · build {}", floodgate.version, floodgate.build),
+        floodgate_build_id: floodgate.build,
         bedrock_versions: supported.bedrock,
         java_version: supported.java,
         checked_at: Utc::now().to_rfc3339(),
@@ -919,6 +941,171 @@ pub fn inspect_pi_server(
     })
 }
 
+/// Read-only update gate for a server created by Monde Ensemble. It only
+/// approves the managed Paper/Geyser/Floodgate stack; any unrecognized plugin,
+/// mod jar, symlink, or custom client pack blocks automatic updates.
+pub fn check_pi_update(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+) -> Result<PiUpdateCheck, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Le dossier enregistré du serveur n’est pas reconnu.".into());
+    }
+    let latest = compatibility()?;
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nFILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nSYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
+    );
+    let output = run_ssh(&destination, &command)?;
+    let (_, profile_block) = output
+        .split_once("PROFILE_START\n")
+        .ok_or_else(|| "Le profil du serveur n’a pas été reçu.".to_string())?;
+    let (profile_text, tail) = profile_block
+        .split_once("\nPROFILE_END\n")
+        .ok_or_else(|| "Le profil du serveur est incomplet.".to_string())?;
+    let (_, jars_block) = tail
+        .split_once("JARS_START\n")
+        .ok_or_else(|| "La liste des extensions n’a pas été reçue.".to_string())?;
+    let (jars, tail) = jars_block
+        .split_once("JARS_END\n")
+        .ok_or_else(|| "La liste des extensions est incomplète.".to_string())?;
+    let (_, mods_block) = tail
+        .split_once("MODS_START\n")
+        .ok_or_else(|| "La liste des mods n’a pas été reçue.".to_string())?;
+    let (mods, tail) = mods_block
+        .split_once("MODS_END\n")
+        .ok_or_else(|| "La liste des mods est incomplète.".to_string())?;
+    let (_, datapacks_block) = tail
+        .split_once("DATAPACKS_START\n")
+        .ok_or_else(|| "La liste des packs du monde n’a pas été reçue.".to_string())?;
+    let (datapacks, tail) = datapacks_block
+        .split_once("DATAPACKS_END\n")
+        .ok_or_else(|| "La liste des packs du monde est incomplète.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_str(profile_text.trim())
+        .map_err(|_| "Le profil des versions Minecraft est illisible.".to_string())?;
+    let field_text = |name: &str| {
+        profile
+            .get(name)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("inconnue")
+            .to_string()
+    };
+    let current_java = field_text("minecraft_java");
+    let current_bedrock = field_text("minecraft_bedrock");
+    let current_geyser = field_text("geyser");
+    let current_floodgate = field_text("floodgate");
+    let latest_geyser = latest
+        .geyser_version
+        .split(" · build ")
+        .next()
+        .unwrap_or(&latest.geyser_version)
+        .to_string();
+    let latest_floodgate = latest
+        .floodgate_version
+        .split(" · build ")
+        .next()
+        .unwrap_or(&latest.floodgate_version)
+        .to_string();
+    let current_paper_build = profile
+        .get("paper_build_id")
+        .and_then(serde_json::Value::as_u64);
+    let current_geyser_build = profile
+        .get("geyser_build_id")
+        .and_then(serde_json::Value::as_u64);
+    let current_floodgate_build = profile
+        .get("floodgate_build_id")
+        .and_then(serde_json::Value::as_u64);
+    let update_available = current_java != latest.java_version
+        || current_bedrock != latest.bedrock_versions
+        || current_geyser != latest_geyser
+        || current_floodgate != latest_floodgate
+        || current_paper_build != Some(latest.paper_build_id)
+        || current_geyser_build != Some(latest.geyser_build_id)
+        || current_floodgate_build != Some(latest.floodgate_build_id);
+
+    let mut reasons = Vec::new();
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        reasons.push("Cette installation n’a pas un profil Monde Ensemble reconnu.".into());
+    }
+    for (key, label) in [
+        ("FILES_PAPER=yes", "Paper"),
+        ("FILES_GEYSER=yes", "Geyser"),
+        ("FILES_FLOODGATE=yes", "Floodgate"),
+    ] {
+        if !output.lines().any(|line| line.trim() == key) {
+            reasons.push(format!("Le fichier géré {label} est absent ou illisible."));
+        }
+    }
+    let plugin_jars = jars
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .filter(|name| !matches!(*name, "Geyser-Spigot.jar" | "Floodgate-Spigot.jar"))
+        .collect::<Vec<_>>();
+    if !plugin_jars.is_empty() {
+        reasons.push(format!(
+            "Extensions non vérifiées : {}. Elles bloquent la mise à jour automatique pour protéger le monde.",
+            plugin_jars.join(", ")
+        ));
+    }
+    let mod_jars = mods
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    if !mod_jars.is_empty() {
+        reasons.push(format!(
+            "Mods présents : {}. Leur compatibilité n’est pas vérifiée par l’application.",
+            mod_jars.join(", ")
+        ));
+    }
+    let custom_datapacks = datapacks
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .collect::<Vec<_>>();
+    if !custom_datapacks.is_empty() {
+        reasons.push(format!(
+            "Packs de données présents : {}. Leur compatibilité n’est pas vérifiée.",
+            custom_datapacks.join(", ")
+        ));
+    }
+    if tail.contains("SYMLINKS=yes") {
+        reasons
+            .push("Le serveur contient des liens symboliques; la copie sûre est bloquée.".into());
+    }
+    if tail
+        .lines()
+        .find_map(|line| line.strip_prefix("RESOURCE_PACK="))
+        .is_some_and(|value| !value.trim().is_empty())
+    {
+        reasons.push("Un pack de ressources personnalisé est configuré; sa compatibilité doit être vérifiée avant toute mise à jour.".into());
+    }
+
+    Ok(PiUpdateCheck {
+        ready: reasons.is_empty(),
+        update_available,
+        current_java,
+        current_bedrock,
+        current_geyser,
+        current_floodgate,
+        latest_java: latest.java_version,
+        latest_bedrock: latest.bedrock_versions,
+        latest_geyser,
+        latest_floodgate,
+        reasons,
+        checked_at: latest.checked_at,
+    })
+}
+
 /// Restarts only this app's saved installation, and only while both game
 /// ports are free. The existing log is kept so the user can inspect history.
 pub fn start_pi_server(host: &str, username: &str, server_folder: &str) -> Result<(), String> {
@@ -1169,6 +1356,7 @@ fn build_fresh_server(
         bedrock_port,
         &geyser,
         &floodgate,
+        paper.id,
     )?;
     Ok((
         supported.java,
@@ -1244,6 +1432,7 @@ fn configure_server(
     bedrock_port: u16,
     geyser: &BridgeBuild,
     floodgate: &BridgeBuild,
+    paper_build_id: u64,
 ) -> Result<(), String> {
     let eula = format!("# EULA acceptée séparément dans l’application Monde Ensemble\neula=true\n");
     fs::write(stage.join("eula.txt"), eula).map_err(io_error)?;
@@ -1273,9 +1462,11 @@ fn configure_server(
         "application": "Monde Ensemble",
         "minecraft_java": java_version,
         "minecraft_bedrock": bedrock_versions,
-        "paper_build": "stable",
+        "paper_build_id": paper_build_id,
         "geyser": geyser.version,
+        "geyser_build_id": geyser.build,
         "floodgate": floodgate.version,
+        "floodgate_build_id": floodgate.build,
         "java_runtime": java_major,
         "java_heap_gb": heap_gb,
         "java_port": java_port,

@@ -16,12 +16,29 @@ type SystemInfo = {
 type Page = "home" | "install" | "compat" | "backup" | "advanced";
 type CompatibilityReport = {
   paper_version: string;
+  paper_build_id: number;
   geyser_version: string;
+  geyser_build_id: number;
   floodgate_version: string;
+  floodgate_build_id: number;
   bedrock_versions: string;
   java_version: string;
   checked_at: string;
   source: string;
+};
+type PiUpdateCheck = {
+  ready: boolean;
+  update_available: boolean;
+  current_java: string;
+  current_bedrock: string;
+  current_geyser: string;
+  current_floodgate: string;
+  latest_java: string;
+  latest_bedrock: string;
+  latest_geyser: string;
+  latest_floodgate: string;
+  reasons: string[];
+  checked_at: string;
 };
 type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
@@ -115,6 +132,9 @@ function App() {
     null,
   );
   const [piStatusError, setPiStatusError] = useState("");
+  const [piUpdateCheck, setPiUpdateCheck] = useState<PiUpdateCheck | null>(null);
+  const [piUpdateError, setPiUpdateError] = useState("");
+  const [checkingPiUpdate, setCheckingPiUpdate] = useState(false);
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
   const [compatibility, setCompatibility] =
@@ -487,6 +507,25 @@ function App() {
     }
   };
 
+  const checkPiUpdate = async () => {
+    if (!piInstallation) return;
+    setCheckingPiUpdate(true);
+    setPiUpdateError("");
+    setPiUpdateCheck(null);
+    try {
+      const report = await invoke<PiUpdateCheck>("check_pi_update", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+      });
+      setPiUpdateCheck(report);
+    } catch (error) {
+      setPiUpdateError(String(error));
+    } finally {
+      setCheckingPiUpdate(false);
+    }
+  };
+
   useEffect(() => {
     if (page === "home" && piInstallation) void refreshPiStatus(false);
     // A status check runs when the saved server dashboard is opened.
@@ -632,6 +671,10 @@ function App() {
               busy={busy}
               onRefreshPi={() => refreshPiStatus(true)}
               onStartPi={startPiServer}
+              onCheckPiUpdate={checkPiUpdate}
+              piUpdateCheck={piUpdateCheck}
+              piUpdateError={piUpdateError}
+              checkingPiUpdate={checkingPiUpdate}
               onInstall={() => setPage("install")}
               onCompat={() => setPage("compat")}
               onBackup={() => setPage("backup")}
@@ -1278,6 +1321,10 @@ function Home({
   busy,
   onRefreshPi,
   onStartPi,
+  onCheckPiUpdate,
+  piUpdateCheck,
+  piUpdateError,
+  checkingPiUpdate,
   onInstall,
   onCompat,
   onBackup,
@@ -1290,6 +1337,10 @@ function Home({
   busy: boolean;
   onRefreshPi: () => void;
   onStartPi: () => void;
+  onCheckPiUpdate: () => void;
+  piUpdateCheck: PiUpdateCheck | null;
+  piUpdateError: string;
+  checkingPiUpdate: boolean;
   onInstall: () => void;
   onCompat: () => void;
   onBackup: () => void;
@@ -1363,8 +1414,44 @@ function Home({
               <button className="text-button" onClick={onRefreshPi} disabled={busy}>
                 {busy ? "Lecture…" : "Actualiser l’état et le journal"}
               </button>
+              <button className="text-button" onClick={onCheckPiUpdate} disabled={checkingPiUpdate || busy}>
+                {checkingPiUpdate ? "Vérification des versions…" : "Vérifier la compatibilité des mises à jour"}
+              </button>
             </div>
           </div>
+          {(piUpdateCheck || piUpdateError) && (
+            <div className={piUpdateCheck?.ready ? "pi-update-check ready" : "pi-update-check"} aria-live="polite">
+              <strong>
+                {piUpdateError
+                  ? "Vérification impossible"
+                  : piUpdateCheck?.update_available
+                    ? "Une mise à jour compatible est disponible"
+                    : piUpdateCheck?.ready
+                      ? "Les versions sont à jour"
+                      : "Mise à jour automatique bloquée"}
+              </strong>
+              {piUpdateError ? (
+                <p>{piUpdateError}</p>
+              ) : piUpdateCheck ? (
+                <>
+                  <p>
+                    Installé : Java {piUpdateCheck.current_java}, Bedrock {piUpdateCheck.current_bedrock} · Disponible : Java {piUpdateCheck.latest_java}, Bedrock {piUpdateCheck.latest_bedrock}.
+                  </p>
+                  <p>
+                    Pont multiplateforme installé : Geyser {piUpdateCheck.current_geyser} / Floodgate {piUpdateCheck.current_floodgate} · versions officielles actuelles : Geyser {piUpdateCheck.latest_geyser} / Floodgate {piUpdateCheck.latest_floodgate}.
+                  </p>
+                  {piUpdateCheck.reasons.length > 0 && (
+                    <ul>{piUpdateCheck.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                  )}
+                  <small>
+                    {piUpdateCheck.ready
+                      ? "Le profil géré est vérifié. La mise à jour automatique sécurisée n’est pas encore activée dans cette version."
+                      : "Aucune mise à jour automatique ne sera lancée tant que ces points ne sont pas vérifiés."}
+                  </small>
+                </>
+              ) : null}
+            </div>
+          )}
           {piStatusError && <p className="pi-error">{piStatusError}</p>}
           {piServerStatus && !piServerStatus.autostart_configured && !piStatusError && (
             <p className="pi-help">

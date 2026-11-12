@@ -26,7 +26,13 @@ type CompatibilityReport = {
 type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
 type DiscoveredPi = { host: string; address: string; model: string };
-type PiBootTarget = { id: string; name: string; size: string; connection: string };
+type PiBootTarget = {
+  id: string;
+  name: string;
+  size: string;
+  size_bytes: number;
+  connection: string;
+};
 type PiOsRecommendation = {
   name: string;
   release_date: string;
@@ -471,7 +477,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.6.1
+          MONDE ENSEMBLE <span>·</span> 0.6.2
         </div>
       </aside>
 
@@ -711,7 +717,12 @@ function App() {
                           <span>
                             Publication du {new Date(`${piOsRecommendation.release_date}T12:00:00`).toLocaleDateString("fr-FR")} · téléchargement {piOsRecommendation.download_size_gb} Go · écrit {piOsRecommendation.image_size_gb} Go · 64 bits
                           </span>
-                          <small>Recommandation du catalogue officiel. Elle n’est pas encore installée sur le Pi.</small>
+                          <span>
+                            Modèles compatibles : {describePiModels(piOsRecommendation.devices)}.
+                          </span>
+                          <small>
+                            L’application choisit ce système sans te faire choisir le modèle. Après le premier démarrage, elle vérifiera automatiquement le modèle du Pi et sa mémoire avant d’installer le serveur.
+                          </small>
                         </>
                       )}
                     </div>
@@ -737,11 +748,29 @@ function App() {
                         <ul className="pi-storage-list">
                           {piBootTargets.map((device) => (
                             <li key={device.id}>
-                              <strong>{device.name}</strong>
-                              <span>{device.size} · {device.connection}</span>
+                              <div>
+                                <strong>{device.name}</strong>
+                                <span>{device.size} · {device.connection}</span>
+                              </div>
+                              {piOsRecommendation && device.size_bytes > 0 && (
+                                <em className={
+                                  device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + 8) * 1_000_000_000
+                                    ? "storage-ready"
+                                    : "storage-small"
+                                }>
+                                  {device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + 8) * 1_000_000_000
+                                    ? "Assez de place pour l’OS et le serveur"
+                                    : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + 8)} Go`}
+                                </em>
+                              )}
                             </li>
                           ))}
                         </ul>
+                      )}
+                      {piOsRecommendation && (
+                        <p className="pi-storage-guidance">
+                          Il faut au minimum {Math.ceil(piOsRecommendation.image_size_gb + 8)} Go pour le système et l’espace de départ du serveur. Une carte microSD de 16 Go suffit au profil initial; 32 Go laisse plus de place au monde. Un SSD USB dépend du modèle du Pi.
+                        </p>
                       )}
                       <p className="pi-help">
                         Cette vérification ne prépare pas encore le système. Le
@@ -826,6 +855,20 @@ function App() {
       </main>
     </div>
   );
+}
+
+function describePiModels(devices: string[]) {
+  const generations = Array.from(
+    new Set(
+      devices
+        .map((device) => device.match(/^pi(\d+)-64bit$/)?.[1])
+        .filter((generation): generation is string => Boolean(generation)),
+    ),
+  ).sort();
+  if (generations.length === 0) return "à vérifier dans le catalogue";
+  const models = generations.map((generation) => `Pi ${generation}`);
+  if (models.length === 1) return `${models[0]} (64 bits)`;
+  return `${models.slice(0, -1).join(", ")} et ${models[models.length - 1]} (64 bits)`;
 }
 
 function SystemPanel({

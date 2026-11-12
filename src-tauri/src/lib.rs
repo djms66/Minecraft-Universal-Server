@@ -23,6 +23,7 @@ struct PiBootTarget {
     id: String,
     name: String,
     size: String,
+    size_bytes: u64,
     connection: String,
 }
 
@@ -149,12 +150,19 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         let name = field("Media Name")
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Support externe".into());
-        let size = field("Disk Size").unwrap_or_else(|| "Taille inconnue".into());
+        let disk_size = field("Disk Size").unwrap_or_default();
+        let size_bytes = parse_disk_size_bytes(&disk_size).unwrap_or_default();
+        let size = if disk_size.is_empty() {
+            "Taille inconnue".into()
+        } else {
+            disk_size
+        };
         let connection = field("Bus Protocol").unwrap_or_else(|| "Externe".into());
         devices.push(PiBootTarget {
             id: disk.to_string(),
             name,
             size,
+            size_bytes,
             connection,
         });
     }
@@ -198,6 +206,7 @@ fn discover_windows_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                 id: format!("PhysicalDrive{number}"),
                 name,
                 size: format_bytes(bytes),
+                size_bytes: bytes,
                 connection,
             })
         })
@@ -272,6 +281,7 @@ fn discover_linux_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                 id,
                 name,
                 size: format_bytes(bytes),
+                size_bytes: bytes,
                 connection: if transport.is_empty() {
                     "Externe".into()
                 } else {
@@ -301,6 +311,13 @@ fn format_bytes(bytes: u64) -> String {
         return "Taille inconnue".into();
     }
     format!("{:.1} Go", bytes as f64 / 1_000_000_000.0)
+}
+
+fn parse_disk_size_bytes(value: &str) -> Option<u64> {
+    let start = value.find('(')? + 1;
+    let remainder = &value[start..];
+    let end = remainder.find(" Bytes")?;
+    remainder[..end].replace(',', "").parse().ok()
 }
 
 fn valid_host(value: &str) -> bool {

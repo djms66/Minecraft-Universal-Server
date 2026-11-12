@@ -1216,6 +1216,7 @@ button {
 .pi-storage-list li {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   gap: 12px;
   padding: 9px 10px;
   border: 1px solid #dfe5db;
@@ -1223,7 +1224,31 @@ button {
   background: #fff;
   color: #344134;
 }
+.pi-storage-list li > div {
+  display: grid;
+  gap: 4px;
+}
+.pi-storage-list li > div strong {
+  font-size: 9px;
+}
 .pi-storage-list span {
+  color: #71806f;
+}
+.pi-storage-list em {
+  flex: none;
+  font-size: 8px;
+  font-style: normal;
+  text-align: right;
+}
+.pi-storage-list .storage-ready {
+  color: #4c764d;
+}
+.pi-storage-list .storage-small {
+  color: #a24e37;
+}
+.pi-storage-guidance {
+  padding-top: 9px;
+  border-top: 1px solid #e5e9e1;
   color: #71806f;
 }
 .error-text {

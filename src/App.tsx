@@ -129,6 +129,9 @@ type GameSettings = {
   simulation_distance: number;
   pvp: boolean;
   allow_nether: boolean;
+  java_resource_pack_url: string;
+  java_resource_pack_sha1: string;
+  java_resource_pack_required: boolean;
 };
 type PiServerStatus = {
   running: boolean;
@@ -4158,6 +4161,78 @@ function GameSettingsPanel({
                   />
                   <span>Activer le Nether</span>
                 </label>
+              </div>
+              <div className="java-resource-pack-settings">
+                <div className="eyebrow">PACK DE RESSOURCES · JAVA</div>
+                <p className="path-note">
+                  Pour les joueurs Java, indique un lien HTTPS direct vers le
+                  fichier ZIP hébergé en ligne. Monde Ensemble ne l’héberge pas
+                  et ne vérifie pas que ce lien est accessible depuis Internet.
+                  Ce réglage ne convertit pas le pack pour Bedrock.
+                </p>
+                <div className="game-settings-grid">
+                  <label className="game-setting-wide">
+                    Adresse HTTPS directe du ZIP
+                    <input
+                      type="url"
+                      value={settings.java_resource_pack_url}
+                      maxLength={2048}
+                      placeholder="https://…/pack.zip"
+                      onChange={(event) => {
+                        const url = event.target.value.trim();
+                        change("java_resource_pack_url", url);
+                        if (!url) {
+                          change("java_resource_pack_sha1", "");
+                          change("java_resource_pack_required", false);
+                        }
+                      }}
+                      disabled={saving || busy}
+                    />
+                  </label>
+                  <label className="game-setting-wide">
+                    SHA-1 du ZIP · 40 caractères hexadécimaux
+                    <input
+                      value={settings.java_resource_pack_sha1}
+                      maxLength={40}
+                      autoCapitalize="none"
+                      spellCheck={false}
+                      placeholder="Facultatif, mais recommandé"
+                      onChange={(event) =>
+                        change(
+                          "java_resource_pack_sha1",
+                          event.target.value.trim(),
+                        )
+                      }
+                      disabled={saving || busy}
+                    />
+                  </label>
+                </div>
+                <div className="game-settings-toggles">
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={settings.java_resource_pack_required}
+                      onChange={(event) =>
+                        change(
+                          "java_resource_pack_required",
+                          event.target.checked,
+                        )
+                      }
+                      disabled={
+                        saving || busy || !settings.java_resource_pack_url
+                      }
+                    />
+                    <span>
+                      Refuser l’accès Java si le joueur refuse ce pack
+                    </span>
+                  </label>
+                </div>
+                {settings.java_resource_pack_required && (
+                  <small className="path-note">
+                    Un joueur Java qui refuse le pack sera déconnecté. Enlève
+                    cette option si tu veux laisser le choix.
+                  </small>
+                )}
               </div>
               {!serverVerified ? (
                 <p className="path-note">

@@ -743,6 +743,9 @@ fn parse_game_settings(properties: &str) -> Result<GameSettings, String> {
             .map_err(|_| "La distance de simulation Minecraft est invalide.".to_string())?,
         pvp: parse_bool("pvp", true)?,
         allow_nether: parse_bool("allow-nether", true)?,
+        java_resource_pack_url: value("resource-pack").unwrap_or("").to_string(),
+        java_resource_pack_sha1: value("resource-pack-sha1").unwrap_or("").to_string(),
+        java_resource_pack_required: parse_bool("require-resource-pack", false)?,
     };
     validate_game_settings(&settings)?;
     Ok(settings)
@@ -777,6 +780,44 @@ fn validate_game_settings(settings: &GameSettings) -> Result<(), String> {
     {
         return Err("Les distances d’affichage et de simulation doivent être comprises entre 2 et 16 chunks.".into());
     }
+    if settings.java_resource_pack_url.len() > 2048
+        || settings
+            .java_resource_pack_url
+            .chars()
+            .any(char::is_control)
+    {
+        return Err("L’adresse du pack Java doit faire 2048 caractères maximum et ne pas contenir de commande.".into());
+    }
+    if !settings.java_resource_pack_url.is_empty() {
+        let url = reqwest::Url::parse(&settings.java_resource_pack_url)
+            .map_err(|_| "Saisis une adresse HTTPS directe vers le pack Java.".to_string())?;
+        if url.scheme() != "https"
+            || url.host_str().is_none()
+            || !url.username().is_empty()
+            || url.password().is_some()
+            || url.fragment().is_some()
+        {
+            return Err(
+                "Le pack Java doit utiliser une URL HTTPS directe, sans identifiant ni fragment."
+                    .into(),
+            );
+        }
+    } else if !settings.java_resource_pack_sha1.is_empty() || settings.java_resource_pack_required {
+        return Err(
+            "Ajoute d’abord une URL de pack Java avant son empreinte ou son obligation.".into(),
+        );
+    }
+    if !settings.java_resource_pack_sha1.is_empty()
+        && (settings.java_resource_pack_sha1.len() != 40
+            || !settings
+                .java_resource_pack_sha1
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit()))
+    {
+        return Err(
+            "L’empreinte SHA-1 Java doit contenir exactement 40 caractères hexadécimaux.".into(),
+        );
+    }
     Ok(())
 }
 
@@ -794,6 +835,15 @@ fn apply_game_settings(properties: &str, settings: &GameSettings) -> Result<Stri
         ),
         ("pvp", settings.pvp.to_string()),
         ("allow-nether", settings.allow_nether.to_string()),
+        ("resource-pack", settings.java_resource_pack_url.clone()),
+        (
+            "resource-pack-sha1",
+            settings.java_resource_pack_sha1.clone(),
+        ),
+        (
+            "require-resource-pack",
+            settings.java_resource_pack_required.to_string(),
+        ),
     ];
     let mut seen = HashSet::new();
     let mut output = Vec::new();
@@ -843,6 +893,9 @@ pub struct GameSettings {
     pub simulation_distance: u8,
     pub pvp: bool,
     pub allow_nether: bool,
+    pub java_resource_pack_url: String,
+    pub java_resource_pack_sha1: String,
+    pub java_resource_pack_required: bool,
 }
 
 #[derive(Serialize)]
@@ -7098,6 +7151,9 @@ mod tests {
             simulation_distance: 6,
             pvp: false,
             allow_nether: true,
+            java_resource_pack_url: "https://packs.example.net/shared.zip".into(),
+            java_resource_pack_sha1: "a".repeat(40),
+            java_resource_pack_required: true,
         };
         let changed = apply_game_settings(original, &settings).unwrap();
         assert!(changed.contains("# keep this comment\n"));
@@ -7108,6 +7164,9 @@ mod tests {
         assert!(changed.contains("view-distance=8\n"));
         assert!(changed.contains("simulation-distance=6\n"));
         assert!(changed.contains("pvp=false\n"));
+        assert!(changed.contains("resource-pack=https://packs.example.net/shared.zip\n"));
+        assert!(changed.contains(&format!("resource-pack-sha1={}\n", "a".repeat(40))));
+        assert!(changed.contains("require-resource-pack=true\n"));
     }
 
     #[test]
@@ -7121,8 +7180,23 @@ mod tests {
             simulation_distance: 6,
             pvp: true,
             allow_nether: true,
+            java_resource_pack_url: String::new(),
+            java_resource_pack_sha1: String::new(),
+            java_resource_pack_required: false,
         };
         assert!(validate_game_settings(&settings).is_ok());
+        settings.java_resource_pack_url = "http://packs.example.net/shared.zip".into();
+        assert!(validate_game_settings(&settings).is_err());
+        settings.java_resource_pack_url = "https://packs.example.net/shared.zip".into();
+        settings.java_resource_pack_sha1 = "not-a-sha1".into();
+        assert!(validate_game_settings(&settings).is_err());
+        settings.java_resource_pack_sha1 = "".into();
+        settings.java_resource_pack_required = true;
+        assert!(validate_game_settings(&settings).is_ok());
+        settings.java_resource_pack_url.clear();
+        assert!(validate_game_settings(&settings).is_err());
+        settings.java_resource_pack_url = "https://packs.example.net/shared.zip".into();
+        settings.java_resource_pack_required = false;
         settings.motd = "invalid\nserver-port=1".into();
         assert!(validate_game_settings(&settings).is_err());
         settings.motd = "Good world".into();

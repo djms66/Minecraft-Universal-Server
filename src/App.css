@@ -2290,6 +2290,19 @@ button {
   display: block;
   margin-top: 12px;
 }
+.java-resource-pack-settings {
+  margin-top: 18px;
+  padding: 13px;
+  border: 1px solid #596057;
+  border-radius: 4px;
+  background: #30352e;
+}
+.java-resource-pack-settings > .eyebrow {
+  color: #c3e879;
+}
+.java-resource-pack-settings > .path-note {
+  margin: 8px 0;
+}
 .plugin-suggestion-list {
   display: grid;
   gap: 10px;

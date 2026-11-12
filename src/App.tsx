@@ -3225,8 +3225,8 @@ function Compatibility({
     ["Téléphones / tablettes", "Profil Bedrock", "Geyser · version listée"],
     [
       "Consoles",
-      "Avec étape en plus",
-      "Leur menu limite les serveurs externes",
+      "Étape externe requise",
+      "Le jeu ne permet pas d’ajouter directement une IP privée",
     ],
     [
       "Extensions serveur",
@@ -3280,6 +3280,41 @@ function Compatibility({
           </div>
         ))}
       </div>
+      <section className="console-guide" aria-labelledby="console-guide-title">
+        <div className="eyebrow">CONSOLES · CONFIGURATION À PART</div>
+        <h3 id="console-guide-title">
+          Switch, Xbox et PlayStation demandent une étape supplémentaire
+        </h3>
+        <p>
+          Minecraft sur console ne propose pas l’ajout direct d’une adresse de
+          serveur privé. Le monde reste hébergé sur le Mac, le PC ou le Pi; il
+          faut seulement aider la console à le trouver.
+        </p>
+        <div className="console-guide-grid">
+          <div>
+            <strong>À la maison · relais LAN</strong>
+            <p>
+              Une application compatible sur téléphone, tablette ou PC fait
+              apparaître le serveur dans la liste des parties locales. Mets
+              l’appareil et la console sur le même Wi-Fi, puis saisis l’adresse
+              Bedrock et le port affichés dans le tableau de bord.
+            </p>
+          </div>
+          <div>
+            <strong>Autre méthode · menu DNS</strong>
+            <p>
+              Un service tiers peut ouvrir un menu de serveurs à partir d’un
+              serveur vedette. Il faut configurer le DNS sur la console; cette
+              application ne change aucun réglage réseau. Si la connexion
+              Internet de la console se dégrade, remets le DNS en automatique.
+            </p>
+          </div>
+        </div>
+        <small>
+          Ces relais ne sont ni installés ni testés par Monde Ensemble. Méthodes
+          et limites à jour : geysermc.org/wiki/geyser/using-geyser-with-consoles/
+        </small>
+      </section>
       <div className="release-summary">
         <div className="eyebrow">DERNIER CONTRÔLE DES CATALOGUES</div>
         {report ? (

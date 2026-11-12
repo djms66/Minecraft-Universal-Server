@@ -5841,7 +5841,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.18.7")
+        .user_agent("MondeEnsemble/0.18.8")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

@@ -297,7 +297,7 @@ fn verified_asset(
     }
     progress("Téléchargement de l’outil officiel Raspberry Pi…", 10);
     let client = reqwest::blocking::Client::builder()
-        .user_agent("MondeEnsemble/0.6.4")
+        .user_agent("MondeEnsemble/0.18.8")
         .timeout(Duration::from_secs(180))
         .build()
         .map_err(|error| format!("Connexion impossible au téléchargement officiel : {error}"))?;
@@ -551,7 +551,9 @@ fn user_data(public_key: &str, hostname: &str) -> String {
     )
     .unwrap_or_else(|_| "\"true\"".into());
     format!(
-        "#cloud-config\\nhostname: {hostname}\\nmanage_etc_hosts: true\\nusers:\\n  - name: minecraft\\n    gecos: Monde Ensemble\\n    groups: [users]\\n    shell: /bin/bash\\n    lock_passwd: true\\n    ssh_authorized_keys:\\n      - {key}\\nssh_pwauth: false\\nrpi:\\n  enable_ssh: true\\nruncmd:\\n  - [systemctl, enable, ssh]\\n  - [systemctl, start, ssh]\\n  - [bash, -lc, {cleanup}]\\n"
+        // Cloud-init parses this as YAML; these must be real line breaks, not
+        // the two-character sequence `\\n` (which makes the whole file invalid).
+        "#cloud-config\nhostname: {hostname}\nmanage_etc_hosts: true\nusers:\n  - name: minecraft\n    gecos: Monde Ensemble\n    groups: [users]\n    shell: /bin/bash\n    lock_passwd: true\n    ssh_authorized_keys:\n      - {key}\nssh_pwauth: false\nenable_ssh: true\nruncmd:\n  - [systemctl, enable, ssh]\n  - [systemctl, start, ssh]\n  - [bash, -lc, {cleanup}]\n"
     )
 }
 

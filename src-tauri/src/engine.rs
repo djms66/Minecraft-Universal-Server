@@ -65,6 +65,9 @@ pub struct PiServerStatus {
     pub ready: bool,
     pub java_port_open: bool,
     pub bedrock_port_open: bool,
+    pub autostart_configured: bool,
+    pub minecraft_java: String,
+    pub minecraft_bedrock: String,
     pub address: String,
     pub log: String,
 }
@@ -259,8 +262,8 @@ pub fn install_local(
         format!("Impossible de terminer l’installation dans le dossier choisi : {error}")
     })?;
     let profile = format!(
-        "{} · Geyser {} · Floodgate {}",
-        artifacts.0, artifacts.1, artifacts.2
+        "Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {}",
+        artifacts.0, artifacts.1, artifacts.2, artifacts.3
     );
     progress(
         "Installation préparée dans un nouveau dossier; rien n’a été remplacé.",
@@ -381,7 +384,7 @@ pub fn install_remote_pi(
 
     progress("Installation et démarrage du serveur sur le Pi…", 91);
     let prepare_command = format!(
-        "set -eu; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; cd \"$d/server\"; test -s paper.jar; test -s plugins/Geyser-Spigot.jar; test -s plugins/Floodgate-Spigot.jar; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid"
+        "set -eu; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; cd \"$d/server\"; test -s paper.jar; test -s plugins/Geyser-Spigot.jar; test -s plugins/Floodgate-Spigot.jar; AUTOSTART=no; if command -v crontab >/dev/null 2>&1 && (systemctl is-enabled --quiet cron 2>/dev/null || systemctl is-enabled --quiet crond 2>/dev/null); then t=\"$(mktemp)\"; (crontab -l 2>/dev/null || true) | grep -Fv '# MONDE_ENSEMBLE_AUTO_START' > \"$t\" || true; printf '%s\\n' '@reboot \"$HOME/Monde-Ensemble-{id}/server/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START' >> \"$t\"; crontab \"$t\"; rm -f \"$t\"; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then AUTOSTART=yes; fi; fi; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; printf 'AUTOSTART=%s\\n' \"$AUTOSTART\""
     );
     run_ssh(&destination, &prepare_command).map_err(|error| {
         format!("Les fichiers ont été transférés, mais leur préparation a échoué dans ~/Monde-Ensemble-{id}/server. Rien n’a été écrit dans les autres dossiers du Pi. Détail : {error}")
@@ -409,6 +412,14 @@ pub fn install_remote_pi(
             "Le serveur a été installé, mais le premier démarrage dépasse 60 secondes. Consulte `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi."
         ));
     }
+    let autostart_configured = run_ssh(
+        &destination,
+        &format!(
+            "crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START' && echo yes || echo no"
+        ),
+    )
+    .map(|output| output.lines().any(|line| line == "yes"))
+    .unwrap_or(false);
     let ip = &facts.ip;
     if ip.is_empty() {
         return Err(
@@ -419,11 +430,17 @@ pub fn install_remote_pi(
     Ok(OperationResult {
         path: format!("{username}@{host}:~/Monde-Ensemble-{id}/server"),
         detail: format!(
-            "Serveur démarré et prêt · {} · Minecraft Java {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{GAME_PORT} · mobile/tablette Bedrock : {ip}:{BEDROCK_PORT} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.",
+            "Serveur démarré et prêt · démarrage automatique après redémarrage {} · {} · Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{GAME_PORT} · mobile/tablette Bedrock : {ip}:{BEDROCK_PORT} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.",
+            if autostart_configured {
+                "configuré"
+            } else {
+                "non disponible sur ce Pi"
+            },
             facts.model,
             profile.0,
             profile.1,
             profile.2,
+            profile.3,
             java_major_for(&profile.0)?,
             heap_gb
         ),
@@ -514,12 +531,20 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]25566$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]19133$'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]25566$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]19133$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
     let output = run_ssh(&destination, &command)?;
-    let (header, log) = output
+    let (header, after_profile) = output
+        .split_once("PROFILE_START\n")
+        .ok_or_else(|| "Le Pi n’a pas renvoyé le profil Minecraft installé.".to_string())?;
+    let (profile, after_profile) = after_profile
+        .split_once("\nPROFILE_END\n")
+        .ok_or_else(|| "Le profil Minecraft installé est incomplet.".to_string())?;
+    let (_, log) = after_profile
         .split_once("LOG_START\n")
         .ok_or_else(|| "Le Pi n’a pas renvoyé les informations attendues.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_str(profile.trim())
+        .map_err(|_| "Le profil des versions Minecraft est illisible.".to_string())?;
     let get = |key: &str| {
         header
             .lines()
@@ -532,6 +557,17 @@ pub fn inspect_pi_server(
         ready: get("RUNNING=") == "yes" && get("READY=") == "yes",
         java_port_open: get("JAVA_PORT=") == "yes",
         bedrock_port_open: get("BEDROCK_PORT=") == "yes",
+        autostart_configured: get("AUTOSTART=") == "yes",
+        minecraft_java: profile
+            .get("minecraft_java")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        minecraft_bedrock: profile
+            .get("minecraft_bedrock")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
         address: get("IP=").to_string(),
         log: log.to_string(),
     })
@@ -667,7 +703,7 @@ fn build_fresh_server(
     heap_gb: u8,
     remote_linux: bool,
     progress: &impl Fn(&str, u8),
-) -> Result<(String, String, String), String> {
+) -> Result<(String, String, String, String), String> {
     let client = client()?;
     progress("Lecture des versions compatibles auprès de GeyserMC…", 3);
     let supported = supported_versions(&client)?;
@@ -749,7 +785,12 @@ fn build_fresh_server(
         &geyser,
         &floodgate,
     )?;
-    Ok((supported.java, geyser.version, floodgate.version))
+    Ok((
+        supported.java,
+        supported.bedrock,
+        geyser.version,
+        floodgate.version,
+    ))
 }
 
 /// Paper's current Java requirement follows its published game-version matrix.
@@ -899,6 +940,16 @@ fn write_launch_files(stage: &Path, heap_gb: u8, remote_linux: bool) -> Result<(
             "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nJAVA_BIN=$(find runtime -type f -name java -print -quit)\n[ -n \"$JAVA_BIN\" ] || {{ echo 'Java inclus introuvable.'; exit 1; }}\nexec \"$JAVA_BIN\" -Xms1G -Xmx{heap_gb}G -jar paper.jar --nogui\n"
         );
         let path = stage.join("demarrer.sh");
+        fs::write(&path, script).map_err(io_error)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).map_err(io_error)?;
+        }
+    }
+    if remote_linux {
+        let script = "#!/bin/sh\nset -eu\nsleep 25\ncd \"$(dirname \"$0\")\"\nnohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null &\necho $! > serveur.pid\n";
+        let path = stage.join("demarrer-au-redemarrage.sh");
         fs::write(&path, script).map_err(io_error)?;
         #[cfg(unix)]
         {

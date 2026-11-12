@@ -1646,6 +1646,16 @@ button {
   font-size: 19px;
 }
 .pi-connect-grid span { color: #c6c9c0; font-size: 12px; }
+.pi-version-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  margin-top: 13px;
+  color: #c6c9c0;
+  font-size: 12px;
+}
+.pi-version-line strong { color: #e9e8de; }
 .pi-checks {
   display: flex;
   flex-wrap: wrap;

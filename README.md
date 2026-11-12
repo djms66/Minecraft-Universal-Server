@@ -1,4 +1,4 @@
-# Monde Ensemble 0.5.0
+# Monde Ensemble 0.6.0
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -15,17 +15,17 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
 - transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
 - affiche l’adresse et les ports à saisir dans Minecraft, ainsi que le chemin du dossier et des journaux sur le Pi.
-- conserve le Pi installé dans l’application, revérifie son état à l’ouverture, affiche les dernières lignes du journal et peut relancer uniquement cette installation si ses ports sont libres.
+- conserve le Pi installé dans l’application, revérifie son état et ses versions Minecraft à l’ouverture, affiche les dernières lignes du journal et peut relancer uniquement cette installation si ses ports sont libres ; l’installation ajoute aussi une tâche de redémarrage automatique si le service de planification du Pi est actif.
 
 Toutes les installations neuves et restaurations sont faites à côté des dossiers existants. Sur le Pi, l’application vérifie que les ports choisis sont libres et ne touche pas aux autres dossiers. L’acceptation de l’EULA est requise. La connexion SSH doit être déjà configurée sur cet ordinateur; aucune clé inconnue n’est approuvée automatiquement. Le compte choisi doit pouvoir écrire dans son dossier personnel.
 
 ## Ce que cette version ne fait pas
 
 - Elle n’installe pas encore le système Raspberry Pi OS sur une carte SD ou un SSD vierge : elle prend en charge un Pi déjà démarré et configuré.
-- Elle n’installe pas encore un service qui relance le serveur automatiquement après un redémarrage du Pi; l’application permet de le relancer lorsqu’elle est ouverte.
+- Le démarrage automatique après redémarrage dépend du service de planification déjà actif sur le Pi. L’application en vérifie la présence; sinon elle affiche que cette fonction n’est pas configurée.
 - Elle n’a pas encore vérifié ni configuré une réservation DHCP dans la Freebox : l’adresse affichée est celle observée sur le réseau et peut changer.
 - Elle ne met pas à jour un serveur existant et ne garantit pas que les plugins privés/tiers de ton monde sont compatibles. Elle ne touche donc pas à l’installation active.
-- Elle ne gère pas encore l’arrêt, les joueurs, les mods, ni les packs de ressources. Le redémarrage du Pi est disponible seulement pour le serveur enregistré par l’application.
+- Elle ne gère pas encore l’arrêt, les joueurs, les mods, ni les packs de ressources. Le redémarrage manuel est disponible seulement pour le serveur enregistré par l’application.
 - Le message Bedrock `InitialConnection-149` n’est pas diagnostiqué depuis les logs du serveur par cette version.
 - Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.
 - Une compilation sur Mac ne valide pas les installateurs Windows ou Raspberry Pi. Il faut encore compiler et vérifier ces cibles sur leurs machines correspondantes.

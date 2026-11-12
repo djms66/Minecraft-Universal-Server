@@ -37,6 +37,9 @@ type PiServerStatus = {
   ready: boolean;
   java_port_open: boolean;
   bedrock_port_open: boolean;
+  autostart_configured: boolean;
+  minecraft_java: string;
+  minecraft_bedrock: string;
   address: string;
   log: string;
 };
@@ -276,6 +279,13 @@ function App() {
           ready: true,
           java_port_open: true,
           bedrock_port_open: true,
+          autostart_configured: result.detail.includes(
+            "démarrage automatique après redémarrage configuré",
+          ),
+          minecraft_java:
+            result.detail.match(/Minecraft Java ([^·]+)/)?.[1]?.trim() ?? "",
+          minecraft_bedrock:
+            result.detail.match(/Bedrock compatible ([^·]+)/)?.[1]?.trim() ?? "",
           address,
           log: "",
         });
@@ -409,7 +419,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.5.0
+          MONDE ENSEMBLE <span>·</span> 0.6.0
         </div>
       </aside>
 
@@ -1012,9 +1022,19 @@ function Home({
               <span>Port : 19133 · Ajouter un serveur</span>
             </div>
           </div>
+          <div className="pi-version-line">
+            <strong>Version exacte installée</strong>
+            <span>
+              Java {piServerStatus?.minecraft_java || "à vérifier"}
+              {piServerStatus?.minecraft_bedrock
+                ? ` · Bedrock ${piServerStatus.minecraft_bedrock}`
+                : ""}
+            </span>
+          </div>
           <div className="pi-checks">
             <span className={piServerStatus?.java_port_open ? "ok" : ""}>Java {piServerStatus?.java_port_open ? "· disponible" : "· non vérifié"}</span>
             <span className={piServerStatus?.bedrock_port_open ? "ok" : ""}>Bedrock {piServerStatus?.bedrock_port_open ? "· disponible" : "· non vérifié"}</span>
+            <span className={piServerStatus?.autostart_configured ? "ok" : ""}>Après redémarrage {piServerStatus?.autostart_configured ? "· automatique" : "· non configuré"}</span>
             <div className="pi-actions">
               {!piServerStatus?.running && (
                 <button className="button primary" onClick={onStartPi} disabled={busy}>
@@ -1027,6 +1047,11 @@ function Home({
             </div>
           </div>
           {piStatusError && <p className="pi-error">{piStatusError}</p>}
+          {piServerStatus && !piServerStatus.autostart_configured && !piStatusError && (
+            <p className="pi-help">
+              Le Pi ne confirme pas le démarrage automatique après redémarrage. Le serveur peut être relancé ici lorsqu’il est éteint.
+            </p>
+          )}
           {piServerStatus && !piServerStatus.ready && !piStatusError && (
             <p className="pi-help">
               {piServerStatus.running

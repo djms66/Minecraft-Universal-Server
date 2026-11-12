@@ -674,7 +674,9 @@ fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{network_config, restrict_file_permissions, user_data};
+    use super::{
+        network_config, powershell_quote, restrict_file_permissions, user_data, windows_quote,
+    };
     use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -700,6 +702,23 @@ mod tests {
         assert!(config.contains("regulatory-domain: FR\n"));
         assert!(config.contains("\"Maison: 2.4G\":\n"));
         assert!(config.contains("password: \"mot de passe \\\"secret\\\"\"\n"));
+    }
+
+    #[test]
+    fn windows_elevation_arguments_preserve_paths_quotes_and_trailing_slashes() {
+        assert_eq!(
+            windows_quote(r#"C:\Users\Daniel Streng\Imager\rpi-imager.exe"#),
+            r#""C:\Users\Daniel Streng\Imager\rpi-imager.exe""#
+        );
+        assert_eq!(windows_quote("a\"b"), r#""a\"b""#);
+        assert_eq!(
+            windows_quote("C:\\path with space\\"),
+            "\"C:\\path with space\\\\\""
+        );
+        assert_eq!(
+            powershell_quote(r"C:\Users\Daniel O'Neil"),
+            r"'C:\Users\Daniel O''Neil'"
+        );
     }
 
     #[cfg(unix)]

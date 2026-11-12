@@ -1781,10 +1781,11 @@ function App() {
                         {piWifiSsid && (
                           <>
                             <small className="pi-wifi-note">
-                              Le mot de passe sert à connecter le Pi au premier
-                              démarrage ; il est effacé du support après cette
-                              configuration. Pour éviter de l’écrire sur la
-                              carte, utilise plutôt un câble réseau.
+                              Le mot de passe est placé temporairement dans un
+                              fichier de démarrage ; l’application programme
+                              sa suppression au premier démarrage. Pour ne pas
+                              écrire le mot de passe sur la carte, utilise
+                              plutôt un câble réseau.
                             </small>
                             <div>
                               <label htmlFor="pi-wifi-password">

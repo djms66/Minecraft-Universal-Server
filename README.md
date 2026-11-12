@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.31
+# Monde Ensemble 0.18.32
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -54,6 +54,7 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 - En mode avancé, l’ajout de plugin fonctionne sur un serveur local ou Pi géré : la version exacte annoncée pour Paper est revalidée, le fichier est contrôlé par SHA-512 et une archive complète ainsi qu’une nouvelle copie sont créées sans remplacer le serveur d’origine. La copie candidate doit être démarrée manuellement et vérifiée ; l’application permet de revenir à l’ancienne copie. Les dépendances obligatoires, plugins non gérés et mods présents bloquent l’opération.
 - L’ajout de pack Bedrock vérifie le format du manifeste et la version minimale déclarée, pas le rendu en jeu ni toutes les versions clientes. Geyser ne convertit pas automatiquement un pack Java en pack Bedrock ; les consoles peuvent avoir des contraintes propres. Un pack personnalisé bloque les mises à jour automatiques jusqu’à un contrôle de compatibilité séparé.
 - Le réglage Java ne téléverse pas le ZIP et ne vérifie pas que le lien public fonctionne. Le serveur requiert une URL directe accessible en HTTPS ; si l’option est exigée, les joueurs Java qui refusent le téléchargement sont déconnectés. Un pack Java ne devient pas un pack Bedrock.
+- Le paquet macOS est signé ad hoc pour sceller correctement l’application ; il n’est pas signé par un certificat Developer ID ni notarié. macOS peut afficher un avertissement à l’ouverture, ce qui doit encore être résolu pour une installation débutant sans manipulation de sécurité.
 - Le contrôle du serveur repère maintenant l’absence du port TCP Bedrock, mais ne vérifie pas la redirection du routeur, le filtrage opérateur, l’authentification Microsoft, ni la compatibilité de chaque appareil. Le diagnostic `InitialConnection-149` reste donc partiel.
 - Le catalogue annonce les versions Paper/Minecraft et le côté serveur déclarés par l’éditeur ; cela ne garantit pas le fonctionnement réel ni la compatibilité avec Geyser et Bedrock. Les mises à jour coordonnées sont bloquées en présence de plugins ajoutés ; les sauvegardes d’ajout de plugin et leurs copies candidates sont conservées, sans nettoyage automatique.
 - Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.

@@ -453,6 +453,13 @@ async fn get_compatibility() -> Result<engine::CompatibilityReport, String> {
 }
 
 #[tauri::command]
+async fn get_pi_os_recommendation() -> Result<engine::PiOsRecommendation, String> {
+    tauri::async_runtime::spawn_blocking(engine::pi_os_recommendation)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn create_server(
     destination_root: String,
     accept_eula: bool,
@@ -577,6 +584,7 @@ pub fn run() {
             discover_pi,
             discover_pi_boot_targets,
             get_compatibility,
+            get_pi_os_recommendation,
             create_server,
             install_pi,
             inspect_pi_server,

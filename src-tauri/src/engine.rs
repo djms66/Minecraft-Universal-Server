@@ -60,6 +60,20 @@ pub struct DiscoveredPi {
 }
 
 #[derive(Serialize)]
+pub struct PiOsRecommendation {
+    pub name: String,
+    pub release_date: String,
+    pub image_url: String,
+    pub image_sha256: String,
+    pub download_sha256: String,
+    pub download_size_gb: f64,
+    pub image_size_gb: f64,
+    pub devices: Vec<String>,
+    pub init_format: String,
+    pub checked_at: String,
+}
+
+#[derive(Serialize)]
 pub struct PiServerStatus {
     pub running: bool,
     pub ready: bool,
@@ -116,6 +130,25 @@ struct RuntimePackage {
     name: String,
 }
 
+#[derive(Deserialize)]
+struct RaspberryPiOsManifest {
+    os_list: Vec<RaspberryPiOsEntry>,
+}
+
+#[derive(Deserialize)]
+struct RaspberryPiOsEntry {
+    name: String,
+    release_date: Option<String>,
+    url: Option<String>,
+    extract_sha256: Option<String>,
+    image_download_sha256: Option<String>,
+    image_download_size: Option<u64>,
+    extract_size: Option<u64>,
+    init_format: Option<String>,
+    devices: Option<Vec<String>>,
+    subitems: Option<Vec<RaspberryPiOsEntry>>,
+}
+
 struct Artifact {
     name: String,
     version: String,
@@ -156,6 +189,79 @@ pub fn compatibility() -> Result<CompatibilityReport, String> {
         checked_at: Utc::now().to_rfc3339(),
         source: "PaperMC et GeyserMC officiels".into(),
     })
+}
+
+/// Selects the current official Raspberry Pi OS Lite 64-bit image suitable
+/// for first-boot customization. No image is downloaded or written here.
+pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
+    const MANIFEST_URL: &str = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json";
+    let client = client()?;
+    let manifest: RaspberryPiOsManifest = get_json(&client, MANIFEST_URL)?;
+    let mut entries = Vec::new();
+    flatten_pi_os_entries(manifest.os_list, &mut entries);
+    let mut candidates: Vec<RaspberryPiOsEntry> = entries
+        .into_iter()
+        .filter(|entry| {
+            entry
+                .name
+                .eq_ignore_ascii_case("Raspberry Pi OS Lite (64-bit)")
+                && entry.init_format.as_deref() == Some("cloudinit-rpi")
+                && entry
+                    .url
+                    .as_deref()
+                    .is_some_and(|url| url.starts_with("https://"))
+                && entry.devices.as_ref().is_some_and(|devices| {
+                    devices.iter().any(|device| {
+                        ["pi3", "pi4", "pi5"]
+                            .iter()
+                            .any(|supported| device.starts_with(supported))
+                    })
+                })
+                && entry.extract_sha256.as_deref().is_some_and(valid_sha256)
+                && entry.extract_size.is_some()
+                && entry.release_date.is_some()
+        })
+        .collect();
+    candidates.sort_by(|a, b| b.release_date.cmp(&a.release_date));
+    let image = candidates.into_iter().next().ok_or_else(|| {
+        "Le catalogue officiel ne fournit pas d’image Raspberry Pi OS Lite 64 bits avec configuration de premier démarrage vérifiable. Préparation bloquée.".to_string()
+    })?;
+    Ok(PiOsRecommendation {
+        name: image.name,
+        release_date: image.release_date.unwrap_or_default(),
+        image_url: image.url.unwrap_or_default(),
+        image_sha256: image.extract_sha256.unwrap_or_default(),
+        download_sha256: image
+            .image_download_sha256
+            .filter(|digest| valid_sha256(digest))
+            .unwrap_or_default(),
+        download_size_gb: (image.image_download_size.unwrap_or_default() as f64 / 1_000_000_000.0
+            * 10.0)
+            .round()
+            / 10.0,
+        image_size_gb: (image.extract_size.unwrap_or_default() as f64 / 1_000_000_000.0 * 10.0)
+            .round()
+            / 10.0,
+        devices: image.devices.unwrap_or_default(),
+        init_format: image.init_format.unwrap_or_default(),
+        checked_at: Utc::now().to_rfc3339(),
+    })
+}
+
+fn flatten_pi_os_entries(
+    entries: Vec<RaspberryPiOsEntry>,
+    flattened: &mut Vec<RaspberryPiOsEntry>,
+) {
+    for mut entry in entries {
+        if let Some(children) = entry.subitems.take() {
+            flatten_pi_os_entries(children, flattened);
+        }
+        flattened.push(entry);
+    }
+}
+
+fn valid_sha256(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 struct SupportedVersions {

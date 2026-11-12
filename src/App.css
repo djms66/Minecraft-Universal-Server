@@ -1178,6 +1178,23 @@ button {
   color: #657264;
   font-size: 9px;
 }
+.pi-os-recommendation {
+  display: grid;
+  gap: 5px;
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-left: 3px solid #65815e;
+  background: #f3f6f0;
+  color: #657264;
+  font-size: 9px;
+}
+.pi-os-recommendation strong {
+  color: #283228;
+  font-size: 11px;
+}
+.pi-os-recommendation small {
+  margin-top: 2px;
+}
 .pi-first-boot h4 {
   margin: 6px 0;
   color: #283228;

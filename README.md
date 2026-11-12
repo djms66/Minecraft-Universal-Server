@@ -13,6 +13,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - vérifie le contrôle d’intégrité et les chemins d’une archive avant restauration, puis restaure dans un nouveau dossier ;
 - recherche les Raspberry Pi qui annoncent SSH sur le réseau local et affiche leur modèle et leur adresse ;
 - repère en lecture seule les cartes SD et supports USB externes sur Mac, Windows ou Linux pour préparer un futur parcours Pi vierge ;
+- lit le catalogue Raspberry Pi officiel pour proposer l’image Raspberry Pi OS Lite 64 bits avec le format de démarrage requis, sa date de publication et sa taille ;
 - vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
 - transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
 - affiche l’adresse et les ports à saisir dans Minecraft, ainsi que le chemin du dossier et des journaux sur le Pi.
@@ -22,7 +23,7 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 
 ## Ce que cette version ne fait pas
 
-- Elle n’installe pas encore le système Raspberry Pi OS sur une carte SD ou un SSD vierge : elle sait seulement repérer les supports externes. L’installation du système, sa configuration automatique, le premier démarrage et la vérification de bout en bout restent à réaliser avant de proposer un Pi from scratch.
+- Elle n’installe pas encore le système Raspberry Pi OS sur une carte SD ou un SSD vierge : elle sait seulement repérer les supports externes et recommander l’image depuis le catalogue officiel. L’écriture du système, sa configuration automatique, le premier démarrage et la vérification de bout en bout restent à réaliser avant de proposer un Pi from scratch.
 - Le démarrage automatique après redémarrage dépend du service de planification déjà actif sur le Pi. L’application en vérifie la présence; sinon elle affiche que cette fonction n’est pas configurée.
 - Elle n’a pas encore vérifié ni configuré une réservation DHCP dans la Freebox : l’adresse affichée est celle observée sur le réseau et peut changer.
 - Elle ne met pas à jour un serveur existant et ne garantit pas que les plugins privés/tiers de ton monde sont compatibles. Elle ne touche donc pas à l’installation active.

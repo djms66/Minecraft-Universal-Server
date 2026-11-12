@@ -27,6 +27,18 @@ type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
 type DiscoveredPi = { host: string; address: string; model: string };
 type PiBootTarget = { id: string; name: string; size: string; connection: string };
+type PiOsRecommendation = {
+  name: string;
+  release_date: string;
+  image_url: string;
+  image_sha256: string;
+  download_sha256: string;
+  download_size_gb: number;
+  image_size_gb: number;
+  devices: string[];
+  init_format: string;
+  checked_at: string;
+};
 type PiInstallation = {
   host: string;
   username: string;
@@ -66,6 +78,9 @@ function App() {
   const [piBootTargets, setPiBootTargets] = useState<PiBootTarget[]>([]);
   const [piBootScanState, setPiBootScanState] = useState<"idle" | "scanning" | "done">("idle");
   const [piBootScanError, setPiBootScanError] = useState("");
+  const [piOsRecommendation, setPiOsRecommendation] = useState<PiOsRecommendation | null>(null);
+  const [piOsLoading, setPiOsLoading] = useState(false);
+  const [piOsError, setPiOsError] = useState("");
   const [piInstallation, setPiInstallation] = useState<PiInstallation | null>(
     () => {
       try {
@@ -120,6 +135,26 @@ function App() {
     invoke<CompatibilityReport>("get_compatibility")
       .then(setCompatibility)
       .catch((e) => setCompatibilityError(String(e)));
+  }, [page]);
+
+  useEffect(() => {
+    if (page !== "install") return;
+    let active = true;
+    setPiOsLoading(true);
+    setPiOsError("");
+    invoke<PiOsRecommendation>("get_pi_os_recommendation")
+      .then((recommendation) => {
+        if (active) setPiOsRecommendation(recommendation);
+      })
+      .catch((error) => {
+        if (active) setPiOsError(String(error));
+      })
+      .finally(() => {
+        if (active) setPiOsLoading(false);
+      });
+    return () => {
+      active = false;
+    };
   }, [page]);
 
   const progressChannel = () => {
@@ -666,6 +701,20 @@ function App() {
                         error={operationError}
                       />
                     )}
+                    <div className="pi-os-recommendation" aria-live="polite">
+                      <div className="eyebrow">SYSTÈME CHOISI AUTOMATIQUEMENT</div>
+                      {piOsLoading && <p>Vérification du catalogue officiel Raspberry Pi…</p>}
+                      {piOsError && <p className="pi-error">Impossible de confirmer le système recommandé : {piOsError}</p>}
+                      {piOsRecommendation && (
+                        <>
+                          <strong>{piOsRecommendation.name}</strong>
+                          <span>
+                            Publication du {new Date(`${piOsRecommendation.release_date}T12:00:00`).toLocaleDateString("fr-FR")} · téléchargement {piOsRecommendation.download_size_gb} Go · écrit {piOsRecommendation.image_size_gb} Go · 64 bits
+                          </span>
+                          <small>Recommandation du catalogue officiel. Elle n’est pas encore installée sur le Pi.</small>
+                        </>
+                      )}
+                    </div>
                     <section className="pi-first-boot" aria-labelledby="pi-fresh-title">
                       <div className="eyebrow">PRÉPARATION D’UN PI NEUF</div>
                       <h4 id="pi-fresh-title">Vérifier la carte SD ou le SSD</h4>

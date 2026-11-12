@@ -2399,6 +2399,94 @@ function ReleaseItem({ label, value }: { label: string; value: string }) {
   );
 }
 
+function ExternalAccessGuide({
+  address,
+  javaPort,
+  bedrockPort,
+  onCopyAddress,
+}: {
+  address: string;
+  javaPort: number;
+  bedrockPort: number;
+  onCopyAddress: (value: string, label: string) => void;
+}) {
+  if (!address || address === "127.0.0.1") {
+    return (
+      <p className="pi-network-note">
+        Actualise le serveur pour afficher son adresse sur le réseau avant de
+        préparer l’accès depuis l’extérieur.
+      </p>
+    );
+  }
+
+  return (
+    <details className="pi-network-guide">
+      <summary>Jouer avec des amis depuis l’extérieur</summary>
+      <p>
+        Les voyants du tableau confirment les services sur le serveur. Pour des
+        amis hors de la maison, la Freebox doit aussi transmettre les ports vers
+        l’adresse locale ci-dessous.
+      </p>
+      <ol>
+        <li>
+          Garde cette adresse stable en réservant l’IP locale du serveur dans le
+          DHCP de la Freebox.
+        </li>
+        <li>
+          Dans l’application Free, ouvre <strong>Réseau</strong>, puis{" "}
+          <strong>… → Paramètres réseau avancés → Redirection de port</strong>.
+        </li>
+        <li>
+          Crée la règle Bedrock vers <strong>{address}</strong>, port externe et
+          interne <strong>{bedrockPort}</strong>, en <strong>TCP et UDP</strong>
+          . Si la Freebox demande un protocole par règle, crée une règle TCP et
+          une règle UDP.
+        </li>
+        <li>
+          Pour les joueurs Java hors de la maison, ajoute aussi le port{" "}
+          <strong>{javaPort} en TCP</strong>, vers la même adresse.
+        </li>
+        <li>
+          Donne aux joueurs l’adresse IP publique indiquée dans l’application
+          Free, dans <strong>Server internet → Autres informations</strong>, et
+          le port Bedrock <strong>{bedrockPort}</strong>. Teste depuis un autre
+          réseau, par exemple en coupant le Wi‑Fi du téléphone.
+        </li>
+      </ol>
+      <div className="pi-network-values">
+        <div>
+          <span>IP LOCALE À SÉLECTIONNER DANS LA RÈGLE</span>
+          <code>{address}</code>
+          <button
+            className="address-copy"
+            type="button"
+            onClick={() => onCopyAddress(address, "IP locale du serveur")}
+          >
+            Copier l’IP locale
+          </button>
+        </div>
+        <div>
+          <span>PORTS DU SERVEUR</span>
+          <code>
+            Bedrock {bedrockPort} · Java {javaPort}
+          </code>
+        </div>
+      </div>
+      <p className="pi-network-note">
+        Cette étape ne change rien au serveur. N’active pas la DMZ et ne
+        redirige pas les ports d’administration.
+      </p>
+      <a
+        href="https://assistance.free.fr/articles/1395"
+        target="_blank"
+        rel="noreferrer"
+      >
+        Voir le guide officiel Free pour la redirection de port
+      </a>
+    </details>
+  );
+}
+
 function Spec({
   label,
   value,
@@ -2649,6 +2737,12 @@ function Home({
                 : "· fermé"}
             </span>
           </div>
+          <ExternalAccessGuide
+            address={localServerStatus?.address || ""}
+            javaPort={localServerStatus?.java_port || 25565}
+            bedrockPort={localServerStatus?.bedrock_port || 19132}
+            onCopyAddress={copyAddress}
+          />
           <div className="pi-actions">
             <button
               className="text-button"
@@ -3214,6 +3308,12 @@ function Home({
               informations nécessaires à sa réservation dans la Freebox.
             </p>
           )}
+          <ExternalAccessGuide
+            address={piServerStatus?.address || ""}
+            javaPort={piServerStatus?.java_port || 25565}
+            bedrockPort={piServerStatus?.bedrock_port || 19132}
+            onCopyAddress={copyAddress}
+          />
         </section>
       )}
       {piInstallation && (

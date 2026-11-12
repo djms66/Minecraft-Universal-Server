@@ -192,6 +192,20 @@ pub struct LocalWhitelistStatus {
     pub entries: String,
 }
 
+/// A Modrinth Paper plugin release whose metadata exactly matches the
+/// currently managed Minecraft version. This is discovery only: metadata
+/// cannot prove runtime behavior or Bedrock client compatibility.
+#[derive(Serialize)]
+pub struct PaperPluginSuggestion {
+    pub project_id: String,
+    pub title: String,
+    pub description: String,
+    pub version: String,
+    pub downloads: u64,
+    pub project_url: String,
+    pub required_dependencies: usize,
+}
+
 #[derive(Serialize)]
 pub struct PiWhitelistStatus {
     pub enabled: bool,
@@ -363,6 +377,155 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
         initial_server_storage_gb: INITIAL_SERVER_STORAGE_GB,
         checked_at: Utc::now().to_rfc3339(),
     })
+}
+
+/// Searches Modrinth without changing a server. Results must be a listed
+/// plugin project with an exact Minecraft version, a Paper release, and a
+/// server-side environment declaration. Required dependencies remain visible
+/// as a count so the UI can avoid implying that these releases are one-click
+/// installable.
+pub fn search_paper_plugins(
+    minecraft_version: &str,
+    query: &str,
+) -> Result<Vec<PaperPluginSuggestion>, String> {
+    let valid_version = Regex::new(r"^\d+\.\d+(?:\.\d+)?$").unwrap();
+    if !valid_version.is_match(minecraft_version) {
+        return Err(
+            "La version Minecraft du serveur n’est pas reconnue; catalogue non consulté.".into(),
+        );
+    }
+    let query = query.trim();
+    if query.chars().count() > 80 || query.chars().any(char::is_control) {
+        return Err("La recherche doit faire 80 caractères maximum.".into());
+    }
+
+    let client = client()?;
+    let facets = serde_json::to_string(&[
+        vec![format!("versions:{minecraft_version}")],
+        vec!["project_type:plugin".to_string()],
+    ])
+    .map_err(|error| error.to_string())?;
+    let response: serde_json::Value = client
+        .get("https://api.modrinth.com/v2/search")
+        .query(&[
+            ("query", query),
+            ("facets", facets.as_str()),
+            ("limit", "20"),
+            ("index", "downloads"),
+        ])
+        .send()
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(network_error)?
+        .json()
+        .map_err(|error| format!("Réponse du catalogue Modrinth illisible : {error}"))?;
+    let hits = response
+        .get("hits")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| {
+            "Le catalogue Modrinth n’a pas renvoyé de résultats exploitables.".to_string()
+        })?;
+
+    let mut suggestions = Vec::new();
+    for hit in hits {
+        let Some(project_id) = hit.get("project_id").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        if project_id.len() > 64 || !project_id.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+            continue;
+        }
+        if hit.get("project_type").and_then(serde_json::Value::as_str) != Some("plugin") {
+            continue;
+        }
+        let versions: Vec<serde_json::Value> = client
+            .get(format!(
+                "https://api.modrinth.com/v2/project/{project_id}/version"
+            ))
+            .query(&[
+                ("loaders", "[\"paper\"]"),
+                (
+                    "game_versions",
+                    format!("[\"{minecraft_version}\"]").as_str(),
+                ),
+                ("include_changelog", "false"),
+            ])
+            .send()
+            .map_err(network_error)?
+            .error_for_status()
+            .map_err(network_error)?
+            .json()
+            .map_err(|error| format!("Versions de plugin illisibles : {error}"))?;
+        let Some(version) = versions.into_iter().find(|version| {
+            version.get("status").and_then(serde_json::Value::as_str) == Some("listed")
+                && version
+                    .get("version_type")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("release")
+                && version
+                    .get("loaders")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|items| items.iter().any(|item| item.as_str() == Some("paper")))
+                && version
+                    .get("game_versions")
+                    .and_then(serde_json::Value::as_array)
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| item.as_str() == Some(minecraft_version))
+                    })
+                && matches!(
+                    version
+                        .get("environment")
+                        .and_then(serde_json::Value::as_str),
+                    Some("server_only" | "server_only_client_optional" | "dedicated_server_only")
+                )
+        }) else {
+            continue;
+        };
+        let required_dependencies = version
+            .get("dependencies")
+            .and_then(serde_json::Value::as_array)
+            .map(|dependencies| {
+                dependencies
+                    .iter()
+                    .filter(|dependency| {
+                        dependency
+                            .get("dependency_type")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("required")
+                    })
+                    .count()
+            })
+            .unwrap_or_default();
+        suggestions.push(PaperPluginSuggestion {
+            project_id: project_id.to_string(),
+            title: hit
+                .get("title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("Plugin sans titre")
+                .to_string(),
+            description: hit
+                .get("description")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string(),
+            version: version
+                .get("version_number")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("version inconnue")
+                .to_string(),
+            downloads: hit
+                .get("downloads")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default(),
+            project_url: format!("https://modrinth.com/plugin/{project_id}"),
+            required_dependencies,
+        });
+        if suggestions.len() == 10 {
+            break;
+        }
+    }
+    Ok(suggestions)
 }
 
 fn flatten_pi_os_entries(
@@ -4397,7 +4560,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.3")
+        .user_agent("MondeEnsemble/0.15.0")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

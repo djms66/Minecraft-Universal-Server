@@ -1,4 +1,4 @@
-# Monde Ensemble 0.14.0
+# Monde Ensemble 0.15.0
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -11,6 +11,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de les démarrer ou de les arrêter proprement avec le contrôle RCON limité à la boucle locale ;
 - permet d’ajouter ou de retirer des comptes Java et des gamertags Bedrock de la liste d’accès d’un serveur local, puis de l’activer après avoir vérifié qu’elle contient au moins un joueur ; l’application n’ouvre pas temporairement la liste pour laisser entrer un Bedrock inconnu ;
 - compare à la demande les versions locales aux catalogues officiels et bloque la validation d’une mise à jour si des mods, extensions, packs, liens, configuration Geyser modifiée ou runtime incompatible sont détectés ; ce contrôle est en lecture seule ;
+- en mode avancé, recherche des plugins Paper publiés pour la version Java exacte du serveur dans le catalogue Modrinth, sans toucher au serveur ; affiche les dépendances obligatoires et ouvre la fiche officielle ;
 - au démarrage demandé d’un serveur local géré, met à jour Paper, Geyser et Floodgate ensemble uniquement si les catalogues et les contenus sont compatibles ; crée une archive complète, prépare une nouvelle copie du serveur et conserve le dossier précédent ; en cas de blocage, démarre la version actuelle ;
 - conserve un aperçu lisible des dernières lignes et permet d’exporter le journal complet local ou Pi vers un nouveau fichier sans écraser une copie existante ;
 - choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
@@ -42,8 +43,9 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 - Une mise à jour de Paper peut modifier les données de monde au premier démarrage. L’application conserve donc une archive complète avant lancement et ne valide la mise à jour qu’après le signal serveur prêt et l’ouverture des ports Java et Bedrock. Les sauvegardes automatiques s’accumulent et exigent de l’espace libre; l’application ne supprime pas les anciennes copies.
 - Les profils locaux antérieurs à 0.8.0 n’ont pas le contrôle RCON local nécessaire aux boutons de démarrage, d’arrêt et de mise à jour. Une copie mise à jour locale prend de l’espace supplémentaire : l’ancienne version et l’archive sont conservées, sans suppression automatique.
 - La gestion des joueurs est disponible sur les nouveaux serveurs locaux et Pi gérés. Les profils Pi plus anciens peuvent être préparés depuis le tableau de bord après arrêt du serveur; deux copies des réglages sont créées avant toute modification. Sur Bedrock, Floodgate exige que le joueur ait déjà rejoint un serveur Geyser avant que sa commande de liste d’accès puisse l’ajouter.
-- L’ajout guidé de mods/plugins et l’installation de packs compatibles ne sont pas encore intégrés.
+- Le mode avancé propose un catalogue consultatif de plugins Paper Modrinth filtré sur la version Java exacte du serveur et les versions publiées pour Paper. Aucun plugin n’est installé : les dépendances et le retour arrière après démarrage doivent être gérés avant d’autoriser une installation.
 - Le contrôle du serveur repère maintenant l’absence du port TCP Bedrock, mais ne vérifie pas la redirection du routeur, le filtrage opérateur, l’authentification Microsoft, ni la compatibilité de chaque appareil. Le diagnostic `InitialConnection-149` reste donc partiel.
+- Le catalogue de plugins est informatif : la prise en charge déclarée Paper/Minecraft ne garantit ni le fonctionnement réel, ni la compatibilité avec Geyser et Bedrock. Aucun téléchargement ou ajout de plugin n’est autorisé dans cette version.
 - Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.
 - Une compilation sur Mac ne valide pas les installateurs Windows ou Raspberry Pi. Il faut encore compiler et vérifier ces cibles sur leurs machines correspondantes.
 

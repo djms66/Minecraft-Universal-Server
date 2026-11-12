@@ -554,6 +554,18 @@ async fn get_compatibility() -> Result<engine::CompatibilityReport, String> {
 }
 
 #[tauri::command]
+async fn search_paper_plugins(
+    minecraft_version: String,
+    query: String,
+) -> Result<Vec<engine::PaperPluginSuggestion>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::search_paper_plugins(&minecraft_version, &query)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn get_pi_os_recommendation() -> Result<engine::PiOsRecommendation, String> {
     tauri::async_runtime::spawn_blocking(engine::pi_os_recommendation)
         .await
@@ -925,6 +937,7 @@ pub fn run() {
             discover_pi_boot_targets,
             prepare_pi_sd,
             get_compatibility,
+            search_paper_plugins,
             get_pi_os_recommendation,
             create_server,
             inspect_local_server,

@@ -42,6 +42,15 @@ type PiUpdateCheck = {
 };
 type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
+type PaperPluginSuggestion = {
+  project_id: string;
+  title: string;
+  description: string;
+  version: string;
+  downloads: number;
+  project_url: string;
+  required_dependencies: number;
+};
 type DiscoveredPi = { host: string; address: string; model: string };
 type PiBootTarget = {
   id: string;
@@ -1099,7 +1108,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.14.0
+          MONDE ENSEMBLE <span>·</span> 0.15.0
         </div>
       </aside>
 
@@ -3188,6 +3197,33 @@ function Advanced({
   onRefresh: () => void;
   onCheckUpdates: () => void;
 }) {
+  const [pluginQuery, setPluginQuery] = useState("");
+  const [pluginSuggestions, setPluginSuggestions] = useState<
+    PaperPluginSuggestion[]
+  >([]);
+  const [pluginLoading, setPluginLoading] = useState(false);
+  const [pluginError, setPluginError] = useState("");
+  const pluginMinecraftVersion =
+    localServerStatus?.minecraft_java || piServerStatus?.minecraft_java || "";
+  const searchPlugins = async () => {
+    setPluginLoading(true);
+    setPluginError("");
+    try {
+      const suggestions = await invoke<PaperPluginSuggestion[]>(
+        "search_paper_plugins",
+        {
+          minecraftVersion: pluginMinecraftVersion,
+          query: pluginQuery,
+        },
+      );
+      setPluginSuggestions(suggestions);
+    } catch (error) {
+      setPluginError(String(error));
+      setPluginSuggestions([]);
+    } finally {
+      setPluginLoading(false);
+    }
+  };
   return (
     <div className="content-column">
       <div className="advanced-intro">
@@ -3324,6 +3360,81 @@ function Advanced({
           )}
         </div>
       )}
+      <section className="operation-card advanced-log-card">
+        <div className="eyebrow">CATALOGUE PRUDENT · PAPER</div>
+        <h3>Extensions annoncées compatibles</h3>
+        <p className="path-note">
+          Recherche parmi les plugins Modrinth dont une version publiée cible
+          exactement Minecraft Java {pluginMinecraftVersion || "—"} et Paper.
+          Cette consultation ne modifie pas le serveur.
+        </p>
+        <div className="pi-actions">
+          <input
+            aria-label="Rechercher une extension Paper"
+            value={pluginQuery}
+            maxLength={80}
+            onChange={(event) => setPluginQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (
+                event.key === "Enter" &&
+                pluginMinecraftVersion &&
+                !pluginLoading
+              )
+                void searchPlugins();
+            }}
+            placeholder="Ex. protection, carte, permissions"
+          />
+          <button
+            className="button secondary"
+            onClick={() => void searchPlugins()}
+            disabled={!pluginMinecraftVersion || pluginLoading || busy}
+          >
+            {pluginLoading ? "Recherche…" : "Chercher"}
+          </button>
+        </div>
+        {!pluginMinecraftVersion && (
+          <p className="path-note">
+            Ouvre d’abord le tableau du serveur pour charger sa version.
+          </p>
+        )}
+        {pluginError && <p className="pi-error">{pluginError}</p>}
+        {pluginSuggestions.length > 0 && (
+          <ul className="plugin-suggestion-list">
+            {pluginSuggestions.map((plugin) => (
+              <li key={plugin.project_id}>
+                <div>
+                  <strong>{plugin.title}</strong>
+                  <small>
+                    {plugin.version} ·{" "}
+                    {plugin.downloads.toLocaleString("fr-FR")} téléchargements
+                  </small>
+                  <p>{plugin.description}</p>
+                  {plugin.required_dependencies > 0 && (
+                    <small>
+                      Cette version annonce {plugin.required_dependencies}{" "}
+                      dépendance(s) obligatoire(s).
+                    </small>
+                  )}
+                </div>
+                <a href={plugin.project_url} target="_blank" rel="noreferrer">
+                  Détails
+                </a>
+              </li>
+            ))}
+          </ul>
+        )}
+        {pluginSuggestions.length === 0 && !pluginLoading && !pluginError && (
+          <p className="path-note">
+            Aucun résultat affiché avant une recherche.
+          </p>
+        )}
+        <p className="path-note">
+          Une version marquée compatible par son éditeur ne garantit pas son
+          comportement avec Geyser, les joueurs Bedrock ou les consoles.
+          L’installation automatique n’est pas activée tant que les dépendances
+          et le retour arrière après démarrage ne sont pas entièrement gérés.
+        </p>
+      </section>
       <div className="notice amber">
         <span>!</span>
         <p>

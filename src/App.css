@@ -1979,6 +1979,44 @@ button {
     Menlo,
     monospace;
 }
+.advanced-log-card .pi-actions input {
+  flex: 1 1 260px;
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #596057;
+  border-radius: 3px;
+  color: #263027;
+  background: #fff;
+  font: inherit;
+}
+.plugin-suggestion-list {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+  padding: 0;
+  list-style: none;
+}
+.plugin-suggestion-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 0;
+  border-top: 1px solid #596057;
+}
+.plugin-suggestion-list li > div {
+  display: grid;
+  gap: 4px;
+}
+.plugin-suggestion-list small,
+.plugin-suggestion-list p {
+  margin: 0;
+  color: #acb2a6;
+}
+.plugin-suggestion-list a {
+  align-self: center;
+  color: #c3e879;
+  white-space: nowrap;
+}
 @media (max-width: 800px) {
   .pi-dashboard {
     padding: 19px;

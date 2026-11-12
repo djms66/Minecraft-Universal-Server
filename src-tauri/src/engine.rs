@@ -5992,3 +5992,127 @@ fn network_error(error: reqwest::Error) -> String {
 fn io_error(error: impl std::fmt::Display) -> String {
     error.to_string()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        RemoveDirOnDrop, restore_backup, safe_archive_path, safe_version, valid_plugin_filename,
+    };
+    use flate2::{Compression, write::GzEncoder};
+    use std::{fs, fs::File, path::Path};
+    use tar::{Builder, Header};
+
+    fn test_directory() -> (std::path::PathBuf, RemoveDirOnDrop) {
+        let path = std::env::temp_dir().join(format!(
+            "monde-ensemble-test-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::create_dir_all(&path).unwrap();
+        (path.clone(), RemoveDirOnDrop(path))
+    }
+
+    fn write_gzip_tar_entry(path: &Path, entry_path: &str, contents: &[u8]) {
+        let file = File::create(path).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+        let mut header = Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o600);
+        let entry_path = entry_path.as_bytes();
+        assert!(entry_path.len() <= 100);
+        header.as_mut_bytes()[..entry_path.len()].copy_from_slice(entry_path);
+        header.set_cksum();
+        // The normal builder refuses traversal paths. Use a raw header here
+        // to model an archive crafted outside this application.
+        archive.append(&header, contents).unwrap();
+        archive.finish().unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn restore_archive_paths_must_stay_inside_server_root() {
+        for safe in [
+            "server",
+            "server/world/region/r.0.0.mca",
+            "server/server.properties",
+        ] {
+            assert!(
+                safe_archive_path(Path::new(safe)),
+                "expected safe path: {safe}"
+            );
+        }
+
+        for unsafe_path in [
+            "",
+            "world/level.dat",
+            "../outside.txt",
+            "server/../../outside.txt",
+            "server/world/../../../outside.txt",
+            "/server/world/level.dat",
+        ] {
+            assert!(
+                !safe_archive_path(Path::new(unsafe_path)),
+                "expected rejected path: {unsafe_path}"
+            );
+        }
+    }
+
+    #[test]
+    fn version_and_plugin_names_reject_path_and_command_syntax() {
+        assert!(safe_version("26.3"));
+        assert!(safe_version("1.21.11-1.21.12"));
+        assert!(!safe_version("../latest"));
+        assert!(!safe_version("26.3;rm"));
+
+        assert!(valid_plugin_filename("Geyser-Spigot.jar"));
+        assert!(!valid_plugin_filename("../Geyser.jar"));
+        assert!(!valid_plugin_filename("Geyser.jar.sh"));
+    }
+
+    #[test]
+    fn restore_rejects_traversal_before_creating_any_world_copy() {
+        let (root, _cleanup) = test_directory();
+        let archive_path = root.join("unsafe.tar.gz");
+        let destination = root.join("restored");
+        let outside = root.join("outside.txt");
+        write_gzip_tar_entry(
+            &archive_path,
+            "server/../../outside.txt",
+            b"must not escape",
+        );
+
+        let result = restore_backup(&archive_path, &destination, |_, _| {});
+
+        assert!(result.is_err());
+        assert!(!destination.exists());
+        assert!(!outside.exists());
+    }
+
+    #[test]
+    fn restore_copies_a_valid_world_without_changing_its_source_archive() {
+        let (root, _cleanup) = test_directory();
+        let source = root.join("source");
+        fs::create_dir_all(source.join("world")).unwrap();
+        fs::write(source.join("paper.jar"), b"server jar placeholder").unwrap();
+        fs::write(source.join("world/level.dat"), b"world data").unwrap();
+
+        let archive_path = root.join("world.tar.gz");
+        let encoder = GzEncoder::new(File::create(&archive_path).unwrap(), Compression::default());
+        let mut archive = Builder::new(encoder);
+        archive.append_dir_all("server", &source).unwrap();
+        archive.finish().unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+        let archive_hash = super::hash_file(&archive_path).unwrap();
+
+        let destination = root.join("restored");
+        let result = restore_backup(&archive_path, &destination, |_, _| {}).unwrap();
+        let restored_world = Path::new(&result.path).join("world/level.dat");
+
+        assert_eq!(fs::read(restored_world).unwrap(), b"world data");
+        assert_eq!(
+            fs::read(source.join("world/level.dat")).unwrap(),
+            b"world data"
+        );
+        assert_eq!(super::hash_file(&archive_path).unwrap(), archive_hash);
+    }
+}

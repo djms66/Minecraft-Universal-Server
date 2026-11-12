@@ -671,3 +671,31 @@ fn restrict_file_permissions(path: &Path) -> Result<(), String> {
 fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{network_config, user_data};
+
+    #[test]
+    fn cloud_init_user_data_is_multiline_and_enables_ssh_at_root() {
+        let config = user_data(
+            "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey monde-ensemble",
+            "monde-ensemble-test",
+        );
+
+        assert!(config.starts_with("#cloud-config\nhostname: monde-ensemble-test\n"));
+        assert!(config.contains("\nenable_ssh: true\nruncmd:\n"));
+        assert!(!config.contains("\\n"));
+        assert!(config.ends_with('\n'));
+    }
+
+    #[test]
+    fn network_config_preserves_wifi_values_as_yaml_strings() {
+        let config = network_config("Maison: 2.4G", "mot de passe \"secret\"", "fr");
+
+        assert!(config.starts_with("version: 2\nethernets:\n"));
+        assert!(config.contains("regulatory-domain: FR\n"));
+        assert!(config.contains("\"Maison: 2.4G\":\n"));
+        assert!(config.contains("password: \"mot de passe \\\"secret\\\"\"\n"));
+    }
+}

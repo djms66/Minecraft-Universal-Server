@@ -905,6 +905,30 @@ pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
     if !geyser_config_matches_profile(&server_dir, &profile) {
         reasons.push("La configuration Geyser a été modifiée ou ne peut pas être reconnue comme configuration standard; la mise à jour automatique est bloquée.".into());
     }
+    let bedrock_packs = server_dir.join("plugins/Geyser-Spigot/packs");
+    match fs::read_dir(&bedrock_packs) {
+        Ok(entries) => {
+            let mut custom_pack_found = false;
+            for entry in entries {
+                match entry {
+                    Ok(entry) if !entry.file_name().to_string_lossy().starts_with('.') => {
+                        custom_pack_found = true;
+                    }
+                    Err(_) => reasons.push(
+                        "Le dossier des packs Bedrock est illisible; la mise à jour est bloquée."
+                            .into(),
+                    ),
+                    _ => {}
+                }
+            }
+            if custom_pack_found {
+                reasons.push("Des packs Bedrock personnalisés sont présents; leur compatibilité doit être vérifiée avant la mise à jour.".into());
+            }
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(_) => reasons
+            .push("Le dossier des packs Bedrock est illisible; la mise à jour est bloquée.".into()),
+    }
 
     let runtime_name = if cfg!(windows) { "java.exe" } else { "java" };
     let runtime_present = WalkDir::new(server_dir.join("runtime"))
@@ -2133,7 +2157,7 @@ pub fn check_pi_update(
     let latest = compatibility()?;
     let destination = format!("{username}@{host}");
     let command = format!(
-        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nPROFILE_SHA256='; sha256sum \"$d/monde-ensemble-profile.json\" | cut -d' ' -f1; printf 'FILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'PAPER_SHA256='; sha256sum \"$d/paper.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_SHA256='; sha256sum \"$d/plugins/Geyser-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'FLOODGATE_SHA256='; sha256sum \"$d/plugins/Floodgate-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nSYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
+        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nPROFILE_SHA256='; sha256sum \"$d/monde-ensemble-profile.json\" | cut -d' ' -f1; printf 'FILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'PAPER_SHA256='; sha256sum \"$d/paper.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_SHA256='; sha256sum \"$d/plugins/Geyser-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'FLOODGATE_SHA256='; sha256sum \"$d/plugins/Floodgate-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nGEYSER_PACKS='; if find \"$d/plugins/Geyser-Spigot/packs\" -type f -not -name '.*' -print -quit 2>/dev/null | grep -q .; then echo yes; else echo no; fi; printf 'SYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
     );
     let output = run_ssh(&destination, &command)?;
     let (_, profile_block) = output
@@ -2280,6 +2304,9 @@ pub fn check_pi_update(
     if tail.contains("SYMLINKS=yes") {
         reasons
             .push("Le serveur contient des liens symboliques; la copie sûre est bloquée.".into());
+    }
+    if tail.contains("GEYSER_PACKS=yes") {
+        reasons.push("Des packs Bedrock personnalisés sont présents; leur compatibilité doit être vérifiée avant la mise à jour.".into());
     }
     if tail
         .lines()

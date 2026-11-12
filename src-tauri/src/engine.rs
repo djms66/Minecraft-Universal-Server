@@ -4758,6 +4758,7 @@ pub fn create_backup(
     if !source.is_dir() {
         return Err("Choisis le dossier qui contient paper.jar ou server.properties.".into());
     }
+    ensure_backup_ports_closed(&source)?;
     let output_parent = output_file
         .parent()
         .ok_or_else(|| "Choisis l’emplacement de la sauvegarde.".to_string())?;
@@ -4864,6 +4865,59 @@ pub fn create_backup(
     })
 }
 
+/// A user checkbox cannot prove that a manually launched Minecraft process
+/// has stopped. Check the configured game ports immediately before copying.
+fn ensure_backup_ports_closed(server_dir: &Path) -> Result<(), String> {
+    let profile_path = server_dir.join("monde-ensemble-profile.json");
+    let profile = match fs::symlink_metadata(&profile_path) {
+        Ok(metadata) if metadata.file_type().is_file() => fs::read(&profile_path)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok()),
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err("Le profil du serveur est un lien symbolique; sauvegarde bloquée.".into());
+        }
+        _ => None,
+    };
+    let profile_port = |key: &str| {
+        profile
+            .as_ref()?
+            .get(key)?
+            .as_u64()
+            .and_then(|value| u16::try_from(value).ok())
+            .filter(|port| *port > 0)
+    };
+    let properties_path = server_dir.join("server.properties");
+    let properties = match fs::symlink_metadata(&properties_path) {
+        Ok(metadata) if metadata.file_type().is_file() => {
+            fs::read_to_string(&properties_path).map_err(io_error)?
+        }
+        Ok(metadata) if metadata.file_type().is_symlink() => {
+            return Err(
+                "Les réglages du serveur sont un lien symbolique; sauvegarde bloquée.".into(),
+            );
+        }
+        _ => String::new(),
+    };
+    let property_port = |key: &str| {
+        properties
+            .lines()
+            .find_map(|line| line.trim().strip_prefix(&format!("{key}=")))
+            .and_then(|value| value.trim().parse::<u16>().ok())
+            .filter(|port| *port > 0)
+    };
+    let java_port = profile_port("java_port")
+        .or_else(|| property_port("server-port"))
+        .unwrap_or(JAVA_DEFAULT_PORT);
+    let bedrock_port = profile_port("bedrock_port");
+    let java_busy = !tcp_port_available(java_port);
+    let bedrock_busy =
+        bedrock_port.is_some_and(|port| !tcp_port_available(port) || !udp_port_available(port));
+    if java_busy || bedrock_busy {
+        return Err("Un port Minecraft est encore actif. Arrête le serveur puis relance la sauvegarde; aucun fichier n’a été copié.".into());
+    }
+    Ok(())
+}
+
 pub fn create_pi_backup(
     host: &str,
     username: &str,
@@ -4907,6 +4961,7 @@ if find "$d" -type l -print -quit | grep -q .; then echo SYMLINK_FOUND; exit 6; 
 pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
 case "$pid" in ''|*[!0-9]*) pid=;; esac
 if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 7; fi
+if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo SERVER_RUNNING; exit 7; fi
 printf 'TOTAL='; du -sb "$d" | awk '{{print $1}}'
 printf 'FREE='; df -B1 --output=avail "$HOME" | tail -1 | tr -dc '0-9'
 "#
@@ -4945,7 +5000,12 @@ umask 077
 d="$HOME/{server_folder}"
 a="$HOME/{remote_archive}"
 test ! -e "$a"
+pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+case "$pid" in ''|*[!0-9]*) pid=;; esac
+if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 7; fi
+if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo SERVER_RUNNING; exit 7; fi
 tar -czf "$a" -C "$HOME/{parent_folder}" server
+tar -tzf "$a" >/dev/null
 sha256sum "$a" | awk '{{print $1}}'
 "#
     );
@@ -4953,9 +5013,13 @@ sha256sum "$a" | awk '{{print $1}}'
         .map_err(|error| {
             let cleanup = format!("rm -f -- \"$HOME/{remote_archive}\"");
             let _ = run_ssh(&destination, &cleanup);
-            format!(
-                "La sauvegarde Pi n’a pas pu être préparée; le monde n’a pas été modifié. {error}"
-            )
+            if error.contains("SERVER_RUNNING") {
+                "Un port Minecraft est occupé ou le serveur a redémarré. Arrête-le puis relance la sauvegarde; aucun fichier du monde n’a été modifié.".to_string()
+            } else {
+                format!(
+                    "La sauvegarde Pi n’a pas pu être préparée; le monde n’a pas été modifié. {error}"
+                )
+            }
         })?
         .trim()
         .to_string();
@@ -5430,7 +5494,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.18.0")
+        .user_agent("MondeEnsemble/0.18.1")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

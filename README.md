@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.0
+# Monde Ensemble 0.18.1
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -16,7 +16,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - conserve un aperçu lisible des dernières lignes et permet d’exporter le journal complet local ou Pi vers un nouveau fichier sans écraser une copie existante ;
 - choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
 - adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
-- crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive qui porte déjà le même nom ;
+- crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive existante ; vérifie que les ports Minecraft configurés sont libres avant de copier le monde ;
 - vérifie le contrôle d’intégrité et les chemins d’une archive avant restauration, puis restaure dans un nouveau dossier ;
 - recherche les Raspberry Pi qui annoncent SSH sur le réseau local et affiche leur modèle et leur adresse ;
 - repère en lecture seule les cartes SD et supports USB externes sur Mac, Windows ou Linux pour préparer un futur parcours Pi vierge ;
@@ -94,6 +94,7 @@ Les versions Windows et Linux/Raspberry Pi doivent être produites et vérifiée
 
 - pas de remplacement de dossier lors d’une installation ou restauration ;
 - vérification HTTPS et SHA-256 des fichiers téléchargés ;
+- une sauvegarde n’est pas lancée tant que les ports Minecraft du serveur sont encore actifs ; sur Pi, ce contrôle est répété juste avant la création et l’archive est relue ;
 - pas de mot de passe SSH enregistré ni de validation automatique de clé d’hôte ;
 - sauvegarde refusée si l’utilisateur ne confirme pas l’arrêt du serveur ;
 - restauration bloquée pour les liens et chemins d’archive dangereux ;

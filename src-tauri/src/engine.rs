@@ -4825,6 +4825,7 @@ pub fn create_backup(
         .map_err(io_error)?
         .sync_all()
         .map_err(io_error)?;
+    ensure_backup_ports_closed(&source)?;
     progress("Contrôle de l’archive et calcul de son empreinte…", 90);
     let checksum = hash_file(&staging)?;
     // A hard link in the same folder publishes the complete file atomically
@@ -5006,6 +5007,10 @@ if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$p
 if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo SERVER_RUNNING; exit 7; fi
 tar -czf "$a" -C "$HOME/{parent_folder}" server
 tar -tzf "$a" >/dev/null
+pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+case "$pid" in ''|*[!0-9]*) pid=;; esac
+if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo SERVER_RUNNING; exit 7; fi
+if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo SERVER_RUNNING; exit 7; fi
 sha256sum "$a" | awk '{{print $1}}'
 "#
     );
@@ -5494,7 +5499,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.18.1")
+        .user_agent("MondeEnsemble/0.18.2")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

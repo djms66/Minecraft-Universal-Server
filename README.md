@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.20
+# Monde Ensemble 0.18.21
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -31,6 +31,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
 - transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
 - affiche l’adresse et les ports à saisir dans Minecraft, avec le chemin du dossier et des journaux sur le Pi.
+- repère sur le Pi l’interface réseau utilisée pour l’adresse locale, affiche son adresse matérielle et guide la réservation DHCP permanente dans l’application Free ; les valeurs IP et matérielle sont copiables depuis le tableau de bord.
 - conserve le Pi installé dans l’application, revérifie son état et ses versions Minecraft à l’ouverture, affiche les dernières lignes du journal et peut relancer uniquement cette installation si ses ports sont libres ; l’installation ajoute aussi une tâche de redémarrage automatique si le service de planification du Pi est actif.
 - quand un serveur Pi géré est arrêté puis relancé depuis l’application, compare les catalogues Java/Bedrock et les builds Paper/Geyser/Floodgate ; si le profil est propre et que le runtime Java reste compatible, télécharge les trois fichiers contrôlés, archive le serveur complet, met le groupe à jour et vérifie le redémarrage ; en cas d’échec, restaure l’archive précédente ; chaque sauvegarde reste conservée sur le Pi.
 - permet d’arrêter proprement ce serveur Pi depuis son tableau de bord ; le processus n’est jamais forcé à quitter s’il ne s’arrête pas correctement.
@@ -41,7 +42,7 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 
 - La préparation d’un Pi neuf est intégrée, mais l’écriture réelle sur carte/SSD et le premier démarrage doivent encore être validés sur chaque cible Mac, Windows et Linux, avec leurs appareils et supports physiques. Le paquet Mac local ne certifie pas les autres plateformes.
 - Le démarrage automatique après redémarrage dépend du service de planification déjà actif sur le Pi. L’application en vérifie la présence; sinon elle affiche que cette fonction n’est pas configurée.
-- Elle n’a pas encore configuré une réservation DHCP dans la Freebox : l’adresse affichée est celle observée sur le réseau et peut changer. Pour une adresse durable, réserve l’adresse du Pi dans le routeur ; l’application ne prétend pas l’avoir fixée.
+- L’application n’écrit pas dans la Freebox et ne peut donc pas confirmer elle-même le bail DHCP. Le tableau de bord fournit l’adresse IP et matérielle ainsi qu’un parcours guidé pour enregistrer le bail permanent dans l’application Free ; l’adresse ne devient durable qu’après cette confirmation dans la box.
 - La mise à jour coordonnée automatique est limitée aux serveurs locaux et Pi créés par Monde Ensemble. Le serveur doit être arrêté depuis l’application ; un mod, plugin non géré, pack de données, pack client, lien symbolique, runtime Java incompatible, espace insuffisant ou catalogue indisponible reporte la mise à jour et conserve la version actuelle.
 - Une mise à jour de Paper peut modifier les données de monde au premier démarrage. L’application conserve donc une archive complète avant lancement et ne valide la mise à jour qu’après le signal serveur prêt et l’ouverture des ports Java et Bedrock. Les sauvegardes automatiques s’accumulent et exigent de l’espace libre; l’application ne supprime pas les anciennes copies.
 - Les profils locaux antérieurs à 0.8.0 n’ont pas le contrôle RCON local nécessaire aux boutons de démarrage, d’arrêt et de mise à jour. Une copie mise à jour locale prend de l’espace supplémentaire : l’ancienne version et l’archive sont conservées, sans suppression automatique.
@@ -64,7 +65,7 @@ Pour les clients Bedrock 26.60 et plus récents, Geyser doit utiliser NetherNet 
 
 Les serveurs Pi créés par cette version disposent d’une sauvegarde complète vers l’ordinateur, d’une restauration de sauvegarde vers un nouveau dossier Pi et d’une liste d’accès Java/Bedrock gérée depuis le tableau de bord. Le contrôle RCON reste limité à la boucle locale du Pi et chaque action passe par un tunnel SSH temporaire. Les installations Pi plus anciennes affichent un message dédié au lieu de modifier leur configuration en silence. La restauration vers Pi exige une archive contenant un profil Monde Ensemble reconnu et Paper, Geyser et Floodgate ; elle refuse les liens, les chemins dangereux, un serveur actif, une architecture non ARM64 ou un espace insuffisant. La copie restaurée reste arrêtée jusqu’à ce que l’utilisateur la démarre depuis le tableau de bord.
 
-Sur un Pi déjà démarré, choisis « Sur un Raspberry Pi », saisis le nom de son compte, puis sélectionne « Trouver mon Pi ». L’application cherche sur le réseau local; si plusieurs Pi répondent, choisis celui qui convient. Elle utilise uniquement une clé SSH déjà approuvée et refuse les connexions qui demandent un mot de passe ou une clé inconnue. Ensuite, confirme l’EULA et choisis « Installer et démarrer le serveur ». La confirmation indique l’adresse et les ports. Les clients du même réseau local utilisent cette adresse; l’accès depuis l’extérieur demande aussi un réglage du routeur.
+Sur un Pi déjà démarré, choisis « Sur un Raspberry Pi », saisis le nom de son compte, puis sélectionne « Trouver mon Pi ». L’application cherche sur le réseau local; si plusieurs Pi répondent, choisis celui qui convient. Elle utilise uniquement une clé SSH déjà approuvée et refuse les connexions qui demandent un mot de passe ou une clé inconnue. Ensuite, confirme l’EULA et choisis « Installer et démarrer le serveur ». La confirmation indique l’adresse et les ports. Les clients du même réseau local utilisent cette adresse; l’accès depuis l’extérieur demande aussi un réglage du routeur. Le tableau du Pi indique son interface active, son IP et son adresse matérielle. Ouvre « Garder cette adresse sur la durée » et utilise les deux boutons de copie pour ajouter un bail statique ou permanent dans l’application Free : Mes équipements Freebox → Server internet → Paramètres réseau avancés → DHCP. Actualise le tableau après l’enregistrement pour relire l’adresse courante.
 
 Pour un Pi neuf, branche sa carte SD ou son SSD à l’ordinateur qui exécute l’application. Détecte le support, relis son nom et sa capacité, puis confirme son effacement. L’application télécharge Raspberry Pi Imager depuis la publication officielle dont l’empreinte est vérifiée, écrit Raspberry Pi OS Lite 64 bits et prépare Ethernet ou le Wi-Fi. Le mot de passe Wi-Fi est effacé du support après cette configuration ; préfère le câble réseau si tu ne veux pas l’écrire temporairement sur la carte. Insère ensuite le support, branche le Pi au même routeur et allume-le. Le bouton de fin tente d’abord de joindre le nom unique inscrit sur la carte, puis recherche le service SSH sur le réseau local. Il affiche chaque tentative avant d’installer et de contrôler le serveur. La mémoire, le modèle, les ports et l’espace libre sont vérifiés avant l’installation de Minecraft. L’interface reste sur Mac/PC ; le Pi héberge le serveur.
 
@@ -91,7 +92,7 @@ npm run tauri dev
 npm run tauri build
 ```
 
-Les versions Windows et Linux/Raspberry Pi doivent être produites et vérifiées sur des appareils de ces plateformes. Une compilation locale Mac seule ne suffit pas pour les certifier.
+Le paquet Windows x64 0.18.21 a été produit par compilation croisée depuis Mac, mais doit encore être lancé sur Windows pour valider son fonctionnement réel. La préparation d’un support Pi doit être vérifiée avec une carte/SSD de test et un Raspberry Pi physique ; le paquet ARM64 Linux ne valide pas Raspberry Pi OS Lite ni son premier démarrage.
 
 ## Principes de sécurité
 

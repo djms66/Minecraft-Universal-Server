@@ -147,9 +147,14 @@ pub fn flash_pi_os(
 
     // Sensitive cloud-init files are removed by the guard on success or error.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
+    let network_instructions = if wifi_ssid.trim().is_empty() {
+        "relie le Pi au même routeur que cet ordinateur avec un câble réseau"
+    } else {
+        "laisse le Pi rejoindre le réseau Wi-Fi configuré dans cette application, sur le même routeur que cet ordinateur"
+    };
     Ok(PiFlashResult {
         detail: format!(
-            "Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}. Insère maintenant le support dans le Pi, relie-le au même routeur par câble réseau et allume-le. L’application pourra alors terminer la configuration du serveur."
+            "Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}. Insère maintenant le support dans le Pi, {network_instructions}, puis allume-le. L’application pourra alors terminer la configuration du serveur."
         ),
         log_path: log_path.display().to_string(),
         imager_version: IMAGER_VERSION.into(),

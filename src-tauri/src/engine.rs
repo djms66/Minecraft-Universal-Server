@@ -86,9 +86,28 @@ pub struct PiUpdateCheck {
     pub latest_java: String,
     pub latest_bedrock: String,
     pub latest_geyser: String,
+    pub latest_geyser_build: u64,
     pub latest_floodgate: String,
+    pub latest_floodgate_build: u64,
+    pub latest_paper_build: u64,
+    pub profile: serde_json::Value,
+    pub profile_sha256: String,
+    pub paper_sha256: String,
+    pub geyser_sha256: String,
+    pub floodgate_sha256: String,
     pub reasons: Vec<String>,
     pub checked_at: String,
+}
+
+enum PiUpdateFailure {
+    Safe(String),
+    Uncertain(String),
+}
+
+impl From<String> for PiUpdateFailure {
+    fn from(value: String) -> Self {
+        Self::Safe(value)
+    }
 }
 
 #[derive(Serialize)]
@@ -130,6 +149,11 @@ pub struct PiServerStatus {
     pub autostart_configured: bool,
     pub minecraft_java: String,
     pub minecraft_bedrock: String,
+    pub paper_build_id: u64,
+    pub geyser_version: String,
+    pub geyser_build_id: u64,
+    pub floodgate_version: String,
+    pub floodgate_build_id: u64,
     pub java_port: u16,
     pub bedrock_port: u16,
     pub address: String,
@@ -891,7 +915,7 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
     let output = run_ssh(&destination, &command)?;
     let (header, after_profile) = output
@@ -914,7 +938,10 @@ pub fn inspect_pi_server(
     };
     Ok(PiServerStatus {
         running: get("RUNNING=") == "yes",
-        ready: get("RUNNING=") == "yes" && get("READY=") == "yes",
+        ready: get("RUNNING=") == "yes"
+            && get("READY=") == "yes"
+            && get("JAVA_PORT=") == "yes"
+            && get("BEDROCK_PORT=") == "yes",
         java_port_open: get("JAVA_PORT=") == "yes",
         bedrock_port_open: get("BEDROCK_PORT=") == "yes",
         autostart_configured: get("AUTOSTART=") == "yes",
@@ -928,6 +955,28 @@ pub fn inspect_pi_server(
             .and_then(serde_json::Value::as_str)
             .unwrap_or("")
             .to_string(),
+        paper_build_id: profile
+            .get("paper_build_id")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
+        geyser_version: profile
+            .get("geyser")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        geyser_build_id: profile
+            .get("geyser_build_id")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
+        floodgate_version: profile
+            .get("floodgate")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("")
+            .to_string(),
+        floodgate_build_id: profile
+            .get("floodgate_build_id")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default(),
         java_port: profile
             .get("java_port")
             .and_then(serde_json::Value::as_u64)
@@ -958,7 +1007,7 @@ pub fn check_pi_update(
     let latest = compatibility()?;
     let destination = format!("{username}@{host}");
     let command = format!(
-        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nFILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nSYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
+        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nPROFILE_SHA256='; sha256sum \"$d/monde-ensemble-profile.json\" | cut -d' ' -f1; printf 'FILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'PAPER_SHA256='; sha256sum \"$d/paper.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_SHA256='; sha256sum \"$d/plugins/Geyser-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'FLOODGATE_SHA256='; sha256sum \"$d/plugins/Floodgate-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nSYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
     );
     let output = run_ssh(&destination, &command)?;
     let (_, profile_block) = output
@@ -1019,6 +1068,18 @@ pub fn check_pi_update(
     let current_floodgate_build = profile
         .get("floodgate_build_id")
         .and_then(serde_json::Value::as_u64);
+    let output_field = |key: &str| {
+        output
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let profile_sha256 = output_field("PROFILE_SHA256=");
+    let paper_sha256 = output_field("PAPER_SHA256=");
+    let geyser_sha256 = output_field("GEYSER_SHA256=");
+    let floodgate_sha256 = output_field("FLOODGATE_SHA256=");
     let update_available = current_java != latest.java_version
         || current_bedrock != latest.bedrock_versions
         || current_geyser != latest_geyser
@@ -1034,6 +1095,18 @@ pub fn check_pi_update(
         != Some("Monde Ensemble")
     {
         reasons.push("Cette installation n’a pas un profil Monde Ensemble reconnu.".into());
+    }
+    for (name, checksum) in [
+        ("profil", profile_sha256.as_str()),
+        ("Paper", paper_sha256.as_str()),
+        ("Geyser", geyser_sha256.as_str()),
+        ("Floodgate", floodgate_sha256.as_str()),
+    ] {
+        if !valid_sha256(checksum) {
+            reasons.push(format!(
+                "L’empreinte du fichier {name} n’a pas pu être vérifiée."
+            ));
+        }
     }
     for (key, label) in [
         ("FILES_PAPER=yes", "Paper"),
@@ -1100,24 +1173,405 @@ pub fn check_pi_update(
         latest_java: latest.java_version,
         latest_bedrock: latest.bedrock_versions,
         latest_geyser,
+        latest_geyser_build: latest.geyser_build_id,
         latest_floodgate,
+        latest_floodgate_build: latest.floodgate_build_id,
+        latest_paper_build: latest.paper_build_id,
+        profile,
+        profile_sha256,
+        paper_sha256,
+        geyser_sha256,
+        floodgate_sha256,
         reasons,
         checked_at: latest.checked_at,
     })
 }
 
+/// Applies the newest official Paper/Geyser/Floodgate bundle to an idle,
+/// managed Pi server. The full server folder is archived before replacement;
+/// the new server must pass startup checks or the archive is restored.
+fn update_pi_server_if_ready(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    check: &PiUpdateCheck,
+    progress: &impl Fn(&str, u8),
+) -> Result<Option<String>, PiUpdateFailure> {
+    if !check.ready || !check.update_available {
+        return Ok(None);
+    }
+
+    progress(
+        "Préparation des versions officielles et vérification des fichiers…",
+        10,
+    );
+    let client = client()?;
+    let supported = supported_versions(&client)?;
+    if supported.java != check.latest_java || supported.bedrock != check.latest_bedrock {
+        return Err("Le catalogue de compatibilité a changé pendant la préparation. Aucun fichier du serveur n’a été modifié; réessaie.".to_string().into());
+    }
+    let required_java_runtime = java_major_for(&supported.java).map_err(PiUpdateFailure::from)?;
+    if check
+        .profile
+        .get("java_runtime")
+        .and_then(serde_json::Value::as_u64)
+        != Some(required_java_runtime as u64)
+    {
+        return Err(PiUpdateFailure::Safe(
+            "Cette mise à jour demanderait un autre runtime Java. Le serveur actuel reste en place jusqu’à ce que l’application sache aussi mettre Java à niveau.".into(),
+        ));
+    }
+    let paper = paper_build(&client, &supported.java)?;
+    let geyser = bridge_build(&client, "geyser", "spigot")?;
+    let floodgate = bridge_build(&client, "floodgate", "spigot")?;
+    if paper.id != check.latest_paper_build
+        || geyser.build != check.latest_geyser_build
+        || floodgate.build != check.latest_floodgate_build
+    {
+        return Err("Les versions officielles ont changé pendant la préparation. Aucun fichier du serveur n’a été modifié; relance la vérification.".to_string().into());
+    }
+    let paper_download = paper.downloads.get("server:default").ok_or_else(|| {
+        "Le fichier Paper officiel est introuvable; serveur inchangé.".to_string()
+    })?;
+    let geyser_download = geyser.downloads.get("spigot").ok_or_else(|| {
+        "Le fichier Geyser officiel est introuvable; serveur inchangé.".to_string()
+    })?;
+    let floodgate_download = floodgate.downloads.get("spigot").ok_or_else(|| {
+        "Le fichier Floodgate officiel est introuvable; serveur inchangé.".to_string()
+    })?;
+    let paper_checksum = paper_download.checksums.get("sha256").ok_or_else(|| {
+        "Paper n’a pas publié d’empreinte de contrôle; serveur inchangé.".to_string()
+    })?;
+
+    let id = Uuid::new_v4().simple().to_string();
+    let staging = std::env::temp_dir().join(format!("monde-ensemble-update-{id}"));
+    fs::create_dir(&staging).map_err(io_error)?;
+    let _cleanup_staging = RemoveDirectoryOnDrop(staging.clone());
+    fs::create_dir(staging.join("plugins")).map_err(io_error)?;
+    let artifacts = [
+        Artifact {
+            name: "paper.jar".into(),
+            version: format!("Paper {} build {}", supported.java, paper.id),
+            url: paper_download.url.clone(),
+            checksum: paper_checksum.clone(),
+        },
+        Artifact {
+            name: "Geyser-Spigot.jar".into(),
+            version: format!("Geyser {} build {}", geyser.version, geyser.build),
+            url: "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot".into(),
+            checksum: geyser_download.sha256.clone(),
+        },
+        Artifact {
+            name: "Floodgate-Spigot.jar".into(),
+            version: format!("Floodgate {} build {}", floodgate.version, floodgate.build),
+            url: "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot".into(),
+            checksum: floodgate_download.sha256.clone(),
+        },
+    ];
+    let destinations = [
+        staging.join("paper.jar"),
+        staging.join("plugins/Geyser-Spigot.jar"),
+        staging.join("plugins/Floodgate-Spigot.jar"),
+    ];
+    for (index, (artifact, destination)) in artifacts.iter().zip(&destinations).enumerate() {
+        progress(
+            &format!("Téléchargement et contrôle de {}…", artifact.version),
+            15 + index as u8 * 15,
+        );
+        download_verified(&client, artifact, destination)?;
+    }
+
+    let mut profile = check.profile.clone();
+    let object = profile.as_object_mut().ok_or_else(|| {
+        "Le profil du serveur n’est pas un objet lisible; serveur inchangé.".to_string()
+    })?;
+    object.insert("minecraft_java".into(), serde_json::json!(supported.java));
+    object.insert(
+        "minecraft_bedrock".into(),
+        serde_json::json!(supported.bedrock),
+    );
+    object.insert("paper_build_id".into(), serde_json::json!(paper.id));
+    object.insert("geyser".into(), serde_json::json!(geyser.version));
+    object.insert("geyser_build_id".into(), serde_json::json!(geyser.build));
+    object.insert("floodgate".into(), serde_json::json!(floodgate.version));
+    object.insert(
+        "floodgate_build_id".into(),
+        serde_json::json!(floodgate.build),
+    );
+    object.insert(
+        "updated_at".into(),
+        serde_json::json!(Utc::now().to_rfc3339()),
+    );
+    fs::write(
+        staging.join("monde-ensemble-profile.json"),
+        serde_json::to_vec_pretty(&profile).map_err(|error| error.to_string())?,
+    )
+    .map_err(io_error)?;
+
+    let mut checksums = String::new();
+    for name in [
+        "paper.jar",
+        "plugins/Geyser-Spigot.jar",
+        "plugins/Floodgate-Spigot.jar",
+        "monde-ensemble-profile.json",
+    ] {
+        let checksum = hash_file(&staging.join(name))?;
+        checksums.push_str(&format!("{checksum}  {name}\n"));
+    }
+    fs::write(staging.join("SHA256SUMS"), checksums).map_err(io_error)?;
+
+    let archive_path = staging.with_extension("tar.gz");
+    let _cleanup_archive = RemoveFileOnDrop(archive_path.clone());
+    let archive_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&archive_path)
+        .map_err(io_error)?;
+    let mut archive = Builder::new(GzEncoder::new(archive_file, Compression::fast()));
+    archive
+        .append_dir_all("update", &staging)
+        .map_err(io_error)?;
+    archive
+        .into_inner()
+        .map_err(io_error)?
+        .finish()
+        .map_err(io_error)?
+        .sync_all()
+        .map_err(io_error)?;
+
+    let destination = format!("{username}@{host}");
+    let remote_archive = format!("Monde-Ensemble-update-{id}.tar.gz");
+    progress("Envoi chiffré des fichiers contrôlés au Pi…", 65);
+    let scp = Command::new("scp")
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            archive_path.to_string_lossy().as_ref(),
+            &format!("{destination}:{remote_archive}"),
+        ])
+        .output()
+        .map_err(|_| "L’outil de transfert sécurisé n’est pas disponible.".to_string())?;
+    if !scp.status.success() {
+        return Err(
+            "Le transfert de la mise à jour a échoué; le serveur n’a pas été modifié."
+                .to_string()
+                .into(),
+        );
+    }
+
+    let parent_folder = server_folder
+        .strip_suffix("/server")
+        .ok_or_else(|| "Le dossier de serveur enregistré n’est pas reconnu.".to_string())?;
+    let backup_name = format!("mise-a-jour-{id}.tar.gz");
+    let profile_sha256 = &check.profile_sha256;
+    let paper_sha256 = &check.paper_sha256;
+    let geyser_sha256 = &check.geyser_sha256;
+    let floodgate_sha256 = &check.floodgate_sha256;
+    let remote_script = format!(
+        r#"set -eu
+d="$HOME/{server_folder}"
+parent="$HOME/{parent_folder}"
+upload="$HOME/{remote_archive}"
+work="$parent/.update-{id}"
+backup="$parent/backups/{backup_name}"
+mkdir -p "$parent/backups"
+test -d "$d" && test -s "$upload"
+lock="$parent/.update.lock"
+cleanup_lock() {{ rmdir "$lock" 2>/dev/null || true; }}
+if ! mkdir "$lock" 2>/dev/null; then echo 'UPDATE_BUSY'; rm -f "$upload"; exit 0; fi
+backup_ready=no
+transaction_complete=no
+on_exit() {{
+  rc=$?
+  trap - EXIT
+  if [ "$backup_ready" = yes ] && [ "$transaction_complete" != yes ]; then rollback_on_error "$rc"; fi
+  cleanup_lock
+  if [ "$rc" -ne 0 ] && [ "$backup_ready" != yes ]; then rm -rf "$work"; rm -f "$upload" "$backup.preparing" "$backup.preparing.sha256"; echo 'UPDATE_PREP_FAILED'; exit 0; fi
+  exit "$rc"
+}}
+trap on_exit EXIT
+pid="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+case "$pid" in ''|*[!0-9]*) pid=;; esac
+if test -n "$pid" && kill -0 "$pid" 2>/dev/null && test "$(awk '{{print $3}}' "/proc/$pid/stat" 2>/dev/null || true)" != Z && test "$(readlink -f "/proc/$pid/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$pid/cmdline" 2>/dev/null | grep -q 'paper.jar'; then echo 'UPDATE_SERVER_RUNNING'; rm -f "$upload"; exit 0; fi
+if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo 'UPDATE_PORTS_BUSY'; rm -f "$upload"; exit 0; fi
+if find "$d" -type l -print -quit | grep -q .; then echo 'UPDATE_LINK_FOUND'; rm -f "$upload"; exit 0; fi
+test "$(sha256sum "$d/monde-ensemble-profile.json" | cut -d' ' -f1)" = "{profile_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
+test "$(sha256sum "$d/paper.jar" | cut -d' ' -f1)" = "{paper_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
+test "$(sha256sum "$d/plugins/Geyser-Spigot.jar" | cut -d' ' -f1)" = "{geyser_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
+test "$(sha256sum "$d/plugins/Floodgate-Spigot.jar" | cut -d' ' -f1)" = "{floodgate_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
+used="$(du -sb "$d" | awk '{{print $1}}')"
+free="$(df -Pk "$HOME" | awk 'END {{print $4 * 1024}}')"
+pkg="$(wc -c < "$upload" | tr -d ' ')"
+need=$((2 * used + 2 * pkg + 536870912))
+if [ "$free" -lt "$need" ]; then echo 'UPDATE_SPACE_LOW'; rm -f "$upload"; exit 0; fi
+mkdir "$work"
+tar -xzf "$upload" -C "$work"
+(cd "$work/update" && sha256sum -c SHA256SUMS)
+test -s "$work/update/paper.jar" && test -s "$work/update/plugins/Geyser-Spigot.jar" && test -s "$work/update/plugins/Floodgate-Spigot.jar"
+rm -f "$upload"
+if ! tar -czf "$backup.preparing" -C "$parent" server; then rm -f "$backup.preparing"; rm -rf "$work"; echo 'UPDATE_BACKUP_FAILED'; exit 0; fi
+if ! backup_sha="$(sha256sum "$backup.preparing" | awk '{{print $1}}')"; then rm -f "$backup.preparing"; echo 'UPDATE_BACKUP_FAILED'; exit 0; fi
+if ! printf '%s  %s\n' "$backup_sha" "$(basename "$backup")" > "$backup.preparing.sha256"; then rm -f "$backup.preparing" "$backup.preparing.sha256"; echo 'UPDATE_BACKUP_FAILED'; exit 0; fi
+mv "$backup.preparing" "$backup"
+mv "$backup.preparing.sha256" "$backup.sha256"
+backup_ready=yes
+transaction_complete=no
+server_process_running() {{
+  p="$(cat "$d/serveur.pid" 2>/dev/null || true)"
+  case "$p" in ''|*[!0-9]*) return 1;; esac
+  kill -0 "$p" 2>/dev/null && test "$(awk '{{print $3}}' "/proc/$p/stat" 2>/dev/null || true)" != Z && test "$(readlink -f "/proc/$p/cwd" 2>/dev/null || true)" = "$(readlink -f "$d")" && tr -d '\000' < "/proc/$p/cmdline" 2>/dev/null | grep -q 'paper.jar'
+}}
+start_game() {{
+  rm -f "$d/serveur.pid"
+  cd "$d"
+  nohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null &
+  echo $! > "$d/serveur.pid"
+}}
+wait_ready() {{
+  start_lines="$1"
+  for i in $(seq 1 60); do
+    if tail -n +$((start_lines + 1)) "$d/serveur.log" 2>/dev/null | grep -q 'Done (' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$' && ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then return 0; fi
+    if ! server_process_running; then return 1; fi
+    sleep 2
+  done
+  return 1
+}}
+rollback_on_error() {{
+  rc="$1"
+  trap - EXIT
+  if [ "$backup_ready" != yes ] || [ "$transaction_complete" = yes ]; then cleanup_lock; exit "$rc"; fi
+  if server_process_running; then
+    p="$(cat "$d/serveur.pid")"
+    kill -TERM "$p" || true
+    for i in $(seq 1 45); do if ! server_process_running; then break; fi; sleep 1; done
+    if server_process_running; then transaction_complete=yes; echo 'UPDATE_STOP_FAILED'; echo 'UPDATE_BACKUP='"$backup"; cleanup_lock; exit 0; fi
+  fi
+  tail -n 100 "$d/serveur.log" > "$parent/backups/echec-{id}.log" 2>/dev/null || true
+  restore="$parent/.rollback-{id}"
+  mkdir -p "$restore"
+  if ! (cd "$(dirname "$backup")" && sha256sum -c "$(basename "$backup").sha256"); then transaction_complete=yes; echo 'UPDATE_ROLLBACK_FAILED'; echo 'UPDATE_BACKUP='"$backup"; cleanup_lock; exit 0; fi
+  if ! tar -xzf "$backup" -C "$restore"; then transaction_complete=yes; echo 'UPDATE_ROLLBACK_FAILED'; echo 'UPDATE_BACKUP='"$backup"; cleanup_lock; exit 0; fi
+  failed="$parent/backups/serveur-echec-{id}"
+  if ! mv "$d" "$failed"; then transaction_complete=yes; echo 'UPDATE_ROLLBACK_FAILED'; echo 'UPDATE_BACKUP='"$backup"; cleanup_lock; exit 0; fi
+  if ! mv "$restore/server" "$d"; then mv "$failed" "$d" 2>/dev/null || true; transaction_complete=yes; echo 'UPDATE_ROLLBACK_FAILED'; echo 'UPDATE_BACKUP='"$backup"; cleanup_lock; exit 0; fi
+  rmdir "$restore" 2>/dev/null || true
+  old_lines="$(wc -l < "$d/serveur.log" 2>/dev/null || echo 0)"
+  start_game
+  if wait_ready "$old_lines"; then transaction_complete=yes; echo 'UPDATE_ROLLED_BACK'; echo 'UPDATE_BACKUP='"$backup"; cleanup_lock; exit 0; fi
+  transaction_complete=yes
+  echo 'UPDATE_ROLLBACK_SERVER_NOT_READY'
+  echo 'UPDATE_BACKUP='"$backup"
+  cleanup_lock
+  exit 0
+}}
+cp "$work/update/paper.jar" "$d/paper.jar.new"
+cp "$work/update/plugins/Geyser-Spigot.jar" "$d/plugins/Geyser-Spigot.jar.new"
+cp "$work/update/plugins/Floodgate-Spigot.jar" "$d/plugins/Floodgate-Spigot.jar.new"
+cp "$work/update/monde-ensemble-profile.json" "$d/monde-ensemble-profile.json.new"
+mv -f "$d/paper.jar.new" "$d/paper.jar"
+mv -f "$d/plugins/Geyser-Spigot.jar.new" "$d/plugins/Geyser-Spigot.jar"
+mv -f "$d/plugins/Floodgate-Spigot.jar.new" "$d/plugins/Floodgate-Spigot.jar"
+mv -f "$d/monde-ensemble-profile.json.new" "$d/monde-ensemble-profile.json"
+old_lines="$(wc -l < "$d/serveur.log" 2>/dev/null || echo 0)"
+start_game
+if ! wait_ready "$old_lines"; then exit 1; fi
+rm -rf "$work"
+transaction_complete=yes
+echo 'UPDATE_OK'
+echo 'UPDATE_BACKUP='"$backup"
+exit 0"#
+    );
+    progress(
+        "Sauvegarde complète du serveur puis remplacement coordonné…",
+        78,
+    );
+    let output = run_ssh_timeout(&destination, &remote_script, 240).map_err(|error| {
+        PiUpdateFailure::Uncertain(format!(
+            "La connexion a été interrompue pendant la transaction de mise à jour. Le serveur n’a pas été relancé automatiquement; vérifie son état avant toute nouvelle action. Détail : {error}"
+        ))
+    })?;
+    let marker = output
+        .lines()
+        .find(|line| line.starts_with("UPDATE_"))
+        .unwrap_or_default();
+    if marker == "UPDATE_OK" {
+        let backup = output
+            .lines()
+            .find_map(|line| line.strip_prefix("UPDATE_BACKUP="))
+            .unwrap_or("sauvegarde automatique");
+        progress("Mise à jour appliquée et démarrage contrôlé.", 100);
+        return Ok(Some(format!(
+            "Serveur mis à jour · démarrage Java et Bedrock confirmé · sauvegarde conservée : {backup}"
+        )));
+    }
+    let message = match marker {
+        "UPDATE_SERVER_RUNNING" => "Le serveur est encore actif; il n’a pas été arrêté ni modifié. Arrête-le proprement, puis relance le démarrage.".to_string(),
+        "UPDATE_PORTS_BUSY" => "Un autre service utilise un port Minecraft; la mise à jour est reportée et le serveur n’a pas été modifié.".to_string(),
+        "UPDATE_SERVER_CHANGED" => "Les fichiers du serveur ont changé depuis le contrôle. La mise à jour est annulée; relance le démarrage pour refaire l’inspection.".to_string(),
+        "UPDATE_BUSY" => "Une autre opération est déjà en cours sur ce serveur. Attends qu’elle se termine avant de relancer.".to_string(),
+        "UPDATE_PREP_FAILED" => "La préparation de la mise à jour a échoué avant la sauvegarde; le serveur existant reste intact.".to_string(),
+        "UPDATE_LINK_FOUND" => "Un lien symbolique est apparu; la mise à jour est annulée sans modifier le serveur.".to_string(),
+        "UPDATE_SPACE_LOW" => "Le Pi n’a pas assez d’espace pour une sauvegarde complète, la mise à jour et un retour arrière sûr; le serveur reste inchangé.".to_string(),
+        "UPDATE_BACKUP_FAILED" => "La sauvegarde complète n’a pas pu être créée; le serveur reste inchangé.".to_string(),
+        "UPDATE_ROLLED_BACK" => format!("Le nouveau serveur n’a pas passé le contrôle de démarrage. L’ancienne version a été restaurée et relancée. Sauvegarde conservée : {}", output.lines().find_map(|line| line.strip_prefix("UPDATE_BACKUP=")).unwrap_or("sur le Pi")),
+        "UPDATE_ROLLBACK_SERVER_NOT_READY" => format!("La mise à jour a échoué et les fichiers précédents ont été restaurés, mais l’ancien serveur ne confirme pas son démarrage. La sauvegarde est conservée : {}", output.lines().find_map(|line| line.strip_prefix("UPDATE_BACKUP=")).unwrap_or("sur le Pi")),
+        "UPDATE_ROLLBACK_FAILED" => return Err(PiUpdateFailure::Uncertain(format!("La mise à jour et le retour arrière n’ont pas abouti automatiquement. Ne relance pas le serveur; la sauvegarde est conservée à {}", output.lines().find_map(|line| line.strip_prefix("UPDATE_BACKUP=")).unwrap_or("l’emplacement de sauvegarde sur le Pi")))),
+        "UPDATE_STOP_FAILED" => return Err(PiUpdateFailure::Uncertain(format!("Le serveur mis à jour ne s’est pas arrêté proprement; il n’a pas été forcé à quitter et le retour arrière n’a pas été exécuté. La sauvegarde complète est conservée à {}", output.lines().find_map(|line| line.strip_prefix("UPDATE_BACKUP=")).unwrap_or("sur le Pi")))),
+        _ => return Err(PiUpdateFailure::Uncertain(format!("Le contrôle de mise à jour a renvoyé une réponse inconnue; le serveur n’a pas été démarré automatiquement. Détail : {}", output.chars().take(1000).collect::<String>()))),
+    };
+    Ok(Some(message))
+}
+
 /// Restarts only this app's saved installation, and only while both game
 /// ports are free. The existing log is kept so the user can inspect history.
-pub fn start_pi_server(host: &str, username: &str, server_folder: &str) -> Result<(), String> {
+pub fn start_pi_server(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    progress: impl Fn(&str, u8),
+) -> Result<String, String> {
     if !valid_remote_name(host)
         || !valid_remote_name(username)
         || !valid_server_folder(server_folder)
     {
         return Err("Le dossier enregistré du serveur n’est pas reconnu.".into());
     }
+    let mut update_note = None;
+    progress("Vérification des versions Java et Bedrock…", 5);
+    match check_pi_update(host, username, server_folder) {
+        Ok(check) if check.ready && check.update_available => {
+            match update_pi_server_if_ready(host, username, server_folder, &check, &progress) {
+                Ok(note) => update_note = note,
+                Err(PiUpdateFailure::Safe(error)) => {
+                    update_note = Some(format!(
+                        "La mise à jour a été différée; le serveur existant reste intact. {error}"
+                    ));
+                }
+                Err(PiUpdateFailure::Uncertain(error)) => return Err(error),
+            }
+        }
+        Ok(check) if check.update_available => {
+            update_note = Some(format!(
+                "Mise à jour différée pour protéger le monde : {}",
+                check.reasons.join(" ")
+            ));
+        }
+        Ok(_) => {}
+        Err(error) => {
+            update_note = Some(format!(
+                "Catalogue de versions momentanément indisponible; le serveur existant reste sur sa version actuelle. {error}"
+            ));
+        }
+    }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "set -eu; d=\"$HOME/{server_folder}\"; if ! test -x \"$d/demarrer.sh\"; then echo 'LANCEUR_ABSENT'; exit 0; fi; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo 'DEJA_LANCE'; exit 0; fi; if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo 'PORT_OCCUPE'; exit 0; fi; cd \"$d\"; nohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; echo 'DEMARRAGE_LANCE'"
+        "set -eu; d=\"$HOME/{server_folder}\"; test -x \"$d/demarrer.sh\" || {{ echo 'LANCEUR_ABSENT'; exit 0; }}; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo 'DEJA_LANCE'; exit 0; fi; rm -f \"$d/serveur.pid\"; if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo 'PORT_OCCUPE'; exit 0; fi; cd \"$d\"; nohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; echo 'DEMARRAGE_LANCE'"
     );
     let output = run_ssh(&destination, &command)?;
     if output.lines().any(|line| line == "PORT_OCCUPE") {
@@ -1129,7 +1583,69 @@ pub fn start_pi_server(host: &str, username: &str, server_folder: &str) -> Resul
     if output.lines().any(|line| line == "LANCEUR_ABSENT") {
         return Err("Le lanceur du serveur est absent. Aucun fichier n’a été modifié.".into());
     }
-    Ok(())
+    let started_here = output.lines().any(|line| line == "DEMARRAGE_LANCE");
+    if started_here {
+        progress(
+            "Démarrage de Minecraft et contrôle des connexions Java/Bedrock…",
+            92,
+        );
+        for attempt in 0..40 {
+            match inspect_pi_server(host, username, server_folder) {
+                Ok(status) if status.ready && status.java_port_open && status.bedrock_port_open => {
+                    progress("Serveur prêt et ports vérifiés.", 100);
+                    return Ok(update_note.unwrap_or_else(|| {
+                        format!(
+                            "Serveur démarré et prêt · Java {} · Bedrock compatible {}.",
+                            status.minecraft_java, status.minecraft_bedrock
+                        )
+                    }));
+                }
+                Ok(status) if !status.running => {
+                    return Err(format!(
+                        "Le serveur s’est arrêté pendant le démarrage. Rien n’a été supprimé. Dernières lignes du journal :\n{}",
+                        status.log
+                    ));
+                }
+                Ok(_) => {}
+                Err(error) if attempt == 39 => {
+                    return Err(format!(
+                        "Le serveur n’a pas confirmé ses ports après 80 secondes. Consulte le journal dans l’application. {error}"
+                    ));
+                }
+                Err(_) => {}
+            }
+            progress(
+                &format!("Minecraft démarre… vérification {}/40", attempt + 1),
+                92 + (attempt as u8 / 5),
+            );
+            std::thread::sleep(Duration::from_secs(2));
+        }
+        return Err("Le serveur n’a pas confirmé ses ports Java et Bedrock dans le délai prévu. Consulte le journal avant de rejouer.".into());
+    }
+    Ok(update_note
+        .unwrap_or_else(|| "Serveur démarré sur les versions compatibles déjà installées.".into()))
+}
+
+/// Gracefully stops only the Paper process launched from the saved server
+/// directory. It never force-kills a process that does not exit cleanly.
+pub fn stop_pi_server(host: &str, username: &str, server_folder: &str) -> Result<String, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Le dossier enregistré du serveur n’est pas reconnu.".into());
+    }
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo STOP_NO_FOLDER; exit 0; }}; pid=\"$(cat \"$d/serveur.pid\" 2>/dev/null || true)\"; case \"$pid\" in ''|*[!0-9]*) rm -f \"$d/serveur.pid\"; echo STOP_ALREADY; exit 0;; esac; if ! kill -0 \"$pid\" 2>/dev/null || test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" = Z || test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" != \"$(readlink -f \"$d\")\" || ! tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then rm -f \"$d/serveur.pid\"; echo STOP_ALREADY; exit 0; fi; kill -TERM \"$pid\"; for i in $(seq 1 60); do if ! kill -0 \"$pid\" 2>/dev/null || test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" = Z || test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" != \"$(readlink -f \"$d\")\"; then rm -f \"$d/serveur.pid\"; echo STOPPED; exit 0; fi; sleep 1; done; echo STOP_TIMEOUT; exit 0"
+    );
+    let output = run_ssh_timeout(&destination, &command, 75)?;
+    match output.lines().find(|line| line.starts_with("STOP_")) {
+        Some("STOPPED") => Ok("Serveur arrêté proprement. Le monde a été enregistré.".into()),
+        Some("STOP_ALREADY") => Ok("Le serveur est déjà arrêté.".into()),
+        Some("STOP_TIMEOUT") => Err("Le serveur ne s’est pas arrêté dans le délai prévu. Il n’a pas été forcé à quitter; consulte le journal avant de poursuivre.".into()),
+        _ => Err("Le Pi n’a pas confirmé l’arrêt du serveur.".into()),
+    }
 }
 
 fn valid_server_folder(value: &str) -> bool {

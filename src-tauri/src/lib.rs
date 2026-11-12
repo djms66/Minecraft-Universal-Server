@@ -634,9 +634,28 @@ async fn start_pi_server(
     host: String,
     username: String,
     server_folder: String,
-) -> Result<(), String> {
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        engine::start_pi_server(&host, &username, &server_folder)
+        engine::start_pi_server(&host, &username, &server_folder, |step, percent| {
+            let _ = progress.send(engine::ProgressMessage {
+                step: step.to_string(),
+                percent,
+            });
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn stop_pi_server(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::stop_pi_server(&host, &username, &server_folder)
     })
     .await
     .map_err(|error| error.to_string())?
@@ -706,6 +725,7 @@ pub fn run() {
             inspect_pi_server,
             check_pi_update,
             start_pi_server,
+            stop_pi_server,
             backup_server,
             restore_server
         ])

@@ -84,6 +84,11 @@ type PiServerStatus = {
   autostart_configured: boolean;
   minecraft_java: string;
   minecraft_bedrock: string;
+  paper_build_id: number;
+  geyser_version: string;
+  geyser_build_id: number;
+  floodgate_version: string;
+  floodgate_build_id: number;
   java_port: number;
   bedrock_port: number;
   address: string;
@@ -132,6 +137,7 @@ function App() {
     null,
   );
   const [piStatusError, setPiStatusError] = useState("");
+  const [piActionMessage, setPiActionMessage] = useState("");
   const [piUpdateCheck, setPiUpdateCheck] = useState<PiUpdateCheck | null>(null);
   const [piUpdateError, setPiUpdateError] = useState("");
   const [checkingPiUpdate, setCheckingPiUpdate] = useState(false);
@@ -546,13 +552,39 @@ function App() {
     if (!piInstallation) return;
     setBusy(true);
     setPiStatusError("");
+    setPiActionMessage("");
+    setOperationProgress({ step: "Vérification des mises à jour et sauvegarde de sécurité…", percent: 2 });
     try {
-      await invoke("start_pi_server", {
+      const detail = await invoke<string>("start_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+        progress: progressChannel(),
+      });
+      setPiActionMessage(detail);
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      await refreshPiStatus(true);
+    } catch (error) {
+      setPiStatusError(String(error));
+    } finally {
+      setOperationProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const stopPiServer = async () => {
+    if (!piInstallation) return;
+    if (!window.confirm("Arrêter le serveur déconnectera les joueurs présents. Le monde sera enregistré avant l’arrêt. Continuer ?")) return;
+    setBusy(true);
+    setPiStatusError("");
+    setPiActionMessage("");
+    try {
+      const detail = await invoke<string>("stop_pi_server", {
         host: piInstallation.host,
         username: piInstallation.username,
         serverFolder: piInstallation.serverFolder,
       });
-      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      setPiActionMessage(detail);
       await refreshPiStatus(true);
     } catch (error) {
       setPiStatusError(String(error));
@@ -626,7 +658,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.6.5
+          MONDE ENSEMBLE <span>·</span> 0.7.0
         </div>
       </aside>
 
@@ -668,9 +700,12 @@ function App() {
               piInstallation={piInstallation}
               piServerStatus={piServerStatus}
               piStatusError={piStatusError}
+              piActionMessage={piActionMessage}
+              actionProgress={busy ? operationProgress?.step ?? "" : ""}
               busy={busy}
               onRefreshPi={() => refreshPiStatus(true)}
               onStartPi={startPiServer}
+              onStopPi={stopPiServer}
               onCheckPiUpdate={checkPiUpdate}
               piUpdateCheck={piUpdateCheck}
               piUpdateError={piUpdateError}
@@ -1073,7 +1108,18 @@ function App() {
               onRestore={restoreWorld}
             />
           )}
-          {page === "advanced" && <Advanced system={system} />}
+          {page === "advanced" && (
+            <Advanced
+              system={system}
+              piInstallation={piInstallation}
+              piServerStatus={piServerStatus}
+              piUpdateCheck={piUpdateCheck}
+              piUpdateError={piUpdateError}
+              busy={busy || checkingPiUpdate}
+              onRefresh={() => refreshPiStatus(true)}
+              onCheckUpdates={checkPiUpdate}
+            />
+          )}
         </section>
         <footer className="footer">
           <span>Conçu pour garder ton monde intact.</span>
@@ -1318,9 +1364,12 @@ function Home({
   piInstallation,
   piServerStatus,
   piStatusError,
+  piActionMessage,
+  actionProgress,
   busy,
   onRefreshPi,
   onStartPi,
+  onStopPi,
   onCheckPiUpdate,
   piUpdateCheck,
   piUpdateError,
@@ -1334,9 +1383,12 @@ function Home({
   piInstallation: PiInstallation | null;
   piServerStatus: PiServerStatus | null;
   piStatusError: string;
+  piActionMessage: string;
+  actionProgress: string;
   busy: boolean;
   onRefreshPi: () => void;
   onStartPi: () => void;
+  onStopPi: () => void;
   onCheckPiUpdate: () => void;
   piUpdateCheck: PiUpdateCheck | null;
   piUpdateError: string;
@@ -1400,6 +1452,11 @@ function Home({
                 ? ` · Bedrock ${piServerStatus.minecraft_bedrock}`
                 : ""}
             </span>
+            <span>
+              Paper {piServerStatus?.paper_build_id ? `build ${piServerStatus.paper_build_id}` : "à vérifier"}
+              {piServerStatus?.geyser_version ? ` · Geyser ${piServerStatus.geyser_version} build ${piServerStatus.geyser_build_id}` : ""}
+              {piServerStatus?.floodgate_version ? ` · Floodgate ${piServerStatus.floodgate_version} build ${piServerStatus.floodgate_build_id}` : ""}
+            </span>
           </div>
           <div className="pi-checks">
             <span className={piServerStatus?.java_port_open ? "ok" : ""}>Java {piServerStatus?.java_port_open ? "· disponible" : "· non vérifié"}</span>
@@ -1411,6 +1468,11 @@ function Home({
                   {busy ? "Vérification…" : "Démarrer le serveur"}
                 </button>
               )}
+              {piServerStatus?.running && (
+                <button className="button secondary" onClick={onStopPi} disabled={busy}>
+                  {busy ? "Arrêt en cours…" : "Arrêter le serveur"}
+                </button>
+              )}
               <button className="text-button" onClick={onRefreshPi} disabled={busy}>
                 {busy ? "Lecture…" : "Actualiser l’état et le journal"}
               </button>
@@ -1419,6 +1481,8 @@ function Home({
               </button>
             </div>
           </div>
+          {actionProgress && <p className="pi-action-progress" aria-live="polite">{actionProgress}</p>}
+          {piActionMessage && <p className="pi-action-message" aria-live="polite">{piActionMessage}</p>}
           {(piUpdateCheck || piUpdateError) && (
             <div className={piUpdateCheck?.ready ? "pi-update-check ready" : "pi-update-check"} aria-live="polite">
               <strong>
@@ -1445,7 +1509,9 @@ function Home({
                   )}
                   <small>
                     {piUpdateCheck.ready
-                      ? "Le profil géré est vérifié. La mise à jour automatique sécurisée n’est pas encore activée dans cette version."
+                      ? piUpdateCheck.update_available
+                        ? "La mise à jour groupée sera appliquée au prochain démarrage du serveur, avec une sauvegarde avant changement."
+                        : "Aucune mise à jour à appliquer pour le moment."
                       : "Aucune mise à jour automatique ne sera lancée tant que ces points ne sont pas vérifiés."}
                   </small>
                 </>
@@ -1596,9 +1662,9 @@ function Compatibility({
   error: string;
 }) {
   const rows = [
-    ["PC / Mac Java", "Oui", "Serveur Java"],
-    ["Windows Bedrock", "Oui", "Par le pont Geyser"],
-    ["Téléphones / tablettes", "Oui", "Par le pont Geyser"],
+    ["PC / Mac Java", "Profil Java", "Paper · version listée"],
+    ["Windows Bedrock", "Profil Bedrock", "Geyser · version listée"],
+    ["Téléphones / tablettes", "Profil Bedrock", "Geyser · version listée"],
     [
       "Consoles",
       "Avec étape en plus",
@@ -1642,9 +1708,9 @@ function Compatibility({
         <div className="table-heading">
           <div>
             <div className="eyebrow">LE MONDE COMMUN</div>
-            <h3>Qui peut rejoindre ?</h3>
+            <h3>Appareils et limites du profil</h3>
           </div>
-          <span>Profil guidé</span>
+          <span>Compatibilité annoncée</span>
         </div>
         {rows.map((r) => (
           <div className="compat-row" key={r[0]}>
@@ -1700,14 +1766,14 @@ function Compatibility({
         <span>!</span>
         <p>
           <strong>
-            Les mises à jour du serveur existant ne sont pas encore activées.
+            Les mises à jour coordonnées sont disponibles pour les serveurs Pi gérés.
           </strong>
           <br />
-          Cette version prépare une installation neuve et protège les copies par
-          sauvegarde/restauration. Elle ne remplace pas Paper ni les extensions
-          du monde en service. Pour éviter une perte de monde ou de plugins, une
-          mise à jour n’est proposée que lorsque le contrôle de compatibilité
-          complet sera disponible.
+          Après arrêt, le bouton « Démarrer » vérifie Java, Bedrock, Paper,
+          Geyser et Floodgate. Il applique le groupe uniquement si le profil est
+          géré, sauvegardé et vérifié au redémarrage; sinon il conserve la
+          version présente. La mise à jour des serveurs locaux Mac/Windows n’est
+          pas encore prise en charge.
         </p>
       </div>
       <div className="source-note">
@@ -1880,17 +1946,35 @@ function OperationStatus({
   );
 }
 
-function Advanced({ system }: { system: SystemInfo | null }) {
+function Advanced({
+  system,
+  piInstallation,
+  piServerStatus,
+  piUpdateCheck,
+  piUpdateError,
+  busy,
+  onRefresh,
+  onCheckUpdates,
+}: {
+  system: SystemInfo | null;
+  piInstallation: PiInstallation | null;
+  piServerStatus: PiServerStatus | null;
+  piUpdateCheck: PiUpdateCheck | null;
+  piUpdateError: string;
+  busy: boolean;
+  onRefresh: () => void;
+  onCheckUpdates: () => void;
+}) {
   return (
     <div className="content-column">
       <div className="advanced-intro">
         <div className="advanced-mark">⚙</div>
         <div>
           <div className="eyebrow">MODE AVANCÉ</div>
-          <h2>Plus de contrôle, les mêmes garde-fous.</h2>
+          <h2>État précis, mêmes protections.</h2>
           <p>
-            Les réglages disponibles apparaissent seulement quand leur effet et
-            leur retour arrière sont connus.
+            Ici tu vois les versions, les ports, le journal et les raisons qui
+            autorisent ou reportent une mise à jour.
           </p>
         </div>
       </div>
@@ -1898,55 +1982,84 @@ function Advanced({ system }: { system: SystemInfo | null }) {
         <div>
           <span>01</span>
           <p>
-            <strong>Versions et compatibilité</strong>
-            <small>
-              Profil actif, profils proposés et raison des mises à jour
-              bloquées.
-            </small>
-          </p>
-          <b>Catalogue requis</b>
-        </div>
-        <div>
-          <span>02</span>
-          <p>
-            <strong>Extensions et packs</strong>
-            <small>
-              Ajouter des joueurs, extensions et ressources avec vérification
-              préalable.
-            </small>
-          </p>
-          <b>Vérification avant ajout</b>
-        </div>
-        <div>
-          <span>03</span>
-          <p>
-            <strong>Journal détaillé</strong>
-            <small>
-              Diagnostic exportable sans mots de passe ni secrets d’accès.
-            </small>
-          </p>
-          <b>Journal local</b>
-        </div>
-        <div>
-          <span>04</span>
-          <p>
-            <strong>Machine détectée</strong>
+            <strong>Machine de cette application</strong>
             <small>
               {system
-                ? `${system.os} ${system.version} · ${system.architecture} · ${system.memory_gb ?? "?"} Go`
+                ? `${system.os} ${system.version} · ${system.architecture} · mémoire ${system.memory_gb ?? "inconnue"} Go · disque libre ${system.free_disk_gb ?? "inconnu"} Go`
                 : "Lecture en cours"}
             </small>
           </p>
           <b>Lecture seule</b>
         </div>
+        <div>
+          <span>02</span>
+          <p>
+            <strong>Serveur géré</strong>
+            <small>
+              {piInstallation
+                ? `${piInstallation.username}@${piInstallation.host} · ${piInstallation.serverFolder}`
+                : "Aucun Raspberry Pi enregistré dans cette application"}
+            </small>
+          </p>
+          <b>{piServerStatus?.ready ? "Java + Bedrock prêts" : "État à vérifier"}</b>
+        </div>
+        <div>
+          <span>03</span>
+          <p>
+            <strong>Versions installées</strong>
+            <small>
+              Java {piServerStatus?.minecraft_java || "inconnue"} · Bedrock {piServerStatus?.minecraft_bedrock || "inconnue"} · Paper build {piServerStatus?.paper_build_id || "inconnu"} · Geyser {piServerStatus?.geyser_version || "inconnu"} · Floodgate {piServerStatus?.floodgate_version || "inconnu"} · adresse {piServerStatus?.address || piInstallation?.address || "inconnue"} · ports {piServerStatus?.java_port ?? "—"} / {piServerStatus?.bedrock_port ?? "—"}
+            </small>
+          </p>
+          <b>{piServerStatus?.autostart_configured ? "Démarrage automatique actif" : "Démarrage automatique non confirmé"}</b>
+        </div>
+        <div>
+          <span>04</span>
+          <p>
+            <strong>Règle de mise à jour</strong>
+            <small>
+              Un serveur Pi géré est sauvegardé puis mis à jour en groupe au démarrage seulement si son profil, ses extensions gérées, le runtime et les versions officielles passent les contrôles.
+            </small>
+          </p>
+          <b>Sinon, version présente conservée</b>
+        </div>
       </div>
+      {piInstallation && (
+        <div className="operation-card advanced-log-card">
+          <div className="eyebrow">OUTILS DU SERVEUR PI</div>
+          <div className="pi-actions">
+            <button className="button secondary" onClick={onRefresh} disabled={busy}>
+              Actualiser le journal
+            </button>
+            <button className="button secondary" onClick={onCheckUpdates} disabled={busy}>
+              Vérifier les versions compatibles
+            </button>
+          </div>
+          {piUpdateError && <p className="pi-error">{piUpdateError}</p>}
+          {piUpdateCheck && (
+            <p className="path-note">
+              Version actuelle : Java {piUpdateCheck.current_java}, Bedrock {piUpdateCheck.current_bedrock}, Geyser {piUpdateCheck.current_geyser}, Floodgate {piUpdateCheck.current_floodgate}. {piUpdateCheck.update_available ? "Nouvelle pile officielle détectée." : "Aucune nouvelle pile détectée."}
+              {piUpdateCheck.reasons.length > 0 && ` Contrôle bloquant : ${piUpdateCheck.reasons.join(" ")}`}
+            </p>
+          )}
+          {piServerStatus?.log ? (
+            <details className="pi-log" open>
+              <summary>Journal récent du serveur</summary>
+              <pre>{piServerStatus.log}</pre>
+            </details>
+          ) : (
+            <p className="path-note">Le journal apparaîtra ici après son actualisation.</p>
+          )}
+        </div>
+      )}
       <div className="notice amber">
         <span>!</span>
         <p>
-          <strong>Une mise à jour n’est jamais forcée.</strong>
+          <strong>Les mods et packs personnalisés ne sont pas ajoutés automatiquement.</strong>
           <br />
-          Si le catalogue ne confirme pas la compatibilité de chaque extension
-          de ton monde, le profil actuel reste proposé.
+          Cette version les bloque par prudence pendant une mise à jour; leur
+          compatibilité doit être vérifiée avant de les gérer ici. Les clients
+          Bedrock, consoles et packs Java ne partagent pas tous les mêmes formats.
         </p>
       </div>
     </div>

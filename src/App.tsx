@@ -587,9 +587,9 @@ function App() {
         setOperationProgress({
           step:
             attempt === 0
-              ? "Recherche du Pi préparé sur le réseau local…"
-              : `Premier démarrage du Pi… recherche ${attempt + 1}/12`,
-          percent: 8,
+              ? "Connexion au Pi préparé…"
+              : `Je cherche encore ton Pi… tentative ${attempt + 1}/12`,
+          percent: Math.min(30, 8 + attempt * 2),
         });
         try {
           const found = await invoke<DiscoveredPi[]>("discover_new_pi", {
@@ -1287,7 +1287,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.17.0
+          MONDE ENSEMBLE <span>·</span> 0.18.0
         </div>
       </aside>
 

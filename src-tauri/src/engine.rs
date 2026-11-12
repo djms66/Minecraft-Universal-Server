@@ -3396,6 +3396,23 @@ fn discover_pi_internal(
     if !valid_remote_name(username) {
         return Err("Saisis le nom du compte du Pi pour le retrouver automatiquement.".into());
     }
+    // First-boot setup gives this card a random, app-owned hostname. Try it
+    // directly before waiting for DNS-SD; some home routers resolve `.local`
+    // names but do not advertise the SSH service consistently.
+    if let Some(expected) = expected_hostname {
+        let host = format!("{expected}.local");
+        if let Ok(output) =
+            run_ssh_timeout_policy(&format!("{username}@{host}"), REMOTE_PROBE_COMMAND, 3, true)
+        {
+            if let Ok(facts) = parse_remote_facts(&output) {
+                return Ok(vec![DiscoveredPi {
+                    host,
+                    address: facts.ip,
+                    model: facts.model,
+                }]);
+            }
+        }
+    }
     let mdns = ServiceDaemon::new()
         .map_err(|error| format!("La détection du réseau local n’a pas pu démarrer : {error}"))?;
     let receiver = mdns
@@ -5413,7 +5430,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.17.0")
+        .user_agent("MondeEnsemble/0.18.0")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

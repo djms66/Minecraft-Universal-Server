@@ -33,7 +33,12 @@ const BEDROCK_DEFAULT_PORT: u16 = 19132;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
-const REMOTE_PROBE_COMMAND: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; printf '\nIP='; hostname -I | awk '{print $1}'; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
+const REMOTE_NETWORK_IDENTITY_COMMAND: &str = r#"network_interface="$(ip -4 route show default 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"; network_ip=""; if [ -n "$network_interface" ]; then network_ip="$(ip -o -4 address show dev "$network_interface" scope global 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; if [ -z "$network_ip" ]; then network_interface="$(ip -o -4 address show scope global up 2>/dev/null | awk 'NR == 1 { print $2 }')"; network_ip="$(ip -o -4 address show dev "$network_interface" scope global up 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; network_mac=""; if [ -n "$network_interface" ] && [ -r "/sys/class/net/$network_interface/address" ]; then network_mac="$(cat "/sys/class/net/$network_interface/address")"; fi; printf 'IP=%s\nNETWORK_INTERFACE=%s\nMAC_ADDRESS=%s\n' "$network_ip" "$network_interface" "$network_mac""#;
+const REMOTE_PROBE_COMMAND_TEMPLATE: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; @NETWORK_IDENTITY@; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
+
+fn remote_probe_command() -> String {
+    REMOTE_PROBE_COMMAND_TEMPLATE.replace("@NETWORK_IDENTITY@", REMOTE_NETWORK_IDENTITY_COMMAND)
+}
 
 fn available_game_port(primary: u16, alternate: u16, udp: bool) -> Result<u16, String> {
     let can_bind = |port| {
@@ -161,6 +166,8 @@ pub struct PiServerStatus {
     pub java_port: u16,
     pub bedrock_port: u16,
     pub address: String,
+    pub network_interface: String,
+    pub mac_address: String,
     pub log: String,
 }
 
@@ -3411,7 +3418,7 @@ pub fn install_remote_pi(
         3,
     );
     let destination = format!("{username}@{host}");
-    let inspect = run_ssh(&destination, REMOTE_PROBE_COMMAND)?;
+    let inspect = run_ssh(&destination, &remote_probe_command())?;
     let facts = parse_remote_facts(&inspect)?;
     if facts.architecture != "aarch64" {
         return Err(format!(
@@ -3561,11 +3568,18 @@ pub fn install_remote_pi(
             "Le serveur a démarré, mais l’adresse locale du Pi n’a pas pu être lue.".into(),
         );
     }
+    let network_identity = match (facts.network_interface.as_str(), facts.mac_address.as_str()) {
+        (interface, mac_address) if !mac_address.is_empty() => {
+            format!(" · interface {interface} · adresse matérielle {mac_address}")
+        }
+        (interface, _) if !interface.is_empty() => format!(" · interface {interface}"),
+        _ => String::new(),
+    };
     progress("Serveur démarré et contrôlé sur le Raspberry Pi.", 100);
     Ok(OperationResult {
         path: format!("{username}@{host}:~/Monde-Ensemble-{id}/server"),
         detail: format!(
-            "Serveur démarré et prêt · démarrage automatique après redémarrage {} · {} · Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{} · mobile/tablette Bedrock : {ip}:{} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.",
+            "Serveur démarré et prêt · démarrage automatique après redémarrage {} · {} · Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · Java {} · mémoire serveur {} Go · Chez toi, PC/Mac Java : {ip}:{} · mobile/tablette Bedrock : {ip}:{} · Depuis l’extérieur, le routeur doit aussi autoriser ces ports.{network_identity}",
             if autostart_configured {
                 "configuré"
             } else {
@@ -3616,9 +3630,12 @@ fn discover_pi_internal(
     // names but do not advertise the SSH service consistently.
     if let Some(expected) = expected_hostname {
         let host = format!("{expected}.local");
-        if let Ok(output) =
-            run_ssh_timeout_policy(&format!("{username}@{host}"), REMOTE_PROBE_COMMAND, 3, true)
-        {
+        if let Ok(output) = run_ssh_timeout_policy(
+            &format!("{username}@{host}"),
+            &remote_probe_command(),
+            3,
+            true,
+        ) {
             if let Ok(facts) = parse_remote_facts(&output) {
                 return Ok(vec![DiscoveredPi {
                     host,
@@ -3677,7 +3694,7 @@ fn discover_pi_internal(
         std::thread::spawn(move || {
             let result = run_ssh_timeout_policy(
                 &format!("{username}@{host}"),
-                REMOTE_PROBE_COMMAND,
+                &remote_probe_command(),
                 3,
                 accept_new_host_key,
             );
@@ -3691,7 +3708,11 @@ fn discover_pi_internal(
             let facts = parse_remote_facts(&result.ok()?).ok()?;
             Some(DiscoveredPi {
                 host,
-                address,
+                address: if facts.ip.is_empty() {
+                    address
+                } else {
+                    facts.ip
+                },
                 model: facts.model,
             })
         })
@@ -3736,8 +3757,9 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; @NETWORK_IDENTITY@; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
+    let command = command.replace("@NETWORK_IDENTITY@", REMOTE_NETWORK_IDENTITY_COMMAND);
     let output = run_ssh(&destination, &command)?;
     let (header, after_profile) = output
         .split_once("PROFILE_START\n")
@@ -3809,6 +3831,8 @@ pub fn inspect_pi_server(
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(BEDROCK_ALTERNATE_PORT as u64) as u16,
         address: get("IP=").to_string(),
+        network_interface: get("NETWORK_INTERFACE=").to_string(),
+        mac_address: get("MAC_ADDRESS=").to_string(),
         log: log.to_string(),
     })
 }
@@ -4544,6 +4568,8 @@ struct RemoteFacts {
     free_gb: u64,
     architecture: String,
     ip: String,
+    network_interface: String,
+    mac_address: String,
     java_default_busy: bool,
     java_alternate_busy: bool,
     bedrock_default_busy: bool,
@@ -4577,6 +4603,18 @@ fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
             .map_err(|_| "Espace libre du Pi illisible.".to_string())?,
         architecture: required("ARCH")?.trim().to_string(),
         ip: required("IP")?.trim().to_string(),
+        network_interface: values
+            .get("NETWORK_INTERFACE")
+            .copied()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
+        mac_address: values
+            .get("MAC_ADDRESS")
+            .copied()
+            .unwrap_or_default()
+            .trim()
+            .to_string(),
         java_default_busy: required("PORT_25565")?.trim() == "busy",
         java_alternate_busy: required("PORT_25566")?.trim() == "busy",
         bedrock_default_busy: required("PORT_19132")?.trim() == "busy",
@@ -5566,7 +5604,7 @@ pub fn restore_pi_backup(
     }
 
     progress("Vérification de l’archive et de l’espace sur le Pi…", 3);
-    let inspect = run_ssh(&format!("{username}@{host}"), REMOTE_PROBE_COMMAND)?;
+    let inspect = run_ssh(&format!("{username}@{host}"), &remote_probe_command())?;
     let facts = parse_remote_facts(&inspect)?;
     if facts.architecture != "aarch64" {
         return Err(format!(
@@ -6282,6 +6320,18 @@ mod tests {
         archive.append(&header, contents).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    #[test]
+    fn remote_facts_keep_the_default_route_address_and_hardware_identity() {
+        let facts = super::parse_remote_facts(
+            "MODEL=Raspberry Pi 5 Model B Rev 1.0\nMEMORY_GB=7.7\nFREE_GB=24\nARCH=aarch64\nIP=192.168.1.201\nNETWORK_INTERFACE=eth0\nMAC_ADDRESS=d8:3a:dd:12:34:56\nPORT_25565=free\nPORT_25566=free\nPORT_19132=free\nPORT_19133=free\nPORT_25575=free\nPORT_25576=free\n",
+        )
+        .unwrap();
+
+        assert_eq!(facts.ip, "192.168.1.201");
+        assert_eq!(facts.network_interface, "eth0");
+        assert_eq!(facts.mac_address, "d8:3a:dd:12:34:56");
     }
 
     #[test]

@@ -1945,8 +1945,65 @@ button {
     monospace;
 }
 .pi-network-note {
-  margin-top: 15px;
+  margin: 10px 0 0;
   font-size: 11px;
+}
+.pi-network-guide {
+  margin-top: 15px;
+  padding: 14px 16px;
+  color: #d8dacd;
+  background: #30352f;
+  border: 1px solid #4c514a;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.pi-network-guide summary {
+  color: #f1d28c;
+  font-weight: 700;
+  cursor: pointer;
+}
+.pi-network-guide > p {
+  margin: 11px 0 0;
+}
+.pi-network-guide ol {
+  display: grid;
+  gap: 7px;
+  margin: 10px 0 0;
+  padding-left: 20px;
+}
+.pi-network-guide li strong {
+  color: #e9e8de;
+}
+.pi-network-values {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 13px;
+}
+.pi-network-values > div {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 5px;
+  padding: 10px 12px;
+  background: #282c27;
+  border: 1px solid #444a42;
+}
+.pi-network-values span {
+  color: #acb2a6;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+}
+.pi-network-values code {
+  color: #e9e8de;
+  font:
+    13px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+  overflow-wrap: anywhere;
 }
 .pi-action-progress {
   margin: 12px 0 0;
@@ -2150,6 +2207,9 @@ button {
     flex-direction: column;
   }
   .pi-connect-grid {
+    grid-template-columns: 1fr;
+  }
+  .pi-network-values {
     grid-template-columns: 1fr;
   }
   .pi-checks {

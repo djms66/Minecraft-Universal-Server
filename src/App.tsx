@@ -130,6 +130,8 @@ type PiServerStatus = {
   java_port: number;
   bedrock_port: number;
   address: string;
+  network_interface: string;
+  mac_address: string;
   log: string;
 };
 
@@ -3033,11 +3035,86 @@ function Home({
               </button>
             </>
           )}
-          <p className="pi-network-note">
-            Adresse actuelle du Pi sur ton réseau. Pour qu’elle ne change
-            jamais, une réservation dans la box doit être confirmée. Pour jouer
-            depuis l’extérieur, il faut aussi configurer l’accès du routeur.
-          </p>
+          {piServerStatus?.address && !piStatusError ? (
+            <details className="pi-network-guide">
+              <summary>Garder cette adresse sur la durée</summary>
+              <p>
+                L’adresse affichée est celle du Pi sur ton Wi-Fi ou ton réseau
+                câblé. Pour qu’elle reste la même, réserve-la une fois dans la
+                Freebox :
+              </p>
+              <ol>
+                <li>
+                  Dans l’application Free, ouvre{" "}
+                  <strong>Mes équipements Freebox</strong>, puis{" "}
+                  <strong>Server internet</strong> et{" "}
+                  <strong>Paramètres réseau avancés</strong> →{" "}
+                  <strong>DHCP</strong>.
+                </li>
+                <li>
+                  Ajoute un bail statique ou permanent pour le Raspberry Pi,
+                  avec l’adresse IP et l’adresse matérielle ci-dessous.
+                </li>
+                <li>
+                  Enregistre. Une fois le bail confirmé, l’adresse reste
+                  attribuée à ce Pi. Reviens ici et actualise pour contrôler.
+                </li>
+              </ol>
+              <div className="pi-network-values">
+                <div>
+                  <span>IP À RÉSERVER</span>
+                  <code>{piServerStatus.address}</code>
+                  <button
+                    className="address-copy"
+                    type="button"
+                    onClick={() =>
+                      copyAddress(piServerStatus.address, "Adresse IP")
+                    }
+                  >
+                    Copier l’adresse IP
+                  </button>
+                </div>
+                <div>
+                  <span>ADRESSE MATÉRIELLE DU PI</span>
+                  <code>{piServerStatus?.mac_address || "Non disponible"}</code>
+                  {piServerStatus?.mac_address && (
+                    <button
+                      className="address-copy"
+                      type="button"
+                      onClick={() =>
+                        copyAddress(
+                          piServerStatus.mac_address,
+                          "Adresse matérielle",
+                        )
+                      }
+                    >
+                      Copier l’adresse matérielle
+                    </button>
+                  )}
+                </div>
+              </div>
+              {piServerStatus?.network_interface && (
+                <p className="pi-network-note">
+                  Connexion utilisée : {piServerStatus.network_interface}
+                  {piServerStatus.network_interface.startsWith("eth")
+                    ? " (câble réseau)"
+                    : piServerStatus.network_interface.startsWith("wlan")
+                      ? " (Wi‑Fi)"
+                      : ""}
+                  .
+                </p>
+              )}
+              <p className="pi-network-note">
+                C’est une adresse locale pour jouer sur le même réseau. Jouer
+                depuis l’extérieur demande un réglage séparé du routeur.
+              </p>
+            </details>
+          ) : (
+            <p className="pi-network-note">
+              Actualise l’état du Pi pour vérifier son adresse et afficher les
+              informations nécessaires à sa réservation dans la Freebox.
+            </p>
+          )}
         </section>
       )}
       {piInstallation && (

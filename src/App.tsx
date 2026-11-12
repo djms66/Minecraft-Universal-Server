@@ -1918,10 +1918,18 @@ function App() {
                             piOsRecommendation.image_size_gb +
                               piOsRecommendation.initial_server_storage_gb,
                           )}{" "}
-                          Go pour le système et l’espace initial du serveur. Une
-                          carte microSD de 16 Go suffit au profil initial; 32 Go
-                          laisse plus de place au monde. Un SSD USB dépend du
-                          modèle du Pi.
+                          Go pour le système et le serveur. Pour commencer
+                          simplement, prends une carte microSD de 32 Go. Tu
+                          pourras déplacer ton monde vers un autre support plus
+                          tard avec une sauvegarde. Un SSD USB peut démarrer un
+                          Pi 4 ou 5 si son boîtier est assez alimenté et si le
+                          Pi autorise le démarrage USB. Certains anciens Pi 4
+                          nécessitent une mise à jour de leur chargeur de
+                          démarrage.
+                          L’application vérifie la capacité et l’écriture; seul
+                          le premier démarrage confirme que le Pi accepte ce
+                          SSD. Si tu veux éviter cette incertitude, commence en
+                          microSD.
                         </p>
                       )}
                       {(operationProgress || operationError) && (

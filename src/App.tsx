@@ -587,7 +587,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.6.4
+          MONDE ENSEMBLE <span>·</span> 0.6.5
         </div>
       </aside>
 
@@ -1214,7 +1214,7 @@ function LocalInstallPanel({
         onClick={onInstall}
         disabled={busy || !destination || !eulaAccepted || !compatibility}
       >
-        {busy ? "Préparation en cours…" : "Créer le nouveau serveur"}
+        {busy ? "Installation et démarrage en cours…" : "Créer et démarrer le serveur"}
       </button>
       {progress && (
         <div className="operation-progress">
@@ -1233,8 +1233,8 @@ function LocalInstallPanel({
           <strong>Serveur préparé · {result.detail}</strong>
           <small>{result.path}</small>
           <span>
-            Le serveur actuel est resté intact. Cette copie n’a pas été
-            démarrée.
+            Le serveur a confirmé son démarrage. Toute installation déjà
+            présente est restée intacte.
           </span>
         </div>
       )}

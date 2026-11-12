@@ -402,19 +402,174 @@ pub fn install_local(
         let _ = fs::remove_dir_all(&staging);
         format!("Impossible de terminer l’installation dans le dossier choisi : {error}")
     })?;
+    progress("Premier démarrage du nouveau serveur…", 93);
+    start_local_server_and_wait(
+        &final_path,
+        heap_gb,
+        artifacts.4,
+        artifacts.5,
+        &progress,
+    )
+    .map_err(|error| {
+        format!(
+            "Les fichiers sont prêts dans {} mais le serveur n’a pas confirmé son démarrage. Le monde précédent n’a pas été touché. Consulte le journal : {} · {error}",
+            final_path.display(),
+            final_path.join("serveur.log").display()
+        )
+    })?;
+    let address = local_network_address().unwrap_or_else(|| "127.0.0.1".into());
     let profile = format!(
-        "Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · ports Java {} / Bedrock {}",
-        artifacts.0, artifacts.1, artifacts.2, artifacts.3, artifacts.4, artifacts.5
+        "Serveur démarré et contrôlé · Minecraft Java {} · Bedrock compatible {} · Geyser {} · Floodgate {} · Java {address}:{} · Bedrock {address}:{} · ports Java {} / Bedrock {}",
+        artifacts.0,
+        artifacts.1,
+        artifacts.2,
+        artifacts.3,
+        artifacts.4,
+        artifacts.5,
+        artifacts.4,
+        artifacts.5
     );
-    progress(
-        "Installation préparée dans un nouveau dossier; rien n’a été remplacé.",
-        100,
-    );
+    progress("Serveur démarré et prêt sur cet ordinateur.", 100);
     Ok(OperationResult {
         path: final_path.display().to_string(),
         detail: profile,
         sha256: None,
     })
+}
+
+fn start_local_server_and_wait(
+    server_dir: &Path,
+    heap_gb: u8,
+    java_port: u16,
+    bedrock_port: u16,
+    progress: &impl Fn(&str, u8),
+) -> Result<(), String> {
+    let java = WalkDir::new(server_dir.join("runtime"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| {
+            entry.file_type().is_file()
+                && if cfg!(windows) {
+                    entry.file_name() == "java.exe"
+                } else {
+                    entry.file_name() == "java"
+                }
+        })
+        .map(|entry| entry.into_path())
+        .ok_or_else(|| "Le runtime Java inclus est introuvable.".to_string())?;
+    let log_path = server_dir.join("serveur.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&log_path)
+        .map_err(io_error)?;
+    let stdout = log.try_clone().map_err(io_error)?;
+    let mut command = Command::new(java);
+    command
+        .current_dir(server_dir)
+        .args([
+            format!("-Xms1G"),
+            format!("-Xmx{heap_gb}G"),
+            "-jar".into(),
+            "paper.jar".into(),
+            "--nogui".into(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(log);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const DETACHED_PROCESS: u32 = 0x00000008;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+        command.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Java n’a pas pu démarrer : {error}"))?;
+    let pid_file = server_dir.join("serveur.pid");
+    if let Err(error) = fs::write(&pid_file, child.id().to_string()) {
+        terminate_local_process(&mut child);
+        return Err(io_error(error));
+    }
+    for attempt in 0..60 {
+        if fs::read_to_string(&log_path)
+            .map(|contents| contents.contains("Done ("))
+            .unwrap_or(false)
+        {
+            if !tcp_port_open(java_port) {
+                terminate_local_process(&mut child);
+                let _ = fs::remove_file(&pid_file);
+                return Err(format!(
+                    "Le journal indique un démarrage, mais le port Java {java_port} ne répond pas."
+                ));
+            }
+            if udp_port_available(bedrock_port) {
+                terminate_local_process(&mut child);
+                let _ = fs::remove_file(&pid_file);
+                return Err(format!(
+                    "Le serveur Java est prêt, mais le port Bedrock UDP {bedrock_port} n’est pas ouvert."
+                ));
+            }
+            return Ok(());
+        }
+        if let Some(status) = child.try_wait().map_err(io_error)? {
+            let _ = fs::remove_file(&pid_file);
+            return Err(format!(
+                "Le serveur s’est arrêté avant d’être prêt (code {status})."
+            ));
+        }
+        progress(
+            "Minecraft démarre et vérifie les connexions Java et Bedrock…",
+            93 + (attempt / 10) as u8,
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    terminate_local_process(&mut child);
+    let _ = fs::remove_file(pid_file);
+    Err("Le premier démarrage a dépassé deux minutes.".into())
+}
+
+fn tcp_port_open(port: u16) -> bool {
+    std::net::TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_millis(500),
+    )
+    .is_ok()
+}
+
+fn udp_port_available(port: u16) -> bool {
+    UdpSocket::bind(("127.0.0.1", port)).is_ok()
+}
+
+fn local_network_address() -> Option<String> {
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("1.1.1.1:80").ok()?;
+    let address = socket.local_addr().ok()?.ip();
+    (!address.is_unspecified() && !address.is_loopback()).then(|| address.to_string())
+}
+
+fn terminate_local_process(child: &mut std::process::Child) {
+    let pid = child.id().to_string();
+    #[cfg(windows)]
+    let _ = Command::new("taskkill.exe")
+        .args(["/PID", &pid, "/T"])
+        .status();
+    #[cfg(unix)]
+    let _ = Command::new("/bin/kill").args(["-TERM", &pid]).status();
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        if std::time::Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(250));
+    }
 }
 
 /// Installs a complete Linux ARM64 server on an already configured Raspberry Pi.
@@ -1198,7 +1353,7 @@ fn write_launch_files(
         }
     }
     let notes = format!(
-        "MONDE ENSEMBLE — NOUVELLE INSTALLATION\n\nMinecraft Java : {java_port} (TCP)\nMinecraft Bedrock : {bedrock_port} (UDP et TCP)\nLes deux éditions rejoignent le même monde avec Paper, Geyser et Floodgate.\n\nJava : démarrer avec demarrer.bat ou demarrer.sh.\nLe serveur n’a pas été démarré par l’application.\n\nLes consoles peuvent demander une méthode d’accès supplémentaire. Les mods qui exigent une installation chez les joueurs et les packs Java ne sont pas universels.\n"
+        "MONDE ENSEMBLE — NOUVELLE INSTALLATION\n\nMinecraft Java : {java_port} (TCP)\nMinecraft Bedrock : {bedrock_port} (UDP et TCP)\nLes deux éditions rejoignent le même monde avec Paper, Geyser et Floodgate.\n\nServeur démarré et vérifié par Monde Ensemble. Pour le relancer, utilise demarrer.bat ou demarrer.sh.\n\nLes consoles peuvent demander une méthode d’accès supplémentaire. Les mods qui exigent une installation chez les joueurs et les packs Java ne sont pas universels.\n"
     );
     fs::write(stage.join("LIRE AVANT DE JOUER.txt"), notes).map_err(io_error)
 }

@@ -1,4 +1,4 @@
-# Monde Ensemble 0.6.4
+# Monde Ensemble 0.6.5
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -7,6 +7,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;
+- démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done » et vérifie les ports Java TCP et Bedrock UDP avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
 - choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
 - adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
 - crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive qui porte déjà le même nom ;
@@ -30,7 +31,7 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 - La préparation d’un Pi neuf est intégrée, mais l’écriture réelle sur carte/SSD et le premier démarrage doivent encore être validés sur chaque cible Mac, Windows et Linux, avec leurs appareils et supports physiques. Le paquet Mac local ne certifie pas les autres plateformes.
 - Le démarrage automatique après redémarrage dépend du service de planification déjà actif sur le Pi. L’application en vérifie la présence; sinon elle affiche que cette fonction n’est pas configurée.
 - Elle n’a pas encore configuré une réservation DHCP dans la Freebox : l’adresse affichée est celle observée sur le réseau et peut changer. Pour une adresse durable, réserve l’adresse du Pi dans le routeur ; l’application ne prétend pas l’avoir fixée.
-- Elle ne met pas à jour un serveur existant. Elle consulte les versions officielles compatibles pour une nouvelle installation, mais ne remplace ni ne met à niveau le monde actif.
+- Elle ne met pas à jour un serveur existant. Elle consulte les versions officielles compatibles pour une nouvelle installation, mais ne remplace ni ne met à niveau le monde actif. L’installation locale est démarrée par l’application ; l’arrêt et la gestion de son processus restent à améliorer.
 - Elle ne gère pas encore l’arrêt, les joueurs, les mods, ni les packs de ressources. Le redémarrage manuel est disponible seulement pour le serveur enregistré par l’application.
 - Le message Bedrock `InitialConnection-149` n’est pas diagnostiqué depuis les logs du serveur par cette version.
 - Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.

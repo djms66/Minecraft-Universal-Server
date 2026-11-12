@@ -1000,10 +1000,15 @@ pub fn start_local_server(
         let log_ready = fs::read_to_string(&log_path)
             .map(|contents| contents.contains("Done ("))
             .unwrap_or(false);
-        if log_ready && tcp_port_open(java_port) && rcon_command(&profile, "list").is_ok() {
+        if log_ready
+            && tcp_port_open(java_port)
+            && tcp_port_open(bedrock_port)
+            && !udp_port_available(bedrock_port)
+            && rcon_command(&profile, "list").is_ok()
+        {
             progress("Serveur local prêt et contrôlé.", 100);
             return Ok(format!(
-                "Serveur démarré · Java {} · Bedrock compatible {} · adresse {} · Java {} · Bedrock UDP {}",
+                "Serveur démarré et vérifié · Java {} · Bedrock compatible {} · adresse {} · Java TCP {} · Bedrock TCP/UDP {}",
                 profile
                     .get("minecraft_java")
                     .and_then(serde_json::Value::as_str)

@@ -1388,9 +1388,13 @@ fn supported_versions(client: &Client) -> Result<SupportedVersions, String> {
         client,
         "https://geysermc.org/wiki/geyser/supported-versions/",
     )?;
+    parse_supported_versions_page(&page)
+}
+
+fn parse_supported_versions_page(page: &str) -> Result<SupportedVersions, String> {
     let plain = Regex::new(r"(?s)<[^>]+>")
         .map_err(|e| e.to_string())?
-        .replace_all(&page, " ");
+        .replace_all(page, " ");
     let collapsed = plain.split_whitespace().collect::<Vec<_>>().join(" ");
     let start = collapsed
         .find("Currently supported versions")
@@ -6195,8 +6199,9 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RemoveDirOnDrop, artifact_hash_matches, java_major_for, record_managed_artifact_hashes,
-        restore_backup, safe_archive_path, safe_version, valid_plugin_filename,
+        RemoveDirOnDrop, artifact_hash_matches, java_major_for, parse_supported_versions_page,
+        record_managed_artifact_hashes, restore_backup, safe_archive_path, safe_version,
+        valid_plugin_filename,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, path::Path};
@@ -6277,6 +6282,25 @@ mod tests {
 
         for unknown in ["26.0", "26.", "26.3-preview", "26.3.1", "27.0", "1.21.11"] {
             assert!(java_major_for(unknown).is_err(), "{unknown}");
+        }
+    }
+
+    #[test]
+    fn compatibility_gate_reads_bedrock_range_and_java_version_from_geyser_page() {
+        let page = "<h1>Currently supported versions</h1><p>Geyser currently supports Minecraft Bedrock 26.40-26.63 and Minecraft Java 26.3.</p>";
+        let versions = parse_supported_versions_page(page).unwrap();
+
+        assert_eq!(versions.bedrock, "26.40-26.63");
+        assert_eq!(versions.java, "26.3");
+    }
+
+    #[test]
+    fn compatibility_gate_blocks_unrecognized_geyser_page_format() {
+        for page in [
+            "<h1>Supported versions</h1><p>Minecraft Java 26.3 and Bedrock 26.40.</p>",
+            "<h1>Currently supported versions</h1><p>Minecraft versions are being updated.</p>",
+        ] {
+            assert!(parse_supported_versions_page(page).is_err());
         }
     }
 

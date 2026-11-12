@@ -674,7 +674,10 @@ fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{network_config, user_data};
+    use super::{network_config, restrict_file_permissions, user_data};
+    use std::fs;
+    #[cfg(unix)]
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn cloud_init_user_data_is_multiline_and_enables_ssh_at_root() {
@@ -697,5 +700,23 @@ mod tests {
         assert!(config.contains("regulatory-domain: FR\n"));
         assert!(config.contains("\"Maison: 2.4G\":\n"));
         assert!(config.contains("password: \"mot de passe \\\"secret\\\"\"\n"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temporary_wifi_configuration_is_readable_only_by_its_owner() {
+        let path = std::env::temp_dir().join(format!(
+            "monde-ensemble-wifi-{}.conf",
+            uuid::Uuid::new_v4().simple()
+        ));
+        fs::write(&path, "wifi-password").unwrap();
+
+        restrict_file_permissions(&path).unwrap();
+
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_file(path).unwrap();
     }
 }

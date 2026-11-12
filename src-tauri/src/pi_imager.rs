@@ -147,19 +147,23 @@ pub fn flash_pi_os(
 
     // Sensitive cloud-init files are removed by the guard on success or error.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
-    let network_instructions = if wifi_ssid.trim().is_empty() {
-        "relie le Pi au même routeur que cet ordinateur avec un câble réseau"
-    } else {
-        "laisse le Pi rejoindre le réseau Wi-Fi configuré dans cette application, sur le même routeur que cet ordinateur"
-    };
     Ok(PiFlashResult {
         detail: format!(
-            "Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}. Insère maintenant le support dans le Pi, {network_instructions}, puis allume-le. L’application pourra alors terminer la configuration du serveur."
+            "Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}. Insère maintenant le support dans le Pi, {}, puis allume-le. L’application pourra alors terminer la configuration du serveur.",
+            first_boot_network_instructions(wifi_ssid)
         ),
         log_path: log_path.display().to_string(),
         imager_version: IMAGER_VERSION.into(),
         hostname,
     })
+}
+
+fn first_boot_network_instructions(wifi_ssid: &str) -> &'static str {
+    if wifi_ssid.trim().is_empty() {
+        "relie le Pi au même routeur que cet ordinateur avec un câble réseau"
+    } else {
+        "laisse le Pi rejoindre le réseau Wi-Fi configuré dans cette application, sur le même routeur que cet ordinateur"
+    }
 }
 
 fn ensure_imager(app_data: &Path, progress: &impl Fn(&str, u8)) -> Result<MountedImager, String> {
@@ -680,7 +684,8 @@ fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        network_config, powershell_quote, restrict_file_permissions, user_data, windows_quote,
+        first_boot_network_instructions, network_config, powershell_quote,
+        restrict_file_permissions, user_data, windows_quote,
     };
     use std::fs;
     #[cfg(unix)]
@@ -707,6 +712,12 @@ mod tests {
         assert!(config.contains("regulatory-domain: FR\n"));
         assert!(config.contains("\"Maison: 2.4G\":\n"));
         assert!(config.contains("password: \"mot de passe \\\"secret\\\"\"\n"));
+    }
+
+    #[test]
+    fn first_boot_instructions_match_the_selected_network() {
+        assert!(first_boot_network_instructions("").contains("avec un câble réseau"));
+        assert!(first_boot_network_instructions("Maison").contains("réseau Wi-Fi configuré"));
     }
 
     #[test]

@@ -1436,6 +1436,28 @@ fn paper_build(client: &Client, game_version: &str) -> Result<PaperBuild, String
         })
 }
 
+fn paper_build_by_id(
+    client: &Client,
+    game_version: &str,
+    build_id: u64,
+) -> Result<PaperBuild, String> {
+    if !safe_version(game_version) {
+        return Err("La version Paper du profil est illisible.".into());
+    }
+    let url = format!("https://fill.papermc.io/v3/projects/paper/versions/{game_version}/builds");
+    let builds: Vec<PaperBuild> = get_json(client, &url)?;
+    builds
+        .into_iter()
+        .find(|build| {
+            build.id == build_id
+                && build.channel.eq_ignore_ascii_case("STABLE")
+                && build.downloads.contains_key("server:default")
+        })
+        .ok_or_else(|| {
+            "Le build Paper d’origine n’est plus vérifiable dans le catalogue officiel.".into()
+        })
+}
+
 fn bridge_build(client: &Client, project: &str, flavor: &str) -> Result<BridgeBuild, String> {
     let url = format!(
         "https://download.geysermc.org/v2/projects/{project}/versions/latest/builds/latest"
@@ -1447,6 +1469,121 @@ fn bridge_build(client: &Client, project: &str, flavor: &str) -> Result<BridgeBu
         ));
     }
     Ok(build)
+}
+
+fn bridge_build_by_id(
+    client: &Client,
+    project: &str,
+    version: &str,
+    build_id: u64,
+    flavor: &str,
+) -> Result<BridgeBuild, String> {
+    if !matches!(project, "geyser" | "floodgate")
+        || version.is_empty()
+        || version.len() > 64
+        || !version
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    {
+        return Err(format!("La version {project} du profil est illisible."));
+    }
+    let url = format!(
+        "https://download.geysermc.org/v2/projects/{project}/versions/{version}/builds/{build_id}"
+    );
+    let build: BridgeBuild = get_json(client, &url)?;
+    if build.version != version || build.build != build_id {
+        return Err(format!(
+            "Le build {project} d’origine ne correspond plus au catalogue officiel."
+        ));
+    }
+    if !build.downloads.contains_key(flavor) {
+        return Err(format!(
+            "Le téléchargement officiel {project} / {flavor} est absent."
+        ));
+    }
+    Ok(build)
+}
+
+fn legacy_stack_checksums(
+    client: &Client,
+    profile: &serde_json::Value,
+) -> Result<[String; 3], String> {
+    let java = profile
+        .get("minecraft_java")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "La version Java du profil est absente.".to_string())?;
+    let paper_build_id = profile
+        .get("paper_build_id")
+        .and_then(serde_json::Value::as_u64)
+        .ok_or_else(|| "Le build Paper du profil est absent.".to_string())?;
+    let paper = paper_build_by_id(client, java, paper_build_id)?;
+    let paper_sha256 = paper
+        .downloads
+        .get("server:default")
+        .and_then(|download| download.checksums.get("sha256"))
+        .filter(|checksum| valid_sha256(checksum))
+        .cloned()
+        .ok_or_else(|| {
+            "Paper ne publie pas l’empreinte SHA-256 de son build d’origine.".to_string()
+        })?;
+
+    let mut hashes = [paper_sha256, String::new(), String::new()];
+    for (index, (project, version_key, build_key)) in [
+        ("geyser", "geyser", "geyser_build_id"),
+        ("floodgate", "floodgate", "floodgate_build_id"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let version = profile
+            .get(version_key)
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| format!("La version {project} du profil est absente."))?;
+        let build_id = profile
+            .get(build_key)
+            .and_then(serde_json::Value::as_u64)
+            .ok_or_else(|| format!("Le build {project} du profil est absent."))?;
+        let build = bridge_build_by_id(client, project, version, build_id, "spigot")?;
+        hashes[index + 1] = build
+            .downloads
+            .get("spigot")
+            .map(|download| download.sha256.clone())
+            .filter(|checksum| valid_sha256(checksum))
+            .ok_or_else(|| {
+                format!("{project} ne publie pas l’empreinte SHA-256 de son build d’origine.")
+            })?;
+    }
+    Ok(hashes)
+}
+
+fn artifact_hash_matches(
+    label: &str,
+    actual: &str,
+    recorded: Option<&str>,
+    official_legacy: Option<&str>,
+) -> Result<(), String> {
+    if !valid_sha256(actual) {
+        return Err(format!("L’empreinte du fichier {label} est illisible."));
+    }
+    let (expected, source) = match recorded {
+        Some(value) if valid_sha256(value) => (value, "son profil d’installation"),
+        Some(_) => return Err(format!("L’empreinte enregistrée de {label} est invalide.")),
+        None => match official_legacy {
+            Some(value) if valid_sha256(value) => (value, "son build officiel d’origine"),
+            _ => {
+                return Err(format!(
+                    "Le build officiel d’origine de {label} ne peut pas être vérifié; la mise à jour automatique est bloquée."
+                ));
+            }
+        },
+    };
+    if actual.eq_ignore_ascii_case(expected) {
+        Ok(())
+    } else {
+        Err(format!(
+            "Le fichier {label} ne correspond pas à {source}; la mise à jour automatique est bloquée."
+        ))
+    }
 }
 
 pub fn install_local(
@@ -1786,16 +1923,32 @@ pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
     let paper_sha256 = hash_regular_file(&paper_path).unwrap_or_default();
     let geyser_sha256 = hash_regular_file(&geyser_path).unwrap_or_default();
     let floodgate_sha256 = hash_regular_file(&floodgate_path).unwrap_or_default();
-    for (name, checksum) in [
-        ("profil", profile_sha256.as_str()),
-        ("Paper", paper_sha256.as_str()),
-        ("Geyser", geyser_sha256.as_str()),
-        ("Floodgate", floodgate_sha256.as_str()),
-    ] {
-        if !valid_sha256(checksum) {
-            reasons.push(format!(
-                "Le fichier {name} est absent ou son empreinte est illisible."
-            ));
+    if !valid_sha256(&profile_sha256) {
+        reasons.push("Le fichier profil est absent ou son empreinte est illisible.".into());
+    }
+    let hash_fields = ["paper_sha256", "geyser_sha256", "floodgate_sha256"];
+    let legacy_hashes = if hash_fields
+        .iter()
+        .any(|field| profile.get(*field).is_none())
+    {
+        client()
+            .and_then(|client| legacy_stack_checksums(&client, &profile))
+            .ok()
+    } else {
+        None
+    };
+    for (index, (name, field, actual)) in [
+        ("Paper", hash_fields[0], paper_sha256.as_str()),
+        ("Geyser", hash_fields[1], geyser_sha256.as_str()),
+        ("Floodgate", hash_fields[2], floodgate_sha256.as_str()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let recorded = profile.get(field).and_then(serde_json::Value::as_str);
+        let official_legacy = legacy_hashes.as_ref().map(|hashes| hashes[index].as_str());
+        if let Err(reason) = artifact_hash_matches(name, actual, recorded, official_legacy) {
+            reasons.push(reason);
         }
     }
 
@@ -2994,6 +3147,7 @@ fn prepare_local_update_copy(
     }
 
     let mut updated_profile = profile;
+    record_managed_artifact_hashes(&mut updated_profile, &staging)?;
     let object = updated_profile
         .as_object_mut()
         .ok_or_else(|| "Le profil du serveur est invalide.".to_string())?;
@@ -3712,16 +3866,32 @@ pub fn check_pi_update(
     {
         reasons.push("Cette installation n’a pas un profil Monde Ensemble reconnu.".into());
     }
-    for (name, checksum) in [
-        ("profil", profile_sha256.as_str()),
-        ("Paper", paper_sha256.as_str()),
-        ("Geyser", geyser_sha256.as_str()),
-        ("Floodgate", floodgate_sha256.as_str()),
-    ] {
-        if !valid_sha256(checksum) {
-            reasons.push(format!(
-                "L’empreinte du fichier {name} n’a pas pu être vérifiée."
-            ));
+    if !valid_sha256(&profile_sha256) {
+        reasons.push("L’empreinte du profil n’a pas pu être vérifiée.".into());
+    }
+    let hash_fields = ["paper_sha256", "geyser_sha256", "floodgate_sha256"];
+    let legacy_hashes = if hash_fields
+        .iter()
+        .any(|field| profile.get(*field).is_none())
+    {
+        client()
+            .and_then(|client| legacy_stack_checksums(&client, &profile))
+            .ok()
+    } else {
+        None
+    };
+    for (index, (name, field, actual)) in [
+        ("Paper", hash_fields[0], paper_sha256.as_str()),
+        ("Geyser", hash_fields[1], geyser_sha256.as_str()),
+        ("Floodgate", hash_fields[2], floodgate_sha256.as_str()),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let recorded = profile.get(field).and_then(serde_json::Value::as_str);
+        let official_legacy = legacy_hashes.as_ref().map(|hashes| hashes[index].as_str());
+        if let Err(reason) = artifact_hash_matches(name, actual, recorded, official_legacy) {
+            reasons.push(reason);
         }
     }
     for (key, label) in [
@@ -3901,6 +4071,7 @@ fn update_pi_server_if_ready(
     }
 
     let mut profile = check.profile.clone();
+    record_managed_artifact_hashes(&mut profile, &staging)?;
     let object = profile.as_object_mut().ok_or_else(|| {
         "Le profil du serveur n’est pas un objet lisible; serveur inchangé.".to_string()
     })?;
@@ -4659,6 +4830,7 @@ fn configure_server(
         "plugins": ["Geyser-Spigot", "Floodgate-Spigot"],
         "created_at": Utc::now().to_rfc3339(),
     });
+    record_managed_artifact_hashes(&mut profile, stage)?;
     if let Some(object) = profile.as_object_mut() {
         object.extend(rcon_profile);
     }
@@ -5841,7 +6013,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.18.9")
+        .user_agent("MondeEnsemble/0.18.10")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()
@@ -5882,6 +6054,27 @@ fn hash_file(path: &Path) -> Result<String, String> {
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn record_managed_artifact_hashes(
+    profile: &mut serde_json::Value,
+    server_dir: &Path,
+) -> Result<(), String> {
+    let hashes = [
+        ("paper_sha256", "paper.jar"),
+        ("geyser_sha256", "plugins/Geyser-Spigot.jar"),
+        ("floodgate_sha256", "plugins/Floodgate-Spigot.jar"),
+    ]
+    .into_iter()
+    .map(|(field, path)| Ok((field, hash_file(&server_dir.join(path))?)))
+    .collect::<Result<Vec<_>, String>>()?;
+    let object = profile
+        .as_object_mut()
+        .ok_or_else(|| "Le profil du serveur n’est pas un objet lisible.".to_string())?;
+    for (field, checksum) in hashes {
+        object.insert(field.into(), serde_json::json!(checksum));
+    }
+    Ok(())
 }
 
 fn hash_regular_file(path: &Path) -> Option<String> {
@@ -5996,7 +6189,8 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RemoveDirOnDrop, restore_backup, safe_archive_path, safe_version, valid_plugin_filename,
+        RemoveDirOnDrop, artifact_hash_matches, record_managed_artifact_hashes, restore_backup,
+        safe_archive_path, safe_version, valid_plugin_filename,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, path::Path};
@@ -6067,6 +6261,44 @@ mod tests {
         assert!(valid_plugin_filename("Geyser-Spigot.jar"));
         assert!(!valid_plugin_filename("../Geyser.jar"));
         assert!(!valid_plugin_filename("Geyser.jar.sh"));
+    }
+
+    #[test]
+    fn update_gate_requires_a_matching_install_hash_or_verified_legacy_build() {
+        let recorded = "a".repeat(64);
+        let official = "b".repeat(64);
+
+        assert!(artifact_hash_matches("Paper", &recorded, Some(&recorded), None).is_ok());
+        assert!(artifact_hash_matches("Paper", &recorded, None, Some(&recorded)).is_ok());
+        assert!(artifact_hash_matches("Paper", &recorded, Some(&official), None).is_err());
+        assert!(artifact_hash_matches("Paper", &recorded, None, None).is_err());
+        assert!(
+            artifact_hash_matches("Paper", &recorded, Some("invalid"), Some(&recorded)).is_err()
+        );
+    }
+
+    #[test]
+    fn profile_records_hashes_for_paper_geyser_and_floodgate() {
+        let (root, _cleanup) = test_directory();
+        fs::create_dir_all(root.join("plugins")).unwrap();
+        fs::write(root.join("paper.jar"), b"paper").unwrap();
+        fs::write(root.join("plugins/Geyser-Spigot.jar"), b"geyser").unwrap();
+        fs::write(root.join("plugins/Floodgate-Spigot.jar"), b"floodgate").unwrap();
+        let mut profile = serde_json::json!({});
+
+        record_managed_artifact_hashes(&mut profile, &root).unwrap();
+
+        for (field, path) in [
+            ("paper_sha256", "paper.jar"),
+            ("geyser_sha256", "plugins/Geyser-Spigot.jar"),
+            ("floodgate_sha256", "plugins/Floodgate-Spigot.jar"),
+        ] {
+            let expected = super::hash_file(&root.join(path)).unwrap();
+            assert_eq!(
+                profile.get(field).and_then(serde_json::Value::as_str),
+                Some(expected.as_str())
+            );
+        }
     }
 
     #[test]

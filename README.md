@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.9
+# Monde Ensemble 0.18.10
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -10,7 +10,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done » et vérifie les ports Java TCP, Bedrock TCP (signalement NetherNet) et Bedrock UDP avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
 - mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de les démarrer ou de les arrêter proprement avec le contrôle RCON limité à la boucle locale ;
 - permet d’ajouter ou de retirer des comptes Java et des gamertags Bedrock de la liste d’accès d’un serveur local, puis de l’activer après avoir vérifié qu’elle contient au moins un joueur ; l’application n’ouvre pas temporairement la liste pour laisser entrer un Bedrock inconnu ;
-- compare à la demande les versions locales aux catalogues officiels et bloque la validation d’une mise à jour si des mods, extensions, packs, liens, configuration Geyser modifiée ou runtime incompatible sont détectés ; ce contrôle est en lecture seule ;
+- compare à la demande les versions locales aux catalogues officiels et bloque la validation d’une mise à jour si des mods, extensions, packs, liens, configuration Geyser modifiée ou runtime incompatible sont détectés ; ce contrôle est en lecture seule ; enregistre aussi les empreintes SHA-256 du Paper, de Geyser et de Floodgate ; pour un ancien profil sans empreinte, vérifie le build installé auprès des catalogues officiels avant d’autoriser la mise à jour ;
 - en mode avancé, recherche dans Modrinth les plugins Paper déclarés pour la version Java exacte ; sur un serveur local ou Pi arrêté, crée une sauvegarde et une nouvelle copie avec un plugin publié sans dépendance obligatoire, vérifie son SHA-512 et permet de revenir à l’ancienne copie ;
 - au démarrage demandé d’un serveur local géré, met à jour Paper, Geyser et Floodgate ensemble uniquement si les catalogues et les contenus sont compatibles ; crée une archive complète, prépare une nouvelle copie du serveur et conserve le dossier précédent ; en cas de blocage, démarre la version actuelle ;
 - applique la même mise à jour coordonnée aux serveurs locaux gérés sur Mac et Windows, après validation du profil, des contenus, de l’espace libre et des ports ; vérifie la nouvelle copie au démarrage et conserve l’ancienne pour retour arrière ;

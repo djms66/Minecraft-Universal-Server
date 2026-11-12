@@ -59,6 +59,16 @@ pub struct DiscoveredPi {
     pub model: String,
 }
 
+#[derive(Serialize)]
+pub struct PiServerStatus {
+    pub running: bool,
+    pub ready: bool,
+    pub java_port_open: bool,
+    pub bedrock_port_open: bool,
+    pub address: String,
+    pub log: String,
+}
+
 #[derive(Deserialize)]
 struct PaperBuild {
     id: u64,
@@ -487,6 +497,76 @@ pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
         return Err("Le réseau a répondu, mais aucun Pi n’a pu être vérifié avec le compte et la clé SSH de cet ordinateur. Rien n’a été modifié.".into());
     }
     Ok(discovered)
+}
+
+/// Reads the saved installation's process, ports and recent log without
+/// changing anything on the Raspberry Pi.
+pub fn inspect_pi_server(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+) -> Result<PiServerStatus, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Le dossier enregistré du serveur n’est pas reconnu.".into());
+    }
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]25566$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]19133$'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+    );
+    let output = run_ssh(&destination, &command)?;
+    let (header, log) = output
+        .split_once("LOG_START\n")
+        .ok_or_else(|| "Le Pi n’a pas renvoyé les informations attendues.".to_string())?;
+    let get = |key: &str| {
+        header
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .unwrap_or_default()
+            .trim()
+    };
+    Ok(PiServerStatus {
+        running: get("RUNNING=") == "yes",
+        ready: get("RUNNING=") == "yes" && get("READY=") == "yes",
+        java_port_open: get("JAVA_PORT=") == "yes",
+        bedrock_port_open: get("BEDROCK_PORT=") == "yes",
+        address: get("IP=").to_string(),
+        log: log.to_string(),
+    })
+}
+
+/// Restarts only this app's saved installation, and only while both game
+/// ports are free. The existing log is kept so the user can inspect history.
+pub fn start_pi_server(host: &str, username: &str, server_folder: &str) -> Result<(), String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Err("Le dossier enregistré du serveur n’est pas reconnu.".into());
+    }
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; if ! test -x \"$d/demarrer.sh\"; then echo 'LANCEUR_ABSENT'; exit 0; fi; if test -r \"$d/serveur.pid\" && kill -0 \"$(cat \"$d/serveur.pid\")\" 2>/dev/null; then echo 'DEJA_LANCE'; exit 0; fi; if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.]({GAME_PORT}|{BEDROCK_PORT})$'; then echo 'PORT_OCCUPE'; exit 0; fi; cd \"$d\"; nohup ./demarrer.sh >> serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; echo 'DEMARRAGE_LANCE'"
+    );
+    let output = run_ssh(&destination, &command)?;
+    if output.lines().any(|line| line == "PORT_OCCUPE") {
+        return Err(
+            "Un autre programme utilise déjà un port Minecraft. Le serveur n’a pas été lancé."
+                .into(),
+        );
+    }
+    if output.lines().any(|line| line == "LANCEUR_ABSENT") {
+        return Err("Le lanceur du serveur est absent. Aucun fichier n’a été modifié.".into());
+    }
+    Ok(())
+}
+
+fn valid_server_folder(value: &str) -> bool {
+    Regex::new(r"^Monde-Ensemble-[a-f0-9]{32}/server$")
+        .map(|pattern| pattern.is_match(value))
+        .unwrap_or(false)
 }
 
 struct RemoteFacts {

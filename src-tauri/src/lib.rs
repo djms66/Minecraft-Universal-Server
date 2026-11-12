@@ -280,6 +280,32 @@ async fn install_pi(
 }
 
 #[tauri::command]
+async fn inspect_pi_server(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<engine::PiServerStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::inspect_pi_server(&host, &username, &server_folder)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn start_pi_server(
+    host: String,
+    username: String,
+    server_folder: String,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::start_pi_server(&host, &username, &server_folder)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn backup_server(
     source: String,
     output_file: String,
@@ -336,6 +362,8 @@ pub fn run() {
             get_compatibility,
             create_server,
             install_pi,
+            inspect_pi_server,
+            start_pi_server,
             backup_server,
             restore_server
         ])

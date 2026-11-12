@@ -26,6 +26,20 @@ type CompatibilityReport = {
 type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
 type DiscoveredPi = { host: string; address: string; model: string };
+type PiInstallation = {
+  host: string;
+  username: string;
+  serverFolder: string;
+  address: string;
+};
+type PiServerStatus = {
+  running: boolean;
+  ready: boolean;
+  java_port_open: boolean;
+  bedrock_port_open: boolean;
+  address: string;
+  log: string;
+};
 
 const nav: { id: Page; label: string; icon: string }[] = [
   { id: "home", label: "Mon monde", icon: "▦" },
@@ -45,6 +59,20 @@ function App() {
   const [piVerified, setPiVerified] = useState(false);
   const [piDiscovering, setPiDiscovering] = useState(false);
   const [piCandidates, setPiCandidates] = useState<DiscoveredPi[]>([]);
+  const [piInstallation, setPiInstallation] = useState<PiInstallation | null>(
+    () => {
+      try {
+        const stored = localStorage.getItem("monde-ensemble.pi-installation");
+        return stored ? (JSON.parse(stored) as PiInstallation) : null;
+      } catch {
+        return null;
+      }
+    },
+  );
+  const [piServerStatus, setPiServerStatus] = useState<PiServerStatus | null>(
+    null,
+  );
+  const [piStatusError, setPiStatusError] = useState("");
   const [connection, setConnection] = useState("");
   const [busy, setBusy] = useState(false);
   const [compatibility, setCompatibility] =
@@ -69,6 +97,15 @@ function App() {
       .then(setSystem)
       .catch((e) => setSystemError(String(e)));
   }, []);
+
+  useEffect(() => {
+    if (piInstallation) {
+      localStorage.setItem(
+        "monde-ensemble.pi-installation",
+        JSON.stringify(piInstallation),
+      );
+    }
+  }, [piInstallation]);
 
   useEffect(() => {
     if (page !== "compat" && page !== "install") return;
@@ -223,8 +260,85 @@ function App() {
         progress: progressChannel(),
       });
       setOperationResult(result);
+      const serverFolder = result.path.match(
+        /Monde-Ensemble-[a-f0-9]{32}\/server/,
+      )?.[0];
+      const address = result.detail.match(/(?:\d{1,3}\.){3}\d{1,3}/)?.[0];
+      if (serverFolder && address) {
+        setPiInstallation({
+          host: piHost,
+          username: piUser,
+          serverFolder,
+          address,
+        });
+        setPiServerStatus({
+          running: true,
+          ready: true,
+          java_port_open: true,
+          bedrock_port_open: true,
+          address,
+          log: "",
+        });
+        setPiStatusError("");
+      }
     } catch (error) {
       setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshPiStatus = async (includeLogs = false) => {
+    if (!piInstallation) return;
+    setBusy(true);
+    setPiStatusError("");
+    try {
+      const status = await invoke<PiServerStatus>("inspect_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+      });
+      setPiServerStatus(status);
+      if (includeLogs && !status.log) {
+        setPiStatusError("Le serveur n’a pas encore écrit de journal.");
+      }
+    } catch (error) {
+      setPiStatusError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  useEffect(() => {
+    if (page === "home" && piInstallation) void refreshPiStatus(false);
+    // A status check runs when the saved server dashboard is opened.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, piInstallation?.serverFolder]);
+
+  useEffect(() => {
+    if (piServerStatus?.address && piInstallation) {
+      setPiInstallation((current) =>
+        current && current.address !== piServerStatus.address
+          ? { ...current, address: piServerStatus.address }
+          : current,
+      );
+    }
+  }, [piServerStatus?.address]);
+
+  const startPiServer = async () => {
+    if (!piInstallation) return;
+    setBusy(true);
+    setPiStatusError("");
+    try {
+      await invoke("start_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: piInstallation.serverFolder,
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 2500));
+      await refreshPiStatus(true);
+    } catch (error) {
+      setPiStatusError(String(error));
     } finally {
       setBusy(false);
     }
@@ -295,7 +409,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.4.0
+          MONDE ENSEMBLE <span>·</span> 0.5.0
         </div>
       </aside>
 
@@ -334,6 +448,12 @@ function App() {
             <Home
               system={system}
               systemError={systemError}
+              piInstallation={piInstallation}
+              piServerStatus={piServerStatus}
+              piStatusError={piStatusError}
+              busy={busy}
+              onRefreshPi={() => refreshPiStatus(true)}
+              onStartPi={startPiServer}
               onInstall={() => setPage("install")}
               onCompat={() => setPage("compat")}
               onBackup={() => setPage("backup")}
@@ -826,22 +946,109 @@ function Spec({
 function Home({
   system,
   systemError,
+  piInstallation,
+  piServerStatus,
+  piStatusError,
+  busy,
+  onRefreshPi,
+  onStartPi,
   onInstall,
   onCompat,
   onBackup,
 }: {
   system: SystemInfo | null;
   systemError: string;
+  piInstallation: PiInstallation | null;
+  piServerStatus: PiServerStatus | null;
+  piStatusError: string;
+  busy: boolean;
+  onRefreshPi: () => void;
+  onStartPi: () => void;
   onInstall: () => void;
   onCompat: () => void;
   onBackup: () => void;
 }) {
   return (
     <>
+      {piInstallation && (
+        <section className="pi-dashboard" aria-labelledby="pi-dashboard-title">
+          <div className="pi-dashboard-head">
+            <div>
+              <div className="eyebrow">SERVEUR RASPBERRY PI ENREGISTRÉ</div>
+              <h2 id="pi-dashboard-title">
+                {!piServerStatus && !piStatusError
+                  ? "Vérification du Pi…"
+                  : piServerStatus?.ready
+                  ? "Ton monde est prêt"
+                  : piServerStatus?.running
+                    ? "Le serveur démarre"
+                    : "État du serveur"}
+              </h2>
+              <p>
+                {piServerStatus?.address || piInstallation.address} · dossier
+                dédié conservé sur le Pi
+              </p>
+            </div>
+            <div className={piServerStatus?.ready ? "pi-state ready" : "pi-state"}>
+              <span />
+              {!piServerStatus && !piStatusError
+                ? "VÉRIFICATION"
+                : piServerStatus?.ready
+                  ? "PRÊT"
+                  : piServerStatus?.running
+                    ? "DÉMARRAGE"
+                    : "HORS LIGNE"}
+            </div>
+          </div>
+          <div className="pi-connect-grid">
+            <div>
+              <small>ORDINATEUR · JAVA</small>
+              <strong>{piServerStatus?.address || piInstallation.address}:25566</strong>
+              <span>Dans Minecraft : Multijoueur → Ajouter un serveur</span>
+            </div>
+            <div>
+              <small>TÉLÉPHONE · TABLETTE · BEDROCK</small>
+              <strong>{piServerStatus?.address || piInstallation.address}</strong>
+              <span>Port : 19133 · Ajouter un serveur</span>
+            </div>
+          </div>
+          <div className="pi-checks">
+            <span className={piServerStatus?.java_port_open ? "ok" : ""}>Java {piServerStatus?.java_port_open ? "· disponible" : "· non vérifié"}</span>
+            <span className={piServerStatus?.bedrock_port_open ? "ok" : ""}>Bedrock {piServerStatus?.bedrock_port_open ? "· disponible" : "· non vérifié"}</span>
+            <div className="pi-actions">
+              {!piServerStatus?.running && (
+                <button className="button primary" onClick={onStartPi} disabled={busy}>
+                  {busy ? "Vérification…" : "Démarrer le serveur"}
+                </button>
+              )}
+              <button className="text-button" onClick={onRefreshPi} disabled={busy}>
+                {busy ? "Lecture…" : "Actualiser l’état et le journal"}
+              </button>
+            </div>
+          </div>
+          {piStatusError && <p className="pi-error">{piStatusError}</p>}
+          {piServerStatus && !piServerStatus.ready && !piStatusError && (
+            <p className="pi-help">
+              {piServerStatus.running
+                ? "Minecraft n’a pas encore confirmé son démarrage. Ouvre le journal pour voir la cause."
+                : "Le Pi ne répond pas ou le serveur est arrêté. Vérifie qu’il est allumé et connecté au même réseau, puis actualise."}
+            </p>
+          )}
+          {piServerStatus?.log && (
+            <details className="pi-log">
+              <summary>Journal récent · utile en cas de problème</summary>
+              <pre>{piServerStatus.log}</pre>
+            </details>
+          )}
+          <p className="pi-network-note">
+            Adresse actuelle du Pi sur ton réseau. Pour qu’elle ne change jamais, une réservation dans la box doit être confirmée. Pour jouer depuis l’extérieur, il faut aussi configurer l’accès du routeur.
+          </p>
+        </section>
+      )}
       <div className="hero">
         <div className="hero-copy">
           <div className="hero-kicker">
-            <span /> PARCOURS SANS ÉCRITURE
+            <span /> {piInstallation ? "SERVEUR SUIVI" : "PARCOURS GUIDÉ"}
           </div>
           <h2>
             Joue ensemble.

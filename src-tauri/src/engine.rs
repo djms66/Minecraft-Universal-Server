@@ -4125,6 +4125,57 @@ pub fn restore_backup(
         return Err(error);
     }
     let restored_root = staging.join("server");
+    let profile_path = restored_root.join("monde-ensemble-profile.json");
+    if profile_path.is_file() {
+        let profile: serde_json::Value =
+            serde_json::from_slice(&fs::read(&profile_path).map_err(io_error)?)
+                .map_err(|_| "Le profil contenu dans la sauvegarde est illisible.".to_string())?;
+        if profile
+            .get("application")
+            .and_then(serde_json::Value::as_str)
+            == Some("Monde Ensemble")
+        {
+            progress("Adaptation du runtime Java à cet ordinateur…", 88);
+            let java_major = profile.get("java_runtime").and_then(serde_json::Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .or_else(|| profile.get("minecraft_java").and_then(serde_json::Value::as_str).and_then(|version| java_major_for(version).ok()))
+                .ok_or_else(|| "La sauvegarde ne précise pas un runtime Java vérifié. Le dossier original reste intact.".to_string())?;
+            let heap_gb = profile
+                .get("java_heap_gb")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .filter(|value| (1..=6).contains(value))
+                .unwrap_or(2);
+            let java_port = profile
+                .get("java_port")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(JAVA_DEFAULT_PORT);
+            let bedrock_port = profile
+                .get("bedrock_port")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .filter(|value| *value > 0)
+                .unwrap_or(BEDROCK_DEFAULT_PORT);
+            let client = client()?;
+            let runtime = runtime_package(&client, java_major, false)?;
+            let runtime_archive = staging.join(&runtime.name);
+            download_url_verified(&client, &runtime.link, &runtime.checksum, &runtime_archive)
+                .map_err(|error| format!("Téléchargement du Java adapté impossible; aucune restauration n’a été publiée. {error}"))?;
+            let portable_runtime = staging.join("runtime-portable");
+            unpack_runtime(&runtime_archive, portable_runtime.clone())?;
+            fs::remove_file(&runtime_archive).map_err(io_error)?;
+            let original_runtime = restored_root.join("runtime");
+            if original_runtime.exists() {
+                fs::remove_dir_all(&original_runtime).map_err(io_error)?;
+            }
+            fs::rename(&portable_runtime, &original_runtime).map_err(io_error)?;
+            write_launch_files(&restored_root, heap_gb, false, java_port, bedrock_port)?;
+            set_private_file_permissions(&restored_root.join("server.properties"))?;
+            set_private_file_permissions(&profile_path)?;
+        }
+    }
     if !restored_root.join("server.properties").is_file()
         && !restored_root.join("paper.jar").is_file()
     {

@@ -1099,7 +1099,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.13.0
+          MONDE ENSEMBLE <span>·</span> 0.14.0
         </div>
       </aside>
 

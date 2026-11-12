@@ -444,11 +444,14 @@ function App() {
           });
           return;
         }
-        setLocalInstallation({ serverPath: result.path });
+        setLocalInstallation({
+          serverPath: result.path,
+          previousServerPath: localInstallation?.serverPath,
+        });
         setLocalServerStatus(restoredStatus);
         setLocalStatusError("");
         setLocalActionMessage(
-          "Le monde restauré est chargé dans le tableau de bord. Démarre-le quand tu veux jouer.",
+          "Le monde restauré est chargé dans le tableau de bord. Démarre-le quand tu veux jouer; l’installation précédente reste accessible dans le mode avancé.",
         );
         setPage("home");
       } catch {
@@ -1335,7 +1338,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.3
+          MONDE ENSEMBLE <span>·</span> 0.18.4
         </div>
       </aside>
 

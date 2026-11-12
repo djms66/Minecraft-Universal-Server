@@ -14,8 +14,8 @@ use sha2::{Digest, Sha256};
 use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
-    io::{self, Read},
-    net::{TcpListener, UdpSocket},
+    io::{self, Read, Write},
+    net::{TcpListener, TcpStream, UdpSocket},
     path::{Component, Path, PathBuf},
     process::Command,
     time::Duration,
@@ -157,6 +157,19 @@ pub struct PiServerStatus {
     pub java_port: u16,
     pub bedrock_port: u16,
     pub address: String,
+    pub log: String,
+}
+
+#[derive(Serialize)]
+pub struct LocalServerStatus {
+    pub running: bool,
+    pub ready: bool,
+    pub minecraft_java: String,
+    pub minecraft_bedrock: String,
+    pub java_port: u16,
+    pub bedrock_port: u16,
+    pub address: String,
+    pub players: String,
     pub log: String,
 }
 
@@ -616,6 +629,327 @@ fn terminate_local_process(child: &mut std::process::Child) {
         }
         std::thread::sleep(Duration::from_millis(250));
     }
+}
+
+/// Reads only a server profile created by this application and confirms the
+/// live process by authenticating to its loopback-only RCON endpoint.
+pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier de serveur local enregistré est introuvable.".to_string())?;
+    let profile_path = server_dir.join("monde-ensemble-profile.json");
+    let profile: serde_json::Value = serde_json::from_slice(
+        &fs::read(&profile_path)
+            .map_err(|_| "Le profil du serveur local est illisible.".to_string())?,
+    )
+    .map_err(|_| "Le profil du serveur local est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier n’a pas été créé par Monde Ensemble.".into());
+    }
+    if profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+        || profile
+            .get("rcon_password")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return Err("Ce serveur a été créé par une version antérieure et ne possède pas le contrôle local sécurisé. Il reste intact; utilise son lanceur dans le dossier indiqué.".into());
+    }
+    let text = |key: &str| {
+        profile
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("inconnue")
+            .to_string()
+    };
+    let number = |key: &str| {
+        profile
+            .get(key)
+            .and_then(serde_json::Value::as_u64)
+            .and_then(|value| u16::try_from(value).ok())
+            .unwrap_or_default()
+    };
+    let java_port = number("java_port");
+    let bedrock_port = number("bedrock_port");
+    let players = rcon_command(&profile, "list").ok();
+    let running = players.is_some();
+    let log = fs::read_to_string(server_dir.join("serveur.log"))
+        .map(|contents| {
+            contents
+                .lines()
+                .rev()
+                .take(200)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("\n")
+        })
+        .unwrap_or_default();
+    let ready = running
+        && log.contains("Done (")
+        && java_port > 0
+        && bedrock_port > 0
+        && tcp_port_open(java_port)
+        && !udp_port_available(bedrock_port);
+    Ok(LocalServerStatus {
+        running,
+        ready,
+        minecraft_java: text("minecraft_java"),
+        minecraft_bedrock: text("minecraft_bedrock"),
+        java_port,
+        bedrock_port,
+        address: local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
+        players: players.unwrap_or_default(),
+        log,
+    })
+}
+
+/// Gracefully stops a managed local server with Minecraft's authenticated
+/// loopback RCON command. No process is killed if RCON cannot confirm identity.
+pub fn stop_local_server(server_dir: &Path) -> Result<String, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier de serveur local enregistré est introuvable.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_slice(
+        &fs::read(server_dir.join("monde-ensemble-profile.json"))
+            .map_err(|_| "Le profil du serveur local est illisible.".to_string())?,
+    )
+    .map_err(|_| "Le profil du serveur local est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier n’a pas été créé par Monde Ensemble.".into());
+    }
+    if profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+        || profile
+            .get("rcon_password")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return Err("Ce serveur a été créé par une version antérieure et ne possède pas le contrôle local sécurisé. Il reste intact.".into());
+    }
+    if rcon_command(&profile, "stop").is_err() {
+        return Err("Le serveur n’a pas confirmé son identité ou son arrêt sécurisé. Aucun processus n’a été forcé à quitter.".into());
+    }
+    let pid_path = server_dir.join("serveur.pid");
+    for _ in 0..60 {
+        if !tcp_port_open(
+            profile
+                .get("java_port")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|port| u16::try_from(port).ok())
+                .unwrap_or_default(),
+        ) {
+            let _ = fs::remove_file(pid_path);
+            return Ok("Serveur arrêté proprement. Le monde a été enregistré.".into());
+        }
+        std::thread::sleep(Duration::from_secs(1));
+    }
+    Err("Le serveur a reçu l’ordre de sauvegarder et de s’arrêter, mais son port reste actif. Aucun arrêt forcé n’a été tenté.".into())
+}
+
+/// Restarts only an application-managed local server and waits for its
+/// authenticated RCON endpoint, Java port, and startup log before reporting ready.
+pub fn start_local_server(
+    server_dir: &Path,
+    progress: impl Fn(&str, u8),
+) -> Result<String, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier de serveur local enregistré est introuvable.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_slice(
+        &fs::read(server_dir.join("monde-ensemble-profile.json"))
+            .map_err(|_| "Le profil du serveur local est illisible.".to_string())?,
+    )
+    .map_err(|_| "Le profil du serveur local est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier n’a pas été créé par Monde Ensemble.".into());
+    }
+    if profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+        || profile
+            .get("rcon_password")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return Err("Ce serveur a été créé par une version antérieure et ne possède pas le contrôle local sécurisé. Il reste intact.".into());
+    }
+    if rcon_command(&profile, "list").is_ok() {
+        return Ok("Le serveur local est déjà démarré.".into());
+    }
+    let java_port = profile
+        .get("java_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .ok_or_else(|| "Le port Java du serveur est illisible.".to_string())?;
+    let bedrock_port = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .ok_or_else(|| "Le port Bedrock du serveur est illisible.".to_string())?;
+    if tcp_port_open(java_port) || !udp_port_available(bedrock_port) {
+        return Err("Un autre service utilise déjà un port réservé au serveur. Aucun processus n’a été démarré.".into());
+    }
+    let runtime_name = if cfg!(windows) { "java.exe" } else { "java" };
+    let java = WalkDir::new(server_dir.join("runtime"))
+        .into_iter()
+        .filter_map(Result::ok)
+        .find(|entry| entry.file_type().is_file() && entry.file_name() == runtime_name)
+        .map(|entry| entry.into_path())
+        .ok_or_else(|| "Le runtime Java inclus est introuvable.".to_string())?;
+    let heap_gb = profile
+        .get("java_heap_gb")
+        .and_then(serde_json::Value::as_u64)
+        .filter(|value| (1..=6).contains(value))
+        .ok_or_else(|| "La mémoire Java du profil est illisible.".to_string())?;
+    let log_path = server_dir.join("serveur.log");
+    let log = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+        .map_err(io_error)?;
+    let stdout = log.try_clone().map_err(io_error)?;
+    let mut command = Command::new(java);
+    command
+        .current_dir(&server_dir)
+        .args([
+            format!("-Xms1G"),
+            format!("-Xmx{heap_gb}G"),
+            "-jar".into(),
+            "paper.jar".into(),
+            "--nogui".into(),
+        ])
+        .stdin(std::process::Stdio::null())
+        .stdout(stdout)
+        .stderr(log);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x00000008 | 0x00000200);
+    }
+    let child = command
+        .spawn()
+        .map_err(|error| format!("Java n’a pas pu démarrer : {error}"))?;
+    fs::write(server_dir.join("serveur.pid"), child.id().to_string()).map_err(io_error)?;
+    progress("Minecraft redémarre et contrôle les connexions…", 85);
+    for attempt in 0..60 {
+        let log_ready = fs::read_to_string(&log_path)
+            .map(|contents| contents.contains("Done ("))
+            .unwrap_or(false);
+        if log_ready && tcp_port_open(java_port) && rcon_command(&profile, "list").is_ok() {
+            progress("Serveur local prêt et contrôlé.", 100);
+            return Ok(format!(
+                "Serveur démarré · Java {} · Bedrock compatible {} · adresse {} · Java {} · Bedrock UDP {}",
+                profile
+                    .get("minecraft_java")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("inconnue"),
+                profile
+                    .get("minecraft_bedrock")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("inconnue"),
+                local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
+                java_port,
+                bedrock_port
+            ));
+        }
+        progress(
+            &format!("Minecraft démarre… vérification {}/60", attempt + 1),
+            85 + attempt / 10,
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    Err(format!(
+        "Le serveur n’a pas confirmé son démarrage après deux minutes. Il n’a pas été arrêté de force. Consulte le journal : {}",
+        log_path.display()
+    ))
+}
+
+fn rcon_command(profile: &serde_json::Value, command: &str) -> Result<String, String> {
+    let port = profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port > 0)
+        .ok_or_else(|| "Le port de contrôle sécurisé est absent.".to_string())?;
+    let password = profile
+        .get("rcon_password")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "Le contrôle sécurisé du serveur n’est pas configuré.".to_string())?;
+    let mut stream = TcpStream::connect_timeout(
+        &std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+        Duration::from_secs(2),
+    )
+    .map_err(|_| "Le serveur local ne répond pas au contrôle sécurisé.".to_string())?;
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .map_err(io_error)?;
+    stream
+        .set_write_timeout(Some(Duration::from_secs(2)))
+        .map_err(io_error)?;
+    write_rcon_packet(&mut stream, 1, 3, password)?;
+    let (auth_id, _, _) = read_rcon_packet(&mut stream)?;
+    if auth_id != 1 {
+        return Err("Le serveur local n’a pas confirmé son identité.".into());
+    }
+    write_rcon_packet(&mut stream, 2, 2, command)?;
+    let (response_id, _, response) = read_rcon_packet(&mut stream)?;
+    if response_id != 2 {
+        return Err("Le serveur local n’a pas confirmé la commande.".into());
+    }
+    Ok(response)
+}
+
+fn write_rcon_packet(
+    stream: &mut TcpStream,
+    id: i32,
+    kind: i32,
+    payload: &str,
+) -> Result<(), String> {
+    let mut packet = Vec::with_capacity(payload.len() + 14);
+    packet.extend_from_slice(&id.to_le_bytes());
+    packet.extend_from_slice(&kind.to_le_bytes());
+    packet.extend_from_slice(payload.as_bytes());
+    packet.push(0);
+    packet.push(0);
+    let length = i32::try_from(packet.len())
+        .map_err(|_| "La commande de contrôle est trop longue.".to_string())?;
+    stream.write_all(&length.to_le_bytes()).map_err(io_error)?;
+    stream.write_all(&packet).map_err(io_error)
+}
+
+fn read_rcon_packet(stream: &mut TcpStream) -> Result<(i32, i32, String), String> {
+    let mut size = [0; 4];
+    stream.read_exact(&mut size).map_err(io_error)?;
+    let size = i32::from_le_bytes(size);
+    if !(10..=4096).contains(&size) {
+        return Err("Le serveur local a répondu avec un paquet de contrôle invalide.".into());
+    }
+    let mut packet = vec![0; size as usize];
+    stream.read_exact(&mut packet).map_err(io_error)?;
+    let id = i32::from_le_bytes([packet[0], packet[1], packet[2], packet[3]]);
+    let kind = i32::from_le_bytes([packet[4], packet[5], packet[6], packet[7]]);
+    let payload = String::from_utf8_lossy(&packet[8..packet.len().saturating_sub(2)]).to_string();
+    Ok((id, kind, payload))
 }
 
 /// Installs a complete Linux ARM64 server on an already configured Raspberry Pi.
@@ -1952,8 +2286,23 @@ fn configure_server(
 ) -> Result<(), String> {
     let eula = format!("# EULA acceptée séparément dans l’application Monde Ensemble\neula=true\n");
     fs::write(stage.join("eula.txt"), eula).map_err(io_error)?;
+    let (rcon_properties, rcon_profile) = if remote_linux {
+        (String::new(), serde_json::Map::new())
+    } else {
+        let rcon_port = available_game_port(25575, 25576, false)?;
+        let rcon_password = Uuid::new_v4().simple().to_string();
+        (
+            format!(
+                "enable-rcon=true\nrcon.port={rcon_port}\nrcon.password={rcon_password}\nrcon.ip=127.0.0.1\n"
+            ),
+            serde_json::Map::from_iter([
+                ("rcon_port".into(), serde_json::json!(rcon_port)),
+                ("rcon_password".into(), serde_json::json!(rcon_password)),
+            ]),
+        )
+    };
     let properties = format!(
-        "motd=Monde Ensemble\nserver-port={java_port}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nview-distance=8\nsimulation-distance=6\n"
+        "motd=Monde Ensemble\nserver-port={java_port}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nview-distance=8\nsimulation-distance=6\n{rcon_properties}"
     );
     fs::write(stage.join("server.properties"), properties).map_err(io_error)?;
 
@@ -1974,7 +2323,7 @@ fn configure_server(
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
 
     write_launch_files(stage, heap_gb, remote_linux, java_port, bedrock_port)?;
-    let profile = serde_json::json!({
+    let mut profile = serde_json::json!({
         "application": "Monde Ensemble",
         "minecraft_java": java_version,
         "minecraft_bedrock": bedrock_versions,
@@ -1990,6 +2339,9 @@ fn configure_server(
         "plugins": ["Geyser-Spigot", "Floodgate-Spigot"],
         "created_at": Utc::now().to_rfc3339(),
     });
+    if let Some(object) = profile.as_object_mut() {
+        object.extend(rcon_profile);
+    }
     fs::write(
         stage.join("monde-ensemble-profile.json"),
         serde_json::to_vec_pretty(&profile).map_err(|error| error.to_string())?,

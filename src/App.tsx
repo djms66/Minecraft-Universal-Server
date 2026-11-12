@@ -76,6 +76,18 @@ type PiInstallation = {
   serverFolder: string;
   address: string;
 };
+type LocalInstallation = { serverPath: string };
+type LocalServerStatus = {
+  running: boolean;
+  ready: boolean;
+  minecraft_java: string;
+  minecraft_bedrock: string;
+  java_port: number;
+  bedrock_port: number;
+  address: string;
+  players: string;
+  log: string;
+};
 type PiServerStatus = {
   running: boolean;
   ready: boolean;
@@ -114,13 +126,18 @@ function App() {
   const [piDiscovering, setPiDiscovering] = useState(false);
   const [piCandidates, setPiCandidates] = useState<DiscoveredPi[]>([]);
   const [piBootTargets, setPiBootTargets] = useState<PiBootTarget[]>([]);
-  const [piBootScanState, setPiBootScanState] = useState<"idle" | "scanning" | "done">("idle");
+  const [piBootScanState, setPiBootScanState] = useState<
+    "idle" | "scanning" | "done"
+  >("idle");
   const [piBootScanError, setPiBootScanError] = useState("");
   const [piWifiSsid, setPiWifiSsid] = useState("");
   const [piWifiPassword, setPiWifiPassword] = useState("");
   const [piWifiCountry, setPiWifiCountry] = useState("FR");
-  const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
-  const [piOsRecommendation, setPiOsRecommendation] = useState<PiOsRecommendation | null>(null);
+  const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(
+    null,
+  );
+  const [piOsRecommendation, setPiOsRecommendation] =
+    useState<PiOsRecommendation | null>(null);
   const [piOsLoading, setPiOsLoading] = useState(false);
   const [piOsError, setPiOsError] = useState("");
   const [piInstallation, setPiInstallation] = useState<PiInstallation | null>(
@@ -136,9 +153,26 @@ function App() {
   const [piServerStatus, setPiServerStatus] = useState<PiServerStatus | null>(
     null,
   );
+  const [localInstallation, setLocalInstallation] =
+    useState<LocalInstallation | null>(() => {
+      try {
+        const stored = localStorage.getItem(
+          "monde-ensemble.local-installation",
+        );
+        return stored ? (JSON.parse(stored) as LocalInstallation) : null;
+      } catch {
+        return null;
+      }
+    });
+  const [localServerStatus, setLocalServerStatus] =
+    useState<LocalServerStatus | null>(null);
+  const [localActionMessage, setLocalActionMessage] = useState("");
+  const [localStatusError, setLocalStatusError] = useState("");
   const [piStatusError, setPiStatusError] = useState("");
   const [piActionMessage, setPiActionMessage] = useState("");
-  const [piUpdateCheck, setPiUpdateCheck] = useState<PiUpdateCheck | null>(null);
+  const [piUpdateCheck, setPiUpdateCheck] = useState<PiUpdateCheck | null>(
+    null,
+  );
   const [piUpdateError, setPiUpdateError] = useState("");
   const [checkingPiUpdate, setCheckingPiUpdate] = useState(false);
   const [connection, setConnection] = useState("");
@@ -174,6 +208,15 @@ function App() {
       );
     }
   }, [piInstallation]);
+
+  useEffect(() => {
+    if (localInstallation) {
+      localStorage.setItem(
+        "monde-ensemble.local-installation",
+        JSON.stringify(localInstallation),
+      );
+    }
+  }, [localInstallation]);
 
   useEffect(() => {
     if (page !== "compat" && page !== "install") return;
@@ -240,6 +283,17 @@ function App() {
         progress: progressChannel(),
       });
       setOperationResult(result);
+      setLocalInstallation({ serverPath: result.path });
+      try {
+        setLocalServerStatus(
+          await invoke<LocalServerStatus>("inspect_local_server", {
+            serverPath: result.path,
+          }),
+        );
+        setLocalStatusError("");
+      } catch (error) {
+        setLocalStatusError(String(error));
+      }
     } catch (error) {
       setOperationError(String(error));
     } finally {
@@ -342,7 +396,9 @@ function App() {
     setPiBootScanError("");
     setPiBootTargets([]);
     try {
-      setPiBootTargets(await invoke<PiBootTarget[]>("discover_pi_boot_targets"));
+      setPiBootTargets(
+        await invoke<PiBootTarget[]>("discover_pi_boot_targets"),
+      );
       setPiBootScanState("done");
     } catch (error) {
       setPiBootScanError(String(error));
@@ -357,7 +413,9 @@ function App() {
         piOsRecommendation.initial_server_storage_gb,
     );
     if (device.size_bytes < minimumGb * 1_000_000_000) {
-      setOperationError(`Ce support est trop petit. Prévois au moins ${minimumGb} Go.`);
+      setOperationError(
+        `Ce support est trop petit. Prévois au moins ${minimumGb} Go.`,
+      );
       return;
     }
     const confirmed = window.confirm(
@@ -439,12 +497,17 @@ function App() {
   const finishNewPi = async () => {
     if (!piFlashResult) return;
     if (!piEulaAccepted) {
-      setOperationError("Accepte d’abord le contrat de licence Minecraft pour installer le serveur.");
+      setOperationError(
+        "Accepte d’abord le contrat de licence Minecraft pour installer le serveur.",
+      );
       return;
     }
     resetOperation();
     setBusy(true);
-    setOperationProgress({ step: "Recherche du Pi sur le réseau local…", percent: 8 });
+    setOperationProgress({
+      step: "Recherche du Pi sur le réseau local…",
+      percent: 8,
+    });
     try {
       let device: DiscoveredPi | undefined;
       let lastError = "";
@@ -461,7 +524,9 @@ function App() {
             expectedHostname: piFlashResult.hostname,
           });
           if (found.length > 1) {
-            throw new Error("Plusieurs Raspberry Pi préparés répondent. Éteins les autres Pi puis réessaie.");
+            throw new Error(
+              "Plusieurs Raspberry Pi préparés répondent. Éteins les autres Pi puis réessaie.",
+            );
           }
           if (found.length === 1) {
             device = found[0];
@@ -469,7 +534,8 @@ function App() {
           }
         } catch (error) {
           lastError = String(error);
-          if (lastError.includes("Plusieurs Raspberry Pi préparés")) throw error;
+          if (lastError.includes("Plusieurs Raspberry Pi préparés"))
+            throw error;
         }
         if (attempt < 11) {
           await new Promise((resolve) => window.setTimeout(resolve, 5000));
@@ -483,7 +549,9 @@ function App() {
       setPiHost(device.host);
       setPiUser("minecraft");
       setPiVerified(true);
-      setConnection(`${device.model} · trouvé sur le réseau · accès sécurisé confirmé`);
+      setConnection(
+        `${device.model} · trouvé sur le réseau · accès sécurisé confirmé`,
+      );
       setBusy(false);
       await installPiAt(device.host, "minecraft");
     } catch (error) {
@@ -538,6 +606,76 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, piInstallation?.serverFolder]);
 
+  const refreshLocalStatus = async () => {
+    if (!localInstallation) return;
+    setLocalStatusError("");
+    try {
+      setLocalServerStatus(
+        await invoke<LocalServerStatus>("inspect_local_server", {
+          serverPath: localInstallation.serverPath,
+        }),
+      );
+    } catch (error) {
+      setLocalStatusError(String(error));
+    }
+  };
+
+  useEffect(() => {
+    if (page === "home" && localInstallation) void refreshLocalStatus();
+    // The saved local path is the only input to this read-only status refresh.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, localInstallation?.serverPath]);
+
+  const startLocalServer = async () => {
+    if (!localInstallation) return;
+    setBusy(true);
+    setLocalStatusError("");
+    setLocalActionMessage("");
+    setOperationProgress({
+      step: "Démarrage et vérification du serveur…",
+      percent: 5,
+    });
+    try {
+      setLocalActionMessage(
+        await invoke<string>("start_local_server", {
+          serverPath: localInstallation.serverPath,
+          progress: progressChannel(),
+        }),
+      );
+      await refreshLocalStatus();
+    } catch (error) {
+      setLocalStatusError(String(error));
+    } finally {
+      setOperationProgress(null);
+      setBusy(false);
+    }
+  };
+
+  const stopLocalServer = async () => {
+    if (!localInstallation) return;
+    if (
+      !window.confirm(
+        "Arrêter le serveur déconnectera les joueurs présents. Le monde sera enregistré avant l’arrêt. Continuer ?",
+      )
+    )
+      return;
+    setBusy(true);
+    setLocalStatusError("");
+    setLocalActionMessage("");
+    try {
+      setLocalActionMessage(
+        await invoke<string>("stop_local_server", {
+          serverPath: localInstallation.serverPath,
+        }),
+      );
+      await refreshLocalStatus();
+    } catch (error) {
+      setLocalStatusError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   useEffect(() => {
     if (piServerStatus?.address && piInstallation) {
       setPiInstallation((current) =>
@@ -553,7 +691,10 @@ function App() {
     setBusy(true);
     setPiStatusError("");
     setPiActionMessage("");
-    setOperationProgress({ step: "Vérification des mises à jour et sauvegarde de sécurité…", percent: 2 });
+    setOperationProgress({
+      step: "Vérification des mises à jour et sauvegarde de sécurité…",
+      percent: 2,
+    });
     try {
       const detail = await invoke<string>("start_pi_server", {
         host: piInstallation.host,
@@ -574,7 +715,12 @@ function App() {
 
   const stopPiServer = async () => {
     if (!piInstallation) return;
-    if (!window.confirm("Arrêter le serveur déconnectera les joueurs présents. Le monde sera enregistré avant l’arrêt. Continuer ?")) return;
+    if (
+      !window.confirm(
+        "Arrêter le serveur déconnectera les joueurs présents. Le monde sera enregistré avant l’arrêt. Continuer ?",
+      )
+    )
+      return;
     setBusy(true);
     setPiStatusError("");
     setPiActionMessage("");
@@ -658,7 +804,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.7.0
+          MONDE ENSEMBLE <span>·</span> 0.8.0
         </div>
       </aside>
 
@@ -697,11 +843,18 @@ function App() {
             <Home
               system={system}
               systemError={systemError}
+              localInstallation={localInstallation}
+              localServerStatus={localServerStatus}
+              localStatusError={localStatusError}
+              localActionMessage={localActionMessage}
+              onRefreshLocal={refreshLocalStatus}
+              onStartLocal={startLocalServer}
+              onStopLocal={stopLocalServer}
               piInstallation={piInstallation}
               piServerStatus={piServerStatus}
               piStatusError={piStatusError}
               piActionMessage={piActionMessage}
-              actionProgress={busy ? operationProgress?.step ?? "" : ""}
+              actionProgress={busy ? (operationProgress?.step ?? "") : ""}
               busy={busy}
               onRefreshPi={() => refreshPiStatus(true)}
               onStartPi={startPiServer}
@@ -896,47 +1049,80 @@ function App() {
                       />
                     )}
                     <div className="pi-os-recommendation" aria-live="polite">
-                      <div className="eyebrow">SYSTÈME CHOISI AUTOMATIQUEMENT</div>
-                      {piOsLoading && <p>Vérification du catalogue officiel Raspberry Pi…</p>}
-                      {piOsError && <p className="pi-error">Impossible de confirmer le système recommandé : {piOsError}</p>}
+                      <div className="eyebrow">
+                        SYSTÈME CHOISI AUTOMATIQUEMENT
+                      </div>
+                      {piOsLoading && (
+                        <p>Vérification du catalogue officiel Raspberry Pi…</p>
+                      )}
+                      {piOsError && (
+                        <p className="pi-error">
+                          Impossible de confirmer le système recommandé :{" "}
+                          {piOsError}
+                        </p>
+                      )}
                       {piOsRecommendation && (
                         <>
                           <strong>{piOsRecommendation.name}</strong>
                           <span>
-                            Publication du {new Date(`${piOsRecommendation.release_date}T12:00:00`).toLocaleDateString("fr-FR")} · téléchargement {piOsRecommendation.download_size_gb} Go · écrit {piOsRecommendation.image_size_gb} Go · 64 bits
+                            Publication du{" "}
+                            {new Date(
+                              `${piOsRecommendation.release_date}T12:00:00`,
+                            ).toLocaleDateString("fr-FR")}{" "}
+                            · téléchargement{" "}
+                            {piOsRecommendation.download_size_gb} Go · écrit{" "}
+                            {piOsRecommendation.image_size_gb} Go · 64 bits
                           </span>
                           <span>
-                            Modèles compatibles : {describePiModels(piOsRecommendation.devices)}.
+                            Modèles compatibles :{" "}
+                            {describePiModels(piOsRecommendation.devices)}.
                           </span>
                           <small>
-                            Les Pi 3 ne conviennent pas à ce serveur. Pour l’héberger, choisis un Pi 4 ou 5 avec au moins {piOsRecommendation.minimum_server_memory_gb} Go de mémoire. L’application vérifiera le modèle et la mémoire avant l’installation.
+                            Les Pi 3 ne conviennent pas à ce serveur. Pour
+                            l’héberger, choisis un Pi 4 ou 5 avec au moins{" "}
+                            {piOsRecommendation.minimum_server_memory_gb} Go de
+                            mémoire. L’application vérifiera le modèle et la
+                            mémoire avant l’installation.
                           </small>
                         </>
                       )}
                     </div>
-                    <section className="pi-first-boot" aria-labelledby="pi-fresh-title">
+                    <section
+                      className="pi-first-boot"
+                      aria-labelledby="pi-fresh-title"
+                    >
                       <div className="eyebrow">PRÉPARATION D’UN PI NEUF</div>
-                      <h4 id="pi-fresh-title">Préparer le Raspberry Pi depuis cette application</h4>
+                      <h4 id="pi-fresh-title">
+                        Préparer le Raspberry Pi depuis cette application
+                      </h4>
                       <p>
-                        Branche sa carte SD ou son SSD à cet ordinateur, puis lance
-                        la détection. L’application choisira le système compatible et
-                        vérifiera le support avant de l’effacer.
+                        Branche sa carte SD ou son SSD à cet ordinateur, puis
+                        lance la détection. L’application choisira le système
+                        compatible et vérifiera le support avant de l’effacer.
                       </p>
                       <button
                         className="button secondary"
                         onClick={findPiBootTargets}
                         disabled={piBootScanState === "scanning"}
                       >
-                        {piBootScanState === "scanning" ? "Recherche des supports…" : "Détecter la carte SD ou le SSD"}
+                        {piBootScanState === "scanning"
+                          ? "Recherche des supports…"
+                          : "Détecter la carte SD ou le SSD"}
                       </button>
-                      {piBootScanError && <p className="pi-error">{piBootScanError}</p>}
+                      {piBootScanError && (
+                        <p className="pi-error">{piBootScanError}</p>
+                      )}
                       <div className="pi-wireless-fields">
                         <div>
-                          <label htmlFor="pi-wifi-ssid">Réseau Wi-Fi (facultatif)</label>
+                          <label htmlFor="pi-wifi-ssid">
+                            Réseau Wi-Fi (facultatif)
+                          </label>
                           <input
                             id="pi-wifi-ssid"
                             value={piWifiSsid}
-                            onChange={(event) => setPiWifiSsid(event.target.value)}
+                            onChange={(event) =>
+                              setPiWifiSsid(event.target.value)
+                            }
                             autoComplete="off"
                             placeholder="Vide si le Pi sera relié par câble"
                             disabled={busy || Boolean(piFlashResult)}
@@ -944,24 +1130,37 @@ function App() {
                         </div>
                         {piWifiSsid && (
                           <>
-                            <small className="pi-wifi-note">Le mot de passe sert à connecter le Pi au premier démarrage ; il est effacé du support après cette configuration. Pour éviter de l’écrire sur la carte, utilise plutôt un câble réseau.</small>
+                            <small className="pi-wifi-note">
+                              Le mot de passe sert à connecter le Pi au premier
+                              démarrage ; il est effacé du support après cette
+                              configuration. Pour éviter de l’écrire sur la
+                              carte, utilise plutôt un câble réseau.
+                            </small>
                             <div>
-                              <label htmlFor="pi-wifi-password">Mot de passe Wi-Fi</label>
+                              <label htmlFor="pi-wifi-password">
+                                Mot de passe Wi-Fi
+                              </label>
                               <input
                                 id="pi-wifi-password"
                                 type="password"
                                 value={piWifiPassword}
-                                onChange={(event) => setPiWifiPassword(event.target.value)}
+                                onChange={(event) =>
+                                  setPiWifiPassword(event.target.value)
+                                }
                                 autoComplete="new-password"
                                 disabled={busy || Boolean(piFlashResult)}
                               />
                             </div>
                             <div>
-                              <label htmlFor="pi-wifi-country">Pays du réseau Wi-Fi</label>
+                              <label htmlFor="pi-wifi-country">
+                                Pays du réseau Wi-Fi
+                              </label>
                               <select
                                 id="pi-wifi-country"
                                 value={piWifiCountry}
-                                onChange={(event) => setPiWifiCountry(event.target.value)}
+                                onChange={(event) =>
+                                  setPiWifiCountry(event.target.value)
+                                }
                                 disabled={busy || Boolean(piFlashResult)}
                               >
                                 <option value="FR">France</option>
@@ -979,65 +1178,121 @@ function App() {
                           </>
                         )}
                         {!piWifiSsid && (
-                          <small>Sans Wi-Fi ici, branche le Pi au routeur avec un câble réseau lors du premier démarrage.</small>
+                          <small>
+                            Sans Wi-Fi ici, branche le Pi au routeur avec un
+                            câble réseau lors du premier démarrage.
+                          </small>
                         )}
                       </div>
-                      {piBootScanState === "done" && piBootTargets.length === 0 && (
-                        <p className="pi-help">Aucun support externe compatible n’a été détecté. Vérifie son branchement puis relance la recherche.</p>
-                      )}
+                      {piBootScanState === "done" &&
+                        piBootTargets.length === 0 && (
+                          <p className="pi-help">
+                            Aucun support externe compatible n’a été détecté.
+                            Vérifie son branchement puis relance la recherche.
+                          </p>
+                        )}
                       {piBootTargets.length > 0 && (
                         <ul className="pi-storage-list">
                           {piBootTargets.map((device) => (
                             <li key={device.id}>
                               <div>
                                 <strong>{device.name}</strong>
-                                <span>{device.size} · {device.connection}</span>
+                                <span>
+                                  {device.size} · {device.connection}
+                                </span>
                               </div>
                               {piOsRecommendation && device.size_bytes > 0 && (
-                                <em className={
-                                  device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb) * 1_000_000_000
-                                    ? "storage-ready"
-                                    : "storage-small"
-                                }>
-                                  {device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb) * 1_000_000_000
+                                <em
+                                  className={
+                                    device.size_bytes >=
+                                    Math.ceil(
+                                      piOsRecommendation.image_size_gb +
+                                        piOsRecommendation.initial_server_storage_gb,
+                                    ) *
+                                      1_000_000_000
+                                      ? "storage-ready"
+                                      : "storage-small"
+                                  }
+                                >
+                                  {device.size_bytes >=
+                                  Math.ceil(
+                                    piOsRecommendation.image_size_gb +
+                                      piOsRecommendation.initial_server_storage_gb,
+                                  ) *
+                                    1_000_000_000
                                     ? "Assez de place pour l’OS et le serveur"
                                     : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go`}
                                 </em>
                               )}
-                              {piOsRecommendation && device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb) * 1_000_000_000 && (
-                                <button
-                                  className="button secondary pi-flash-button"
-                                  onClick={() => flashPiOs(device)}
-                                  disabled={busy || Boolean(piFlashResult) || !piOsRecommendation.download_sha256}
-                                >
-                                  {busy ? "Préparation en cours…" : "Effacer et préparer ce support"}
-                                </button>
-                              )}
+                              {piOsRecommendation &&
+                                device.size_bytes >=
+                                  Math.ceil(
+                                    piOsRecommendation.image_size_gb +
+                                      piOsRecommendation.initial_server_storage_gb,
+                                  ) *
+                                    1_000_000_000 && (
+                                  <button
+                                    className="button secondary pi-flash-button"
+                                    onClick={() => flashPiOs(device)}
+                                    disabled={
+                                      busy ||
+                                      Boolean(piFlashResult) ||
+                                      !piOsRecommendation.download_sha256
+                                    }
+                                  >
+                                    {busy
+                                      ? "Préparation en cours…"
+                                      : "Effacer et préparer ce support"}
+                                  </button>
+                                )}
                             </li>
                           ))}
                         </ul>
                       )}
                       {piOsRecommendation && (
                         <p className="pi-storage-guidance">
-                          Il faut environ {Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go pour le système et l’espace initial du serveur. Une carte microSD de 16 Go suffit au profil initial; 32 Go laisse plus de place au monde. Un SSD USB dépend du modèle du Pi.
+                          Il faut environ{" "}
+                          {Math.ceil(
+                            piOsRecommendation.image_size_gb +
+                              piOsRecommendation.initial_server_storage_gb,
+                          )}{" "}
+                          Go pour le système et l’espace initial du serveur. Une
+                          carte microSD de 16 Go suffit au profil initial; 32 Go
+                          laisse plus de place au monde. Un SSD USB dépend du
+                          modèle du Pi.
                         </p>
                       )}
                       {(operationProgress || operationError) && (
-                        <OperationStatus progress={operationProgress} result={null} error={operationError} />
+                        <OperationStatus
+                          progress={operationProgress}
+                          result={null}
+                          error={operationError}
+                        />
                       )}
                       {piFlashResult && (
                         <div className="pi-flash-success" aria-live="polite">
                           <strong>Carte prête · vérification terminée</strong>
                           <p>{piFlashResult.detail}</p>
-                          <p>Le premier démarrage peut prendre quelques minutes. Laisse le Pi branché au même routeur et allumé ; l’application le recherchera automatiquement avant d’installer le serveur.</p>
+                          <p>
+                            Le premier démarrage peut prendre quelques minutes.
+                            Laisse le Pi branché au même routeur et allumé ;
+                            l’application le recherchera automatiquement avant
+                            d’installer le serveur.
+                          </p>
                           <button
                             className="button primary"
                             onClick={finishNewPi}
                             disabled={busy || !piEulaAccepted}
                           >
-                            {busy ? "Recherche automatique du Pi…" : "Le Pi est allumé · terminer l’installation"}
+                            {busy
+                              ? "Recherche automatique du Pi…"
+                              : "Le Pi est allumé · terminer l’installation"}
                           </button>
-                          <small>Outil officiel Raspberry Pi Imager {piFlashResult.imager_version} · journal : {piFlashResult.log_path}</small>
+                          <small>
+                            Outil officiel Raspberry Pi Imager{" "}
+                            {piFlashResult.imager_version} · journal :{" "}
+                            {piFlashResult.log_path}
+                          </small>
                         </div>
                       )}
                     </section>
@@ -1111,6 +1366,8 @@ function App() {
           {page === "advanced" && (
             <Advanced
               system={system}
+              localInstallation={localInstallation}
+              localServerStatus={localServerStatus}
               piInstallation={piInstallation}
               piServerStatus={piServerStatus}
               piUpdateCheck={piUpdateCheck}
@@ -1303,7 +1560,9 @@ function LocalInstallPanel({
         onClick={onInstall}
         disabled={busy || !destination || !eulaAccepted || !compatibility}
       >
-        {busy ? "Installation et démarrage en cours…" : "Créer et démarrer le serveur"}
+        {busy
+          ? "Installation et démarrage en cours…"
+          : "Créer et démarrer le serveur"}
       </button>
       {progress && (
         <div className="operation-progress">
@@ -1361,6 +1620,13 @@ function Spec({
 function Home({
   system,
   systemError,
+  localInstallation,
+  localServerStatus,
+  localStatusError,
+  localActionMessage,
+  onRefreshLocal,
+  onStartLocal,
+  onStopLocal,
   piInstallation,
   piServerStatus,
   piStatusError,
@@ -1380,6 +1646,13 @@ function Home({
 }: {
   system: SystemInfo | null;
   systemError: string;
+  localInstallation: LocalInstallation | null;
+  localServerStatus: LocalServerStatus | null;
+  localStatusError: string;
+  localActionMessage: string;
+  onRefreshLocal: () => void;
+  onStartLocal: () => void;
+  onStopLocal: () => void;
   piInstallation: PiInstallation | null;
   piServerStatus: PiServerStatus | null;
   piStatusError: string;
@@ -1399,6 +1672,119 @@ function Home({
 }) {
   return (
     <>
+      {localInstallation && (
+        <section
+          className="pi-dashboard"
+          aria-labelledby="local-dashboard-title"
+        >
+          <div className="pi-dashboard-head">
+            <div>
+              <div className="eyebrow">SERVEUR LOCAL ENREGISTRÉ</div>
+              <h2 id="local-dashboard-title">
+                {localStatusError
+                  ? "Vérification nécessaire"
+                  : !localServerStatus
+                    ? "Vérification du serveur…"
+                    : localServerStatus.ready
+                      ? "Ton monde est prêt"
+                      : localServerStatus.running
+                        ? "Le serveur démarre"
+                        : "Serveur arrêté"}
+              </h2>
+              <p>
+                {localServerStatus?.address || "Adresse à vérifier"} · dossier{" "}
+                {localInstallation.serverPath}
+              </p>
+            </div>
+            <div
+              className={
+                localServerStatus?.ready ? "pi-state ready" : "pi-state"
+              }
+            >
+              <span />
+              {localServerStatus?.ready
+                ? "PRÊT"
+                : localServerStatus?.running
+                  ? "DÉMARRAGE"
+                  : "HORS LIGNE"}
+            </div>
+          </div>
+          <div className="pi-connect-grid">
+            <div>
+              <small>ORDINATEUR · JAVA</small>
+              <strong>
+                {localServerStatus?.address || "—"}:
+                {localServerStatus?.java_port || "—"}
+              </strong>
+              <span>Minecraft → Multijoueur → Ajouter un serveur</span>
+            </div>
+            <div>
+              <small>TÉLÉPHONE · TABLETTE · BEDROCK</small>
+              <strong>{localServerStatus?.address || "—"}</strong>
+              <span>
+                Port : {localServerStatus?.bedrock_port || "—"} · Ajouter un
+                serveur
+              </span>
+            </div>
+          </div>
+          <div className="pi-version-line">
+            <strong>Version exacte installée</strong>
+            <span>
+              Java {localServerStatus?.minecraft_java || "à vérifier"} · Bedrock
+              compatible {localServerStatus?.minecraft_bedrock || "à vérifier"}
+            </span>
+            {localServerStatus?.running && (
+              <span>
+                Joueurs · {localServerStatus.players || "état non communiqué"}
+              </span>
+            )}
+          </div>
+          <div className="pi-actions">
+            {localServerStatus?.running ? (
+              <button
+                className="button secondary"
+                onClick={onStopLocal}
+                disabled={busy || Boolean(localStatusError)}
+              >
+                Arrêter proprement
+              </button>
+            ) : (
+              <button
+                className="button primary"
+                onClick={onStartLocal}
+                disabled={
+                  busy || !localServerStatus || Boolean(localStatusError)
+                }
+              >
+                {busy ? "Démarrage…" : "Démarrer le serveur"}
+              </button>
+            )}
+            <button
+              className="text-button"
+              onClick={onRefreshLocal}
+              disabled={busy}
+            >
+              Actualiser l’état et le journal
+            </button>
+          </div>
+          {localActionMessage && (
+            <p className="pi-action-message" aria-live="polite">
+              {localActionMessage}
+            </p>
+          )}
+          {localStatusError && (
+            <p className="pi-error" role="alert">
+              {localStatusError}
+            </p>
+          )}
+          {localServerStatus?.log && (
+            <details className="pi-log">
+              <summary>Journal récent du serveur</summary>
+              <pre>{localServerStatus.log}</pre>
+            </details>
+          )}
+        </section>
+      )}
       {piInstallation && (
         <section className="pi-dashboard" aria-labelledby="pi-dashboard-title">
           <div className="pi-dashboard-head">
@@ -1408,17 +1794,19 @@ function Home({
                 {!piServerStatus && !piStatusError
                   ? "Vérification du Pi…"
                   : piServerStatus?.ready
-                  ? "Ton monde est prêt"
-                  : piServerStatus?.running
-                    ? "Le serveur démarre"
-                    : "État du serveur"}
+                    ? "Ton monde est prêt"
+                    : piServerStatus?.running
+                      ? "Le serveur démarre"
+                      : "État du serveur"}
               </h2>
               <p>
                 {piServerStatus?.address || piInstallation.address} · dossier
                 dédié conservé sur le Pi
               </p>
             </div>
-            <div className={piServerStatus?.ready ? "pi-state ready" : "pi-state"}>
+            <div
+              className={piServerStatus?.ready ? "pi-state ready" : "pi-state"}
+            >
               <span />
               {!piServerStatus && !piStatusError
                 ? "VÉRIFICATION"
@@ -1440,8 +1828,13 @@ function Home({
             </div>
             <div>
               <small>TÉLÉPHONE · TABLETTE · BEDROCK</small>
-              <strong>{piServerStatus?.address || piInstallation.address}</strong>
-              <span>Port : {piServerStatus?.bedrock_port || 19132} · Ajouter un serveur</span>
+              <strong>
+                {piServerStatus?.address || piInstallation.address}
+              </strong>
+              <span>
+                Port : {piServerStatus?.bedrock_port || 19132} · Ajouter un
+                serveur
+              </span>
             </div>
           </div>
           <div className="pi-version-line">
@@ -1453,38 +1846,93 @@ function Home({
                 : ""}
             </span>
             <span>
-              Paper {piServerStatus?.paper_build_id ? `build ${piServerStatus.paper_build_id}` : "à vérifier"}
-              {piServerStatus?.geyser_version ? ` · Geyser ${piServerStatus.geyser_version} build ${piServerStatus.geyser_build_id}` : ""}
-              {piServerStatus?.floodgate_version ? ` · Floodgate ${piServerStatus.floodgate_version} build ${piServerStatus.floodgate_build_id}` : ""}
+              Paper{" "}
+              {piServerStatus?.paper_build_id
+                ? `build ${piServerStatus.paper_build_id}`
+                : "à vérifier"}
+              {piServerStatus?.geyser_version
+                ? ` · Geyser ${piServerStatus.geyser_version} build ${piServerStatus.geyser_build_id}`
+                : ""}
+              {piServerStatus?.floodgate_version
+                ? ` · Floodgate ${piServerStatus.floodgate_version} build ${piServerStatus.floodgate_build_id}`
+                : ""}
             </span>
           </div>
           <div className="pi-checks">
-            <span className={piServerStatus?.java_port_open ? "ok" : ""}>Java {piServerStatus?.java_port_open ? "· disponible" : "· non vérifié"}</span>
-            <span className={piServerStatus?.bedrock_port_open ? "ok" : ""}>Bedrock {piServerStatus?.bedrock_port_open ? "· disponible" : "· non vérifié"}</span>
-            <span className={piServerStatus?.autostart_configured ? "ok" : ""}>Après redémarrage {piServerStatus?.autostart_configured ? "· automatique" : "· non configuré"}</span>
+            <span className={piServerStatus?.java_port_open ? "ok" : ""}>
+              Java{" "}
+              {piServerStatus?.java_port_open
+                ? "· disponible"
+                : "· non vérifié"}
+            </span>
+            <span className={piServerStatus?.bedrock_port_open ? "ok" : ""}>
+              Bedrock{" "}
+              {piServerStatus?.bedrock_port_open
+                ? "· disponible"
+                : "· non vérifié"}
+            </span>
+            <span className={piServerStatus?.autostart_configured ? "ok" : ""}>
+              Après redémarrage{" "}
+              {piServerStatus?.autostart_configured
+                ? "· automatique"
+                : "· non configuré"}
+            </span>
             <div className="pi-actions">
               {!piServerStatus?.running && (
-                <button className="button primary" onClick={onStartPi} disabled={busy}>
+                <button
+                  className="button primary"
+                  onClick={onStartPi}
+                  disabled={busy}
+                >
                   {busy ? "Vérification…" : "Démarrer le serveur"}
                 </button>
               )}
               {piServerStatus?.running && (
-                <button className="button secondary" onClick={onStopPi} disabled={busy}>
+                <button
+                  className="button secondary"
+                  onClick={onStopPi}
+                  disabled={busy}
+                >
                   {busy ? "Arrêt en cours…" : "Arrêter le serveur"}
                 </button>
               )}
-              <button className="text-button" onClick={onRefreshPi} disabled={busy}>
+              <button
+                className="text-button"
+                onClick={onRefreshPi}
+                disabled={busy}
+              >
                 {busy ? "Lecture…" : "Actualiser l’état et le journal"}
               </button>
-              <button className="text-button" onClick={onCheckPiUpdate} disabled={checkingPiUpdate || busy}>
-                {checkingPiUpdate ? "Vérification des versions…" : "Vérifier la compatibilité des mises à jour"}
+              <button
+                className="text-button"
+                onClick={onCheckPiUpdate}
+                disabled={checkingPiUpdate || busy}
+              >
+                {checkingPiUpdate
+                  ? "Vérification des versions…"
+                  : "Vérifier la compatibilité des mises à jour"}
               </button>
             </div>
           </div>
-          {actionProgress && <p className="pi-action-progress" aria-live="polite">{actionProgress}</p>}
-          {piActionMessage && <p className="pi-action-message" aria-live="polite">{piActionMessage}</p>}
+          {actionProgress && (
+            <p className="pi-action-progress" aria-live="polite">
+              {actionProgress}
+            </p>
+          )}
+          {piActionMessage && (
+            <p className="pi-action-message" aria-live="polite">
+              {piActionMessage}
+            </p>
+          )}
           {(piUpdateCheck || piUpdateError) && (
-            <div className={piUpdateCheck?.ready ? "pi-update-check ready" : "pi-update-check"} aria-live="polite">
+            <div
+              className={
+                piUpdateCheck?.ready
+                  ? "pi-update-check ready"
+                  : "pi-update-check"
+              }
+              aria-live="polite"
+            >
               <strong>
                 {piUpdateError
                   ? "Vérification impossible"
@@ -1499,13 +1947,24 @@ function Home({
               ) : piUpdateCheck ? (
                 <>
                   <p>
-                    Installé : Java {piUpdateCheck.current_java}, Bedrock {piUpdateCheck.current_bedrock} · Disponible : Java {piUpdateCheck.latest_java}, Bedrock {piUpdateCheck.latest_bedrock}.
+                    Installé : Java {piUpdateCheck.current_java}, Bedrock{" "}
+                    {piUpdateCheck.current_bedrock} · Disponible : Java{" "}
+                    {piUpdateCheck.latest_java}, Bedrock{" "}
+                    {piUpdateCheck.latest_bedrock}.
                   </p>
                   <p>
-                    Pont multiplateforme installé : Geyser {piUpdateCheck.current_geyser} / Floodgate {piUpdateCheck.current_floodgate} · versions officielles actuelles : Geyser {piUpdateCheck.latest_geyser} / Floodgate {piUpdateCheck.latest_floodgate}.
+                    Pont multiplateforme installé : Geyser{" "}
+                    {piUpdateCheck.current_geyser} / Floodgate{" "}
+                    {piUpdateCheck.current_floodgate} · versions officielles
+                    actuelles : Geyser {piUpdateCheck.latest_geyser} / Floodgate{" "}
+                    {piUpdateCheck.latest_floodgate}.
                   </p>
                   {piUpdateCheck.reasons.length > 0 && (
-                    <ul>{piUpdateCheck.reasons.map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                    <ul>
+                      {piUpdateCheck.reasons.map((reason) => (
+                        <li key={reason}>{reason}</li>
+                      ))}
+                    </ul>
                   )}
                   <small>
                     {piUpdateCheck.ready
@@ -1519,11 +1978,15 @@ function Home({
             </div>
           )}
           {piStatusError && <p className="pi-error">{piStatusError}</p>}
-          {piServerStatus && !piServerStatus.autostart_configured && !piStatusError && (
-            <p className="pi-help">
-              Le Pi ne confirme pas le démarrage automatique après redémarrage. Le serveur peut être relancé ici lorsqu’il est éteint.
-            </p>
-          )}
+          {piServerStatus &&
+            !piServerStatus.autostart_configured &&
+            !piStatusError && (
+              <p className="pi-help">
+                Le Pi ne confirme pas le démarrage automatique après
+                redémarrage. Le serveur peut être relancé ici lorsqu’il est
+                éteint.
+              </p>
+            )}
           {piServerStatus && !piServerStatus.ready && !piStatusError && (
             <p className="pi-help">
               {piServerStatus.running
@@ -1538,7 +2001,9 @@ function Home({
             </details>
           )}
           <p className="pi-network-note">
-            Adresse actuelle du Pi sur ton réseau. Pour qu’elle ne change jamais, une réservation dans la box doit être confirmée. Pour jouer depuis l’extérieur, il faut aussi configurer l’accès du routeur.
+            Adresse actuelle du Pi sur ton réseau. Pour qu’elle ne change
+            jamais, une réservation dans la box doit être confirmée. Pour jouer
+            depuis l’extérieur, il faut aussi configurer l’accès du routeur.
           </p>
         </section>
       )}
@@ -1766,7 +2231,8 @@ function Compatibility({
         <span>!</span>
         <p>
           <strong>
-            Les mises à jour coordonnées sont disponibles pour les serveurs Pi gérés.
+            Les mises à jour coordonnées sont disponibles pour les serveurs Pi
+            gérés.
           </strong>
           <br />
           Après arrêt, le bouton « Démarrer » vérifie Java, Bedrock, Paper,
@@ -1948,6 +2414,8 @@ function OperationStatus({
 
 function Advanced({
   system,
+  localInstallation,
+  localServerStatus,
   piInstallation,
   piServerStatus,
   piUpdateCheck,
@@ -1957,6 +2425,8 @@ function Advanced({
   onCheckUpdates,
 }: {
   system: SystemInfo | null;
+  localInstallation: LocalInstallation | null;
+  localServerStatus: LocalServerStatus | null;
   piInstallation: PiInstallation | null;
   piServerStatus: PiServerStatus | null;
   piUpdateCheck: PiUpdateCheck | null;
@@ -1996,29 +2466,61 @@ function Advanced({
           <p>
             <strong>Serveur géré</strong>
             <small>
-              {piInstallation
-                ? `${piInstallation.username}@${piInstallation.host} · ${piInstallation.serverFolder}`
-                : "Aucun Raspberry Pi enregistré dans cette application"}
+              {localInstallation
+                ? `Local · ${localInstallation.serverPath}`
+                : piInstallation
+                  ? `${piInstallation.username}@${piInstallation.host} · ${piInstallation.serverFolder}`
+                  : "Aucun serveur enregistré dans cette application"}
             </small>
           </p>
-          <b>{piServerStatus?.ready ? "Java + Bedrock prêts" : "État à vérifier"}</b>
+          <b>
+            {localServerStatus?.ready || piServerStatus?.ready
+              ? "Java + Bedrock prêts"
+              : "État à vérifier"}
+          </b>
         </div>
         <div>
           <span>03</span>
           <p>
             <strong>Versions installées</strong>
             <small>
-              Java {piServerStatus?.minecraft_java || "inconnue"} · Bedrock {piServerStatus?.minecraft_bedrock || "inconnue"} · Paper build {piServerStatus?.paper_build_id || "inconnu"} · Geyser {piServerStatus?.geyser_version || "inconnu"} · Floodgate {piServerStatus?.floodgate_version || "inconnu"} · adresse {piServerStatus?.address || piInstallation?.address || "inconnue"} · ports {piServerStatus?.java_port ?? "—"} / {piServerStatus?.bedrock_port ?? "—"}
+              Java{" "}
+              {localServerStatus?.minecraft_java ||
+                piServerStatus?.minecraft_java ||
+                "inconnue"}{" "}
+              · Bedrock{" "}
+              {localServerStatus?.minecraft_bedrock ||
+                piServerStatus?.minecraft_bedrock ||
+                "inconnue"}{" "}
+              · Paper build {piServerStatus?.paper_build_id || "inconnu"} ·
+              Geyser {piServerStatus?.geyser_version || "inconnu"} · Floodgate{" "}
+              {piServerStatus?.floodgate_version || "inconnu"} · adresse{" "}
+              {localServerStatus?.address ||
+                piServerStatus?.address ||
+                piInstallation?.address ||
+                "inconnue"}{" "}
+              · ports{" "}
+              {localServerStatus?.java_port ?? piServerStatus?.java_port ?? "—"}{" "}
+              /{" "}
+              {localServerStatus?.bedrock_port ??
+                piServerStatus?.bedrock_port ??
+                "—"}
             </small>
           </p>
-          <b>{piServerStatus?.autostart_configured ? "Démarrage automatique actif" : "Démarrage automatique non confirmé"}</b>
+          <b>
+            {piServerStatus?.autostart_configured
+              ? "Démarrage automatique actif"
+              : "Démarrage automatique non confirmé"}
+          </b>
         </div>
         <div>
           <span>04</span>
           <p>
             <strong>Règle de mise à jour</strong>
             <small>
-              Un serveur Pi géré est sauvegardé puis mis à jour en groupe au démarrage seulement si son profil, ses extensions gérées, le runtime et les versions officielles passent les contrôles.
+              Un serveur Pi géré est sauvegardé puis mis à jour en groupe au
+              démarrage seulement si son profil, ses extensions gérées, le
+              runtime et les versions officielles passent les contrôles.
             </small>
           </p>
           <b>Sinon, version présente conservée</b>
@@ -2028,18 +2530,33 @@ function Advanced({
         <div className="operation-card advanced-log-card">
           <div className="eyebrow">OUTILS DU SERVEUR PI</div>
           <div className="pi-actions">
-            <button className="button secondary" onClick={onRefresh} disabled={busy}>
+            <button
+              className="button secondary"
+              onClick={onRefresh}
+              disabled={busy}
+            >
               Actualiser le journal
             </button>
-            <button className="button secondary" onClick={onCheckUpdates} disabled={busy}>
+            <button
+              className="button secondary"
+              onClick={onCheckUpdates}
+              disabled={busy}
+            >
               Vérifier les versions compatibles
             </button>
           </div>
           {piUpdateError && <p className="pi-error">{piUpdateError}</p>}
           {piUpdateCheck && (
             <p className="path-note">
-              Version actuelle : Java {piUpdateCheck.current_java}, Bedrock {piUpdateCheck.current_bedrock}, Geyser {piUpdateCheck.current_geyser}, Floodgate {piUpdateCheck.current_floodgate}. {piUpdateCheck.update_available ? "Nouvelle pile officielle détectée." : "Aucune nouvelle pile détectée."}
-              {piUpdateCheck.reasons.length > 0 && ` Contrôle bloquant : ${piUpdateCheck.reasons.join(" ")}`}
+              Version actuelle : Java {piUpdateCheck.current_java}, Bedrock{" "}
+              {piUpdateCheck.current_bedrock}, Geyser{" "}
+              {piUpdateCheck.current_geyser}, Floodgate{" "}
+              {piUpdateCheck.current_floodgate}.{" "}
+              {piUpdateCheck.update_available
+                ? "Nouvelle pile officielle détectée."
+                : "Aucune nouvelle pile détectée."}
+              {piUpdateCheck.reasons.length > 0 &&
+                ` Contrôle bloquant : ${piUpdateCheck.reasons.join(" ")}`}
             </p>
           )}
           {piServerStatus?.log ? (
@@ -2048,18 +2565,23 @@ function Advanced({
               <pre>{piServerStatus.log}</pre>
             </details>
           ) : (
-            <p className="path-note">Le journal apparaîtra ici après son actualisation.</p>
+            <p className="path-note">
+              Le journal apparaîtra ici après son actualisation.
+            </p>
           )}
         </div>
       )}
       <div className="notice amber">
         <span>!</span>
         <p>
-          <strong>Les mods et packs personnalisés ne sont pas ajoutés automatiquement.</strong>
+          <strong>
+            Les mods et packs personnalisés ne sont pas ajoutés automatiquement.
+          </strong>
           <br />
           Cette version les bloque par prudence pendant une mise à jour; leur
           compatibilité doit être vérifiée avant de les gérer ici. Les clients
-          Bedrock, consoles et packs Java ne partagent pas tous les mêmes formats.
+          Bedrock, consoles et packs Java ne partagent pas tous les mêmes
+          formats.
         </p>
       </div>
     </div>

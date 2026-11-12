@@ -585,6 +585,41 @@ async fn create_server(
 }
 
 #[tauri::command]
+async fn inspect_local_server(server_path: String) -> Result<engine::LocalServerStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::inspect_local_server(std::path::Path::new(&server_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn start_local_server(
+    server_path: String,
+    progress: tauri::ipc::Channel<engine::ProgressMessage>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::start_local_server(std::path::Path::new(&server_path), |step, percent| {
+            let _ = progress.send(engine::ProgressMessage {
+                step: step.to_string(),
+                percent,
+            });
+        })
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn stop_local_server(server_path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::stop_local_server(std::path::Path::new(&server_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn install_pi(
     host: String,
     username: String,
@@ -721,6 +756,9 @@ pub fn run() {
             get_compatibility,
             get_pi_os_recommendation,
             create_server,
+            inspect_local_server,
+            start_local_server,
+            stop_local_server,
             install_pi,
             inspect_pi_server,
             check_pi_update,

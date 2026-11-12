@@ -210,6 +210,7 @@ pub struct PaperPluginSuggestion {
 pub struct PaperPluginInstallResult {
     pub server_path: String,
     pub backup_path: String,
+    pub backup_sha256: String,
     pub plugin_name: String,
     pub plugin_version: String,
     pub sha512: String,
@@ -617,6 +618,13 @@ pub fn install_paper_plugin_copy(
         .and_then(serde_json::Value::as_array)
         .cloned()
         .unwrap_or_default();
+    if profile.get("managed_plugins").is_some()
+        && !profile
+            .get("managed_plugins")
+            .is_some_and(serde_json::Value::is_array)
+    {
+        return Err("Le manifeste des plugins gérés est illisible; ajout bloqué.".into());
+    }
     let managed_files: HashSet<String> = managed
         .iter()
         .filter_map(|entry| entry.get("filename")?.as_str().map(str::to_string))
@@ -905,7 +913,442 @@ pub fn install_paper_plugin_copy(
     Ok(PaperPluginInstallResult {
         server_path: published.display().to_string(),
         backup_path: backup_path.display().to_string(),
+        backup_sha256: hash_file(&backup_path)?,
         plugin_name: destination_name,
+        plugin_version: version_number.to_string(),
+        sha512: actual_sha512,
+    })
+}
+
+/// Adds one verified Paper plugin to a new managed Pi server folder. The
+/// original server is only read and archived; a new sibling profile is
+/// published after the full copy and plugin checksum have been verified.
+pub fn install_pi_paper_plugin_copy(
+    host: &str,
+    username: &str,
+    server_folder: &str,
+    project_id: &str,
+    version_number: &str,
+    progress: impl Fn(&str, u8),
+) -> Result<PaperPluginInstallResult, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+        || project_id.is_empty()
+        || project_id.len() > 64
+        || !project_id.bytes().all(|byte| byte.is_ascii_alphanumeric())
+        || version_number.is_empty()
+        || version_number.len() > 80
+        || !version_number
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || b"._+-".contains(&byte))
+    {
+        return Err("Le serveur ou le plugin sélectionné n’a pas une référence valide.".into());
+    }
+    let status = inspect_pi_server(host, username, server_folder)?;
+    if status.running {
+        return Err("Arrête le serveur Pi depuis son tableau de bord avant d’ajouter un plugin. L’original reste en place.".into());
+    }
+    let minecraft_version = status.minecraft_java;
+    let valid_version = Regex::new(r"^\d+\.\d+(?:\.\d+)?$").unwrap();
+    if !valid_version.is_match(&minecraft_version) {
+        return Err("La version Java du serveur Pi est inconnue; ajout bloqué.".into());
+    }
+    let client = client()?;
+    progress("Vérification de la version exacte du plugin…", 5);
+    let versions: Vec<serde_json::Value> = client
+        .get(format!(
+            "https://api.modrinth.com/v2/project/{project_id}/version"
+        ))
+        .query(&[
+            ("loaders", "[\"paper\"]"),
+            (
+                "game_versions",
+                format!("[\"{minecraft_version}\"]").as_str(),
+            ),
+            ("include_changelog", "false"),
+        ])
+        .send()
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(network_error)?
+        .json()
+        .map_err(|error| format!("Réponse de version Modrinth illisible : {error}"))?;
+    let version = versions
+        .into_iter()
+        .find(|version| {
+            version.get("version_number").and_then(serde_json::Value::as_str)
+                == Some(version_number)
+                && version.get("status").and_then(serde_json::Value::as_str) == Some("listed")
+                && version.get("version_type").and_then(serde_json::Value::as_str) == Some("release")
+                && version.get("loaders").and_then(serde_json::Value::as_array).is_some_and(|items| items.iter().any(|item| item.as_str() == Some("paper")))
+                && version.get("game_versions").and_then(serde_json::Value::as_array).is_some_and(|items| items.iter().any(|item| item.as_str() == Some(minecraft_version.as_str())))
+                && matches!(version.get("environment").and_then(serde_json::Value::as_str), Some("server_only" | "server_only_client_optional" | "dedicated_server_only"))
+        })
+        .ok_or_else(|| "Le catalogue ne confirme plus cette version exacte de Paper/Minecraft. Le Pi n’a pas été modifié.".to_string())?;
+    if version
+        .get("dependencies")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|dependencies| {
+            dependencies.iter().any(|dependency| {
+                dependency
+                    .get("dependency_type")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("required")
+            })
+        })
+    {
+        return Err("Cette version réclame une dépendance obligatoire qui n’est pas encore gérée. Le Pi n’a pas été modifié.".into());
+    }
+    let files = version
+        .get("files")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| "Le catalogue n’a pas fourni le fichier du plugin.".to_string())?;
+    let file = files
+        .iter()
+        .find(|file| file.get("primary").and_then(serde_json::Value::as_bool) == Some(true))
+        .or_else(|| files.first())
+        .ok_or_else(|| "Le catalogue n’a pas fourni de fichier principal.".to_string())?;
+    let filename = file
+        .get("filename")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Le nom du fichier du plugin est invalide.".to_string())?;
+    if !valid_plugin_filename(filename) {
+        return Err("Le fichier proposé n’est pas un plugin JAR reconnu.".into());
+    }
+    let url = file
+        .get("url")
+        .and_then(serde_json::Value::as_str)
+        .filter(|url| url.starts_with("https://cdn.modrinth.com/"))
+        .ok_or_else(|| "Le lien de téléchargement Modrinth n’est pas vérifiable.".to_string())?;
+    let expected_sha512 = file
+        .get("hashes")
+        .and_then(|hashes| hashes.get("sha512"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|hash| hash.len() == 128 && hash.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        .ok_or_else(|| "Le catalogue ne fournit pas d’empreinte SHA-512 valide.".to_string())?;
+    let size = file
+        .get("size")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or_default();
+    if size == 0 || size > 100 * 1024 * 1024 {
+        return Err(
+            "Le fichier proposé dépasse la taille autorisée; le Pi n’a pas été modifié.".into(),
+        );
+    }
+    progress("Téléchargement et contrôle SHA-512…", 12);
+    let response = client
+        .get(url)
+        .send()
+        .map_err(network_error)?
+        .error_for_status()
+        .map_err(network_error)?;
+    if !response.url().scheme().eq("https")
+        || response.url().host_str() != Some("cdn.modrinth.com")
+        || response
+            .content_length()
+            .is_some_and(|length| length > size)
+    {
+        return Err("Le téléchargement Modrinth a un hôte ou une taille inattendus; le Pi n’a pas été modifié.".into());
+    }
+    let mut bytes = Vec::with_capacity(size as usize);
+    response
+        .take(size.saturating_add(1))
+        .read_to_end(&mut bytes)
+        .map_err(io_error)?;
+    if bytes.len() as u64 != size {
+        return Err(
+            "La taille téléchargée ne correspond pas au catalogue; le Pi n’a pas été modifié."
+                .into(),
+        );
+    }
+    let actual_sha512 = format!("{:x}", Sha512::digest(&bytes));
+    if !actual_sha512.eq_ignore_ascii_case(expected_sha512) {
+        return Err("Le contrôle SHA-512 du plugin a échoué; le Pi n’a pas été modifié.".into());
+    }
+    let jar = zip::ZipArchive::new(io::Cursor::new(bytes.as_slice())).map_err(|_| {
+        "Le fichier téléchargé n’est pas une archive JAR valide; le Pi n’a pas été modifié."
+            .to_string()
+    })?;
+    if !jar
+        .file_names()
+        .any(|name| name == "plugin.yml" || name == "paper-plugin.yml")
+    {
+        return Err(
+            "Le JAR ne contient pas de déclaration Paper reconnue; le Pi n’a pas été modifié."
+                .into(),
+        );
+    }
+
+    let destination = format!("{username}@{host}");
+    let inventory = format!(
+        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; test -s \"$d/paper.jar\"; test -s \"$d/plugins/Geyser-Spigot.jar\"; test -s \"$d/plugins/Floodgate-Spigot.jar\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\n'; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' | sort; printf 'JARS_END\\n'; printf 'MODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null || true; printf 'MODS_END\\n'; printf 'SYMLINK='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'PORTS_BUSY='; if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then echo yes; else echo no; fi; printf 'TOTAL='; du -sB1 \"$d\" | awk '{{print $1}}'; printf 'FREE='; df -B1 --output=avail \"$HOME\" | tail -1 | tr -dc '0-9'; printf '\\nPYTHON='; command -v python3 >/dev/null 2>&1 && echo yes || echo no"
+    );
+    progress("Vérification du serveur Pi et de l’espace disponible…", 20);
+    let output = run_ssh(&destination, &inventory)?;
+    let (before_profile, profile_rest) = output
+        .split_once("PROFILE_START\n")
+        .ok_or_else(|| "Le Pi n’a pas renvoyé le profil du serveur.".to_string())?;
+    let _ = before_profile;
+    let (profile_text, rest) = profile_rest
+        .split_once("\nPROFILE_END\n")
+        .ok_or_else(|| "Le profil du serveur Pi est incomplet.".to_string())?;
+    let (jars_rest, tail) = rest
+        .split_once("JARS_START\n")
+        .ok_or_else(|| "Le Pi n’a pas renvoyé sa liste de plugins.".to_string())?;
+    let _ = jars_rest;
+    let (jar_lines, tail) = tail
+        .split_once("JARS_END\n")
+        .ok_or_else(|| "La liste des plugins Pi est incomplète.".to_string())?;
+    let (mod_lines, tail) = tail
+        .split_once("MODS_START\n")
+        .and_then(|(_, rest)| {
+            rest.split_once("MODS_END\n")
+                .map(|(mods, after)| (mods, after))
+        })
+        .ok_or_else(|| "La liste des mods Pi est incomplète.".to_string())?;
+    let profile: serde_json::Value = serde_json::from_str(profile_text.trim())
+        .map_err(|_| "Le profil du serveur Pi est illisible.".to_string())?;
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+    {
+        return Err("Ce dossier n’a pas été créé par Monde Ensemble; le Pi reste intact.".into());
+    }
+    if profile.get("managed_plugins").is_some()
+        && !profile
+            .get("managed_plugins")
+            .is_some_and(serde_json::Value::is_array)
+    {
+        return Err("Le manifeste des plugins du Pi est illisible; ajout bloqué.".into());
+    }
+    if profile
+        .get("minecraft_java")
+        .and_then(serde_json::Value::as_str)
+        != Some(minecraft_version.as_str())
+    {
+        return Err("Le profil du Pi a changé pendant la vérification; ajout bloqué.".into());
+    }
+    let managed = profile
+        .get("managed_plugins")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let mut managed_files = HashSet::new();
+    for entry in &managed {
+        let name = entry
+            .get("filename")
+            .and_then(serde_json::Value::as_str)
+            .filter(|name| valid_plugin_filename(name))
+            .ok_or_else(|| {
+                "Le manifeste des plugins Pi est incomplet; ajout bloqué.".to_string()
+            })?;
+        let digest = entry
+            .get("sha512")
+            .and_then(serde_json::Value::as_str)
+            .filter(|digest| {
+                digest.len() == 128 && digest.bytes().all(|byte| byte.is_ascii_hexdigit())
+            })
+            .ok_or_else(|| {
+                "L’empreinte d’un plugin Pi géré est invalide; ajout bloqué.".to_string()
+            })?;
+        managed_files.insert(name.to_string());
+        if !tail.contains(&format!("{name}={digest}")) {
+            let verify = format!(
+                "set -eu; d=\"$HOME/{server_folder}\"; printf '{}='; sha512sum \"$d/plugins/{}\" | cut -d' ' -f1",
+                name, name
+            );
+            let value = run_ssh(&destination, &verify)?;
+            if !value.trim().ends_with(digest) {
+                return Err(format!(
+                    "Le plugin Pi {name} a changé; le serveur reste intact."
+                ));
+            }
+        }
+    }
+    let listed_jars = jar_lines
+        .lines()
+        .map(str::trim)
+        .filter(|name| !name.is_empty());
+    for name in listed_jars {
+        if !matches!(name, "Geyser-Spigot.jar" | "Floodgate-Spigot.jar")
+            && !managed_files.contains(name)
+        {
+            return Err(format!(
+                "Le serveur Pi contient déjà le plugin non géré {name}; ajout bloqué sans modifier le Pi."
+            ));
+        }
+    }
+    if mod_lines.lines().any(|name| !name.trim().is_empty()) {
+        return Err("Des mods personnalisés sont présents sur le Pi; leur interaction avec ce plugin n’est pas vérifiée. Le serveur reste intact.".into());
+    }
+    if tail.contains("SYMLINK=yes") || tail.contains("PORTS_BUSY=yes") {
+        return Err("Un lien symbolique ou un port Minecraft actif empêche la copie sûre. Le Pi n’a pas été modifié.".into());
+    }
+    if !tail.contains("PYTHON=yes") {
+        return Err("Python 3 est nécessaire pour conserver le manifeste des plugins gérés; le Pi n’a pas été modifié.".into());
+    }
+    let total = tail
+        .lines()
+        .find_map(|line| line.strip_prefix("TOTAL="))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| "Taille du serveur Pi illisible.".to_string())?;
+    let free = tail
+        .lines()
+        .find_map(|line| line.strip_prefix("FREE="))
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .ok_or_else(|| "Espace libre du Pi illisible.".to_string())?;
+    if free
+        < total
+            .saturating_mul(2)
+            .saturating_add(size)
+            .saturating_add(512 * 1024 * 1024)
+    {
+        return Err("L’espace du Pi ne suffit pas pour l’archive et une nouvelle copie complète; le monde reste intact.".into());
+    }
+
+    let id = Uuid::new_v4().simple().to_string();
+    let parent_folder = server_folder.strip_suffix("/server").unwrap_or_default();
+    if parent_folder.is_empty() {
+        return Err("Le dossier Pi enregistré n’est pas reconnu.".into());
+    }
+    let new_root = format!("Monde-Ensemble-{id}");
+    let new_server_folder = format!("{new_root}/server");
+    let backup_name = format!("Monde-Ensemble-plugin-backup-{id}.tar.gz");
+    let upload_name = format!(".monde-ensemble-plugin-{id}.jar");
+    let stage_name = format!(".Monde-Ensemble-{id}.preparing");
+    let local_plugin = std::env::temp_dir().join(format!("monde-ensemble-plugin-{id}.jar"));
+    let _cleanup_plugin = RemoveFileOnDrop(local_plugin.clone());
+    let mut local_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&local_plugin)
+        .map_err(io_error)?;
+    local_file.write_all(&bytes).map_err(io_error)?;
+    local_file.sync_all().map_err(io_error)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(&local_plugin, fs::Permissions::from_mode(0o600)).map_err(io_error)?;
+    }
+    progress("Transfert chiffré du plugin vers le Pi…", 30);
+    let scp = Command::new("scp")
+        .args([
+            "-p",
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            "ConnectTimeout=8",
+            "-o",
+            "StrictHostKeyChecking=yes",
+            "-o",
+            "PasswordAuthentication=no",
+            local_plugin.to_string_lossy().as_ref(),
+            &format!("{destination}:{upload_name}"),
+        ])
+        .output()
+        .map_err(|_| "L’outil de transfert sécurisé n’est pas disponible.".to_string())?;
+    if !scp.status.success() {
+        return Err(
+            "Le transfert SSH du plugin a échoué; le serveur Pi n’a pas été modifié.".into(),
+        );
+    }
+    let backup_hash_script = format!(
+        r#"set -eu
+umask 077
+src="$HOME/{server_folder}"
+backup_dir="$HOME/sauvegardes-monde-ensemble-pi"
+backup="$backup_dir/{backup_name}"
+stage="$HOME/{stage_name}"
+published="$HOME/{new_root}"
+upload="$HOME/{upload_name}"
+stage_owned=no
+published_owned=no
+backup_ready=no
+trap 'rm -f -- "$upload"; if test "$stage_owned" = yes; then rm -rf -- "$stage"; fi; if test "$published_owned" = yes; then rmdir "$published" 2>/dev/null || true; fi; if test "$backup_ready" != yes; then rm -f -- "$backup"; fi' EXIT
+test -d "$src" && test ! -e "$backup" && test ! -e "$stage" && test ! -e "$published"
+test "$(sha512sum "$upload" | cut -d' ' -f1)" = "{actual_sha512}"
+if find "$src" -type l -print -quit | grep -q .; then exit 12; fi
+if find "$src/mods" -type f -name '*.jar' -print -quit 2>/dev/null | grep -q .; then exit 13; fi
+if ss -H -lntu 2>/dev/null | awk '{{print $5}}' | grep -qE '[:.](25565|25566|19132|19133)$'; then exit 14; fi
+total="$(du -sB1 "$src" | awk '{{print $1}}')"
+free="$(df -B1 --output=avail "$HOME" | tail -1 | tr -dc '0-9')"
+required=$((total * 2 + {size} + 536870912))
+test "$free" -ge "$required"
+if test -L "$backup_dir" || {{ test -e "$backup_dir" && ! test -d "$backup_dir"; }}; then exit 15; fi
+mkdir -p "$backup_dir"
+test ! -e "$backup"
+mkdir "$stage"
+stage_owned=yes
+tar -czf "$backup" -C "$HOME/{parent_folder}" server
+tar -tzf "$backup" >/dev/null
+archive_hash="$(sha256sum "$backup" | cut -d' ' -f1)"
+backup_ready=yes
+cp -a "$src" "$stage/server"
+test "$(sha256sum "$src/monde-ensemble-profile.json" | cut -d' ' -f1)" = "$(sha256sum "$stage/server/monde-ensemble-profile.json" | cut -d' ' -f1)"
+test "$(sha256sum "$src/paper.jar" | cut -d' ' -f1)" = "$(sha256sum "$stage/server/paper.jar" | cut -d' ' -f1)"
+test "$(sha256sum "$src/plugins/Geyser-Spigot.jar" | cut -d' ' -f1)" = "$(sha256sum "$stage/server/plugins/Geyser-Spigot.jar" | cut -d' ' -f1)"
+test "$(sha256sum "$src/plugins/Floodgate-Spigot.jar" | cut -d' ' -f1)" = "$(sha256sum "$stage/server/plugins/Floodgate-Spigot.jar" | cut -d' ' -f1)"
+test ! -e "$stage/server/plugins/{filename}"
+install -m 644 -- "$upload" "$stage/server/plugins/{filename}"
+test "$(sha512sum "$stage/server/plugins/{filename}" | cut -d' ' -f1)" = "{actual_sha512}"
+python3 - "$stage/server/monde-ensemble-profile.json" "{project_id}" "{version_number}" "{filename}" "{actual_sha512}" "{minecraft_version}" <<'PY'
+import json, os, sys, tempfile
+path, project, version, filename, digest, game = sys.argv[1:]
+with open(path, encoding="utf-8") as source:
+    profile = json.load(source)
+entries = profile.setdefault("managed_plugins", [])
+entries.append({{"project_id": project, "version": version, "filename": filename, "sha512": digest, "minecraft_java": game}})
+fd, temporary = tempfile.mkstemp(prefix=".profile-", dir=os.path.dirname(path))
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as target:
+        json.dump(profile, target, ensure_ascii=False, indent=2)
+        target.write("\n")
+        target.flush()
+        os.fsync(target.fileno())
+    os.chmod(temporary, 0o600)
+    os.replace(temporary, path)
+except Exception:
+    try: os.unlink(temporary)
+    except OSError: pass
+    raise
+PY
+mkdir "$published"
+published_owned=yes
+mv "$stage/server" "$published/server"
+stage_owned=no
+published_owned=no
+printf 'SERVER_FOLDER=%s\nBACKUP_SHA256=%s\n' '{new_server_folder}' "$archive_hash"
+"#
+    );
+    progress("Sauvegarde complète et copie sûre sur le Pi…", 45);
+    let result = run_ssh_timeout(&destination, &backup_hash_script, 240)?;
+    let get_field = |key: &str| {
+        result
+            .lines()
+            .find_map(|line| line.strip_prefix(key))
+            .map(str::trim)
+    };
+    let returned_folder = get_field("SERVER_FOLDER=")
+        .ok_or_else(|| "Le Pi n’a pas confirmé le dossier candidat.".to_string())?;
+    let backup_sha256 = get_field("BACKUP_SHA256=")
+        .filter(|value| valid_sha256(value))
+        .ok_or_else(|| "Le Pi n’a pas renvoyé une empreinte de sauvegarde valide.".to_string())?;
+    if returned_folder != new_server_folder {
+        return Err(
+            "Le Pi a renvoyé un dossier candidat inattendu; l’original reste conservé.".into(),
+        );
+    }
+    progress(
+        "Nouvelle copie du serveur Pi prête; l’original reste conservé.",
+        100,
+    );
+    Ok(PaperPluginInstallResult {
+        server_path: returned_folder.to_string(),
+        backup_path: format!("~/sauvegardes-monde-ensemble-pi/{backup_name}"),
+        backup_sha256: backup_sha256.to_string(),
+        plugin_name: filename.to_string(),
         plugin_version: version_number.to_string(),
         sha512: actual_sha512,
     })
@@ -3031,6 +3474,23 @@ fn discover_pi_internal(
 
 /// Reads the saved installation's process, ports and recent log without
 /// changing anything on the Raspberry Pi.
+/// Keeps the app-managed reboot entry pointed at the selected server copy.
+/// Other entries in the user's crontab are preserved byte-for-byte by line.
+fn configure_pi_autostart(host: &str, username: &str, server_folder: &str) -> Result<bool, String> {
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
+    {
+        return Ok(false);
+    }
+    let destination = format!("{username}@{host}");
+    let command = format!(
+        "set -eu; command -v crontab >/dev/null 2>&1 || {{ echo AUTOSTART=no; exit 0; }}; if ! (systemctl is-enabled --quiet cron 2>/dev/null || systemctl is-enabled --quiet crond 2>/dev/null); then echo AUTOSTART=no; exit 0; fi; t=\"$(mktemp)\"; trap 'rm -f -- \"$t\"' EXIT; (crontab -l 2>/dev/null || true) | grep -Fv '# MONDE_ENSEMBLE_AUTO_START' > \"$t\" || true; printf '%s\\n' '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START' >> \"$t\"; crontab \"$t\"; if crontab -l 2>/dev/null | grep -Fq '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START'; then echo AUTOSTART=yes; else echo AUTOSTART=no; fi"
+    );
+    let output = run_ssh(&destination, &command)?;
+    Ok(output.lines().any(|line| line.trim() == "AUTOSTART=yes"))
+}
+
 pub fn inspect_pi_server(
     host: &str,
     username: &str,
@@ -3044,7 +3504,7 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; printf 'IP='; hostname -I | awk '{{print $1}}'; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
     let output = run_ssh(&destination, &command)?;
     let (header, after_profile) = output
@@ -3740,13 +4200,23 @@ pub fn start_pi_server(
                         && status.bedrock_tcp_port_open
                         && status.bedrock_port_open =>
                 {
+                    let autostart_configured =
+                        configure_pi_autostart(host, username, server_folder).unwrap_or(false);
                     progress("Serveur prêt et ports vérifiés.", 100);
-                    return Ok(update_note.unwrap_or_else(|| {
+                    let started = update_note.unwrap_or_else(|| {
                         format!(
                             "Serveur démarré et prêt · Java {} · Bedrock compatible {}.",
                             status.minecraft_java, status.minecraft_bedrock
                         )
-                    }));
+                    });
+                    return Ok(format!(
+                        "{started} · Démarrage après redémarrage {}.",
+                        if autostart_configured {
+                            "configuré pour cette copie"
+                        } else {
+                            "non configuré sur ce Pi"
+                        }
+                    ));
                 }
                 Ok(status) if !status.running => {
                     return Err(format!(
@@ -4943,7 +5413,7 @@ fn download_url_verified(
 
 fn client() -> Result<Client, String> {
     Client::builder()
-        .user_agent("MondeEnsemble/0.16.0")
+        .user_agent("MondeEnsemble/0.17.0")
         .timeout(Duration::from_secs(120))
         .connect_timeout(Duration::from_secs(15))
         .build()

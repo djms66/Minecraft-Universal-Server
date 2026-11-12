@@ -14,6 +14,7 @@ type SystemInfo = {
   desktop: boolean;
 };
 type Page = "home" | "install" | "compat" | "backup" | "advanced";
+type PluginTarget = "local" | "pi";
 type CompatibilityReport = {
   paper_version: string;
   paper_build_id: number;
@@ -54,6 +55,7 @@ type PaperPluginSuggestion = {
 type PaperPluginInstallResult = {
   server_path: string;
   backup_path: string;
+  backup_sha256: string;
   plugin_name: string;
   plugin_version: string;
   sha512: string;
@@ -90,6 +92,7 @@ type PiInstallation = {
   host: string;
   username: string;
   serverFolder: string;
+  previousServerFolder?: string;
   address: string;
 };
 type LocalInstallation = { serverPath: string; previousServerPath?: string };
@@ -921,10 +924,16 @@ function App() {
   };
 
   const installPaperPlugin = async (
+    target: PluginTarget,
     projectId: string,
     versionNumber: string,
   ) => {
-    if (!localInstallation || localServerStatus?.running) return;
+    if (
+      target === "local" &&
+      (!localInstallation || localServerStatus?.running)
+    )
+      return;
+    if (target === "pi" && (!piInstallation || piServerStatus?.running)) return;
     setBusy(true);
     setPluginInstallError("");
     setPluginInstallResult(null);
@@ -933,26 +942,57 @@ function App() {
       percent: 2,
     });
     try {
-      const result = await invoke<PaperPluginInstallResult>(
-        "install_paper_plugin_copy",
-        {
-          serverPath: localInstallation.serverPath,
-          projectId,
-          versionNumber,
-          progress: progressChannel(),
-        },
-      );
+      const result =
+        target === "local"
+          ? await invoke<PaperPluginInstallResult>(
+              "install_paper_plugin_copy",
+              {
+                serverPath: localInstallation!.serverPath,
+                projectId,
+                versionNumber,
+                progress: progressChannel(),
+              },
+            )
+          : await invoke<PaperPluginInstallResult>(
+              "install_pi_paper_plugin_copy",
+              {
+                host: piInstallation!.host,
+                username: piInstallation!.username,
+                serverFolder: piInstallation!.serverFolder,
+                projectId,
+                versionNumber,
+                progress: progressChannel(),
+              },
+            );
       setPluginInstallResult(result);
-      setLocalInstallation({
-        serverPath: result.server_path,
-        previousServerPath:
-          localInstallation.previousServerPath || localInstallation.serverPath,
-      });
-      setLocalServerStatus(
-        await invoke<LocalServerStatus>("inspect_local_server", {
+      if (target === "local") {
+        setLocalInstallation({
           serverPath: result.server_path,
-        }),
-      );
+          previousServerPath:
+            localInstallation!.previousServerPath ||
+            localInstallation!.serverPath,
+        });
+        setLocalServerStatus(
+          await invoke<LocalServerStatus>("inspect_local_server", {
+            serverPath: result.server_path,
+          }),
+        );
+      } else {
+        setPiInstallation({
+          ...piInstallation!,
+          serverFolder: result.server_path,
+          previousServerFolder:
+            piInstallation!.previousServerFolder ||
+            piInstallation!.serverFolder,
+        });
+        setPiServerStatus(
+          await invoke<PiServerStatus>("inspect_pi_server", {
+            host: piInstallation!.host,
+            username: piInstallation!.username,
+            serverFolder: result.server_path,
+          }),
+        );
+      }
     } catch (error) {
       setPluginInstallError(String(error));
     } finally {
@@ -994,6 +1034,52 @@ function App() {
     } catch (error) {
       setLocalStatusError(
         `Le dossier précédent n’est pas accessible : ${error}`,
+      );
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restorePreviousPiCopy = async () => {
+    if (!piInstallation?.previousServerFolder || piServerStatus?.running)
+      return;
+    setBusy(true);
+    const candidate = piInstallation.serverFolder;
+    const previous = piInstallation.previousServerFolder;
+    try {
+      const candidateStatus = await invoke<PiServerStatus>(
+        "inspect_pi_server",
+        {
+          host: piInstallation.host,
+          username: piInstallation.username,
+          serverFolder: candidate,
+        },
+      );
+      if (candidateStatus.running) {
+        setPiServerStatus(candidateStatus);
+        setPiStatusError(
+          "Arrête d’abord le serveur candidat avant de revenir à la copie précédente.",
+        );
+        return;
+      }
+      const status = await invoke<PiServerStatus>("inspect_pi_server", {
+        host: piInstallation.host,
+        username: piInstallation.username,
+        serverFolder: previous,
+      });
+      setPiInstallation({
+        ...piInstallation,
+        serverFolder: previous,
+        previousServerFolder: candidate,
+      });
+      setPiServerStatus(status);
+      setPiStatusError("");
+      setPiActionMessage(
+        "Le dossier Pi précédent est de nouveau sélectionné. L’autre copie reste conservée.",
+      );
+    } catch (error) {
+      setPiStatusError(
+        `Le dossier Pi précédent n’est pas accessible : ${error}`,
       );
     } finally {
       setBusy(false);
@@ -1201,7 +1287,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.16.0
+          MONDE ENSEMBLE <span>·</span> 0.17.0
         </div>
       </aside>
 
@@ -1797,15 +1883,25 @@ function App() {
               piUpdateError={piUpdateError}
               busy={busy || checkingPiUpdate}
               onInstallPlugin={installPaperPlugin}
+              onClearPluginResult={() => {
+                setPluginInstallResult(null);
+                setPluginInstallError("");
+              }}
               pluginInstallError={pluginInstallError}
               pluginInstallResult={pluginInstallResult}
-              canInstallPlugin={Boolean(
+              canInstallLocalPlugin={Boolean(
                 localInstallation &&
                 !localServerStatus?.running &&
                 localServerStatus?.minecraft_java,
               )}
+              canInstallPiPlugin={Boolean(
+                piInstallation &&
+                !piServerStatus?.running &&
+                piServerStatus?.minecraft_java,
+              )}
               onRestorePreviousLocal={restorePreviousLocalCopy}
-              progress={operationProgress}
+              onRestorePreviousPi={restorePreviousPiCopy}
+              pluginProgress={operationProgress}
               onRefresh={() => refreshPiStatus(true)}
               onCheckUpdates={checkPiUpdate}
             />
@@ -3287,11 +3383,14 @@ function Advanced({
   piUpdateError,
   busy,
   onInstallPlugin,
+  onClearPluginResult,
   pluginInstallError,
   pluginInstallResult,
-  canInstallPlugin,
+  canInstallLocalPlugin,
+  canInstallPiPlugin,
   onRestorePreviousLocal,
-  progress,
+  onRestorePreviousPi,
+  pluginProgress,
   onRefresh,
   onCheckUpdates,
 }: {
@@ -3303,22 +3402,35 @@ function Advanced({
   piUpdateCheck: PiUpdateCheck | null;
   piUpdateError: string;
   busy: boolean;
-  onInstallPlugin: (projectId: string, versionNumber: string) => void;
+  onInstallPlugin: (
+    target: PluginTarget,
+    projectId: string,
+    versionNumber: string,
+  ) => void;
+  onClearPluginResult: () => void;
   pluginInstallError: string;
   pluginInstallResult: PaperPluginInstallResult | null;
-  canInstallPlugin: boolean;
+  canInstallLocalPlugin: boolean;
+  canInstallPiPlugin: boolean;
   onRestorePreviousLocal: () => void;
-  progress: ProgressMessage | null;
+  onRestorePreviousPi: () => void;
+  pluginProgress: ProgressMessage | null;
   onRefresh: () => void;
   onCheckUpdates: () => void;
 }) {
   const [pluginQuery, setPluginQuery] = useState("");
+  const [pluginTarget, setPluginTarget] = useState<PluginTarget>(
+    localInstallation ? "local" : "pi",
+  );
   const [pluginSuggestions, setPluginSuggestions] = useState<
     PaperPluginSuggestion[]
   >([]);
   const [pluginLoading, setPluginLoading] = useState(false);
   const [pluginError, setPluginError] = useState("");
-  const pluginMinecraftVersion = localServerStatus?.minecraft_java || "";
+  const pluginMinecraftVersion =
+    pluginTarget === "local"
+      ? localServerStatus?.minecraft_java || ""
+      : piServerStatus?.minecraft_java || "";
   const searchPlugins = async () => {
     setPluginLoading(true);
     setPluginError("");
@@ -3475,14 +3587,33 @@ function Advanced({
         </div>
       )}
       <section className="operation-card advanced-log-card">
-        <div className="eyebrow">PLUGINS PAPER · COPIE LOCALE</div>
+        <div className="eyebrow">PLUGINS PAPER · COPIE PROTÉGÉE</div>
         <h3>Ajouter sans toucher à l’original</h3>
         <p className="path-note">
-          Recherche les plugins annoncés pour Minecraft Java{" "}
-          {pluginMinecraftVersion || "—"} et Paper. L’ajout crée une sauvegarde
-          puis une copie complète distincte. Il faut démarrer cette copie pour
-          vérifier le plugin.
+          Choisis le serveur, puis cherche les plugins annoncés pour sa version
+          Minecraft Java et Paper. L’ajout crée une sauvegarde puis une copie
+          complète distincte. Il faut démarrer cette copie pour vérifier le
+          plugin.
         </p>
+        <label className="plugin-target-picker">
+          Serveur à protéger
+          <select
+            value={pluginTarget}
+            onChange={(event) => {
+              setPluginTarget(event.target.value as PluginTarget);
+              setPluginSuggestions([]);
+              setPluginError("");
+              onClearPluginResult();
+            }}
+          >
+            {localInstallation && (
+              <option value="local">Ordinateur · serveur local</option>
+            )}
+            {piInstallation && (
+              <option value="pi">Raspberry Pi · serveur distant</option>
+            )}
+          </select>
+        </label>
         <div className="pi-actions">
           <input
             aria-label="Rechercher une extension Paper"
@@ -3507,13 +3638,12 @@ function Advanced({
             {pluginLoading ? "Recherche…" : "Chercher"}
           </button>
         </div>
-        {progress && (
-          <OperationStatus progress={progress} result={null} error="" />
+        {pluginProgress && (
+          <OperationStatus progress={pluginProgress} result={null} error="" />
         )}
         {!pluginMinecraftVersion && (
           <p className="path-note">
-            Ouvre le tableau d’un serveur local géré pour charger sa version.
-            L’ajout Pi sera pris en charge dans une prochaine étape.
+            Ouvre le tableau du serveur choisi pour charger sa version exacte.
           </p>
         )}
         {pluginError && <p className="pi-error">{pluginError}</p>}
@@ -3537,10 +3667,16 @@ function Advanced({
                   <button
                     className="button secondary"
                     onClick={() =>
-                      onInstallPlugin(plugin.project_id, plugin.version)
+                      onInstallPlugin(
+                        pluginTarget,
+                        plugin.project_id,
+                        plugin.version,
+                      )
                     }
                     disabled={
-                      !canInstallPlugin ||
+                      (pluginTarget === "local"
+                        ? !canInstallLocalPlugin
+                        : !canInstallPiPlugin) ||
                       busy ||
                       plugin.required_dependencies > 0
                     }
@@ -3575,11 +3711,14 @@ function Advanced({
               {pluginInstallResult.plugin_version}
             </span>
             <span>
-              Le serveur utilise maintenant cette nouvelle copie. Démarre-la
-              depuis « Mon monde » pour vérifier son lancement. L’original et sa
-              sauvegarde restent conservés.
+              La copie candidate est sélectionnée. Démarre-la depuis « Mon monde
+              » pour vérifier son lancement. L’original et sa sauvegarde restent
+              conservés.
             </span>
             <span>Sauvegarde : {pluginInstallResult.backup_path}</span>
+            <span>
+              SHA-256 sauvegarde : {pluginInstallResult.backup_sha256}
+            </span>
           </div>
         )}
         {localInstallation?.previousServerPath && (
@@ -3594,6 +3733,21 @@ function Advanced({
             <small>
               L’autre copie est conservée. Arrête d’abord le serveur candidat
               s’il est démarré.
+            </small>
+          </div>
+        )}
+        {piInstallation?.previousServerFolder && (
+          <div className="pi-actions">
+            <button
+              className="button secondary"
+              onClick={onRestorePreviousPi}
+              disabled={busy || Boolean(piServerStatus?.running)}
+            >
+              Revenir à la copie Pi précédente
+            </button>
+            <small>
+              La copie candidate et la sauvegarde restent conservées. Arrête
+              d’abord le serveur Pi candidat s’il est démarré.
             </small>
           </div>
         )}

@@ -1171,17 +1171,43 @@ button {
 }
 .pi-first-boot {
   margin-top: 18px;
-  padding-top: 12px;
+  padding: 14px;
   border-top: 1px solid #e5e9e1;
+  border: 1px solid #e5e9e1;
+  border-radius: 5px;
   color: #657264;
   font-size: 9px;
 }
-.pi-first-boot summary {
-  cursor: pointer;
-  font-weight: 700;
+.pi-first-boot h4 {
+  margin: 6px 0;
+  color: #283228;
+  font-size: 13px;
 }
 .pi-first-boot p {
   margin: 8px 0 0;
+}
+.pi-first-boot .button {
+  margin-top: 10px;
+}
+.pi-storage-list {
+  display: grid;
+  gap: 6px;
+  padding: 0;
+  margin: 10px 0;
+  list-style: none;
+}
+.pi-storage-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 9px 10px;
+  border: 1px solid #dfe5db;
+  border-radius: 4px;
+  background: #fff;
+  color: #344134;
+}
+.pi-storage-list span {
+  color: #71806f;
 }
 .error-text {
   font-size: 10px;

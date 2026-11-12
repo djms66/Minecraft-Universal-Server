@@ -16,6 +16,16 @@ struct SystemInfo {
     desktop: bool,
 }
 
+/// A storage device that can be considered for a future Pi OS installation.
+/// Discovery is read-only; no command in this flow writes to the device.
+#[derive(Serialize)]
+struct PiBootTarget {
+    id: String,
+    name: String,
+    size: String,
+    connection: String,
+}
+
 #[tauri::command]
 fn inspect_system() -> SystemInfo {
     let os = std::env::consts::OS.to_string();
@@ -85,6 +95,198 @@ async fn discover_pi(username: String) -> Result<Vec<engine::DiscoveredPi>, Stri
     tauri::async_runtime::spawn_blocking(move || engine::discover_pi(&username))
         .await
         .map_err(|error| error.to_string())?
+}
+
+/// Lists likely removable SD/USB media while excluding the host's system disk.
+/// The actual imaging step must repeat these safety checks immediately before
+/// it writes, and must keep Raspberry Pi Imager's system-drive protection on.
+#[tauri::command]
+fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+    match std::env::consts::OS {
+        "macos" => discover_macos_boot_targets(),
+        "windows" => discover_windows_boot_targets(),
+        "linux" => discover_linux_boot_targets(),
+        _ => Err(
+            "La recherche des cartes SD et disques externes n’est pas disponible sur ce système."
+                .into(),
+        ),
+    }
+}
+
+fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+    let output = Command::new("/usr/sbin/diskutil")
+        .args(["list", "external", "physical"])
+        .output()
+        .map_err(|_| "macOS n’a pas pu rechercher les supports externes. Vérifie les autorisations de l’application.".to_string())?;
+    if !output.status.success() {
+        return Err("macOS n’a pas autorisé la recherche des supports externes. Aucun disque n’a été modifié.".into());
+    }
+    let listing = String::from_utf8_lossy(&output.stdout);
+    let mut devices = Vec::new();
+    for line in listing.lines() {
+        let Some(rest) = line.strip_prefix("/dev/") else {
+            continue;
+        };
+        let Some((disk, flags)) = rest.split_once(' ') else {
+            continue;
+        };
+        if !flags.contains("external") || !flags.contains("physical") || !disk.starts_with("disk") {
+            continue;
+        }
+        let info = Command::new("/usr/sbin/diskutil")
+            .args(["info", &format!("/dev/{disk}")])
+            .output()
+            .ok()
+            .filter(|result| result.status.success())
+            .map(|result| String::from_utf8_lossy(&result.stdout).into_owned())
+            .unwrap_or_default();
+        let field = |key: &str| {
+            info.lines().find_map(|row| {
+                let (name, value) = row.split_once(':')?;
+                (name.trim() == key).then(|| value.trim().to_string())
+            })
+        };
+        let name = field("Media Name")
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "Support externe".into());
+        let size = field("Disk Size").unwrap_or_else(|| "Taille inconnue".into());
+        let connection = field("Bus Protocol").unwrap_or_else(|| "Externe".into());
+        devices.push(PiBootTarget {
+            id: disk.to_string(),
+            name,
+            size,
+            connection,
+        });
+    }
+    Ok(devices)
+}
+
+fn discover_windows_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+    let script = "$ErrorActionPreference='Stop'; Get-Disk | Where-Object { -not $_.IsBoot -and -not $_.IsSystem -and ($_.BusType -in @('USB','SD')) } | Select-Object Number,FriendlyName,Size,BusType | ConvertTo-Json -Compress";
+    let output = Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .output()
+        .map_err(|_| "Windows n’a pas pu rechercher les supports amovibles.".to_string())?;
+    if !output.status.success() {
+        return Err("Windows n’a pas autorisé la recherche des supports amovibles. Aucun disque n’a été modifié.".into());
+    }
+    let value: serde_json::Value =
+        serde_json::from_slice(&output.stdout).unwrap_or(serde_json::Value::Null);
+    let entries = value.as_array().cloned().unwrap_or_else(|| {
+        if value.is_object() {
+            vec![value]
+        } else {
+            Vec::new()
+        }
+    });
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| {
+            let number = entry.get("Number")?.as_u64()?;
+            let bytes = entry.get("Size")?.as_u64().unwrap_or_default();
+            let name = entry
+                .get("FriendlyName")?
+                .as_str()
+                .unwrap_or("Support amovible")
+                .to_string();
+            let connection = entry
+                .get("BusType")?
+                .as_str()
+                .unwrap_or("Externe")
+                .to_string();
+            Some(PiBootTarget {
+                id: format!("PhysicalDrive{number}"),
+                name,
+                size: format_bytes(bytes),
+                connection,
+            })
+        })
+        .collect())
+}
+
+fn discover_linux_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+    let output = Command::new("lsblk")
+        .args([
+            "--json",
+            "--bytes",
+            "--paths",
+            "--output",
+            "NAME,SIZE,MODEL,TRAN,RM,TYPE,MOUNTPOINTS",
+        ])
+        .output()
+        .map_err(|_| "Linux n’a pas pu rechercher les supports amovibles.".to_string())?;
+    if !output.status.success() {
+        return Err("Linux n’a pas pu lire la liste des supports amovibles.".into());
+    }
+    let root_disk = Command::new("sh")
+        .args([
+            "-c",
+            "lsblk -no PKNAME \"$(findmnt -n -o SOURCE --target /)\" 2>/dev/null",
+        ])
+        .output()
+        .ok()
+        .filter(|r| r.status.success())
+        .map(|r| String::from_utf8_lossy(&r.stdout).trim().to_string())
+        .unwrap_or_default();
+    let value: serde_json::Value = serde_json::from_slice(&output.stdout)
+        .map_err(|_| "La liste des supports Linux est illisible.".to_string())?;
+    let disks = value
+        .get("blockdevices")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    let targets = disks
+        .into_iter()
+        .filter_map(|disk| {
+            if disk.get("type")?.as_str()? != "disk" {
+                return None;
+            }
+            let id = disk.get("name")?.as_str()?.to_string();
+            let transport = disk
+                .get("tran")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("");
+            let removable = disk
+                .get("rm")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default()
+                == 1;
+            if id.trim_start_matches("/dev/") == root_disk
+                || !(removable || matches!(transport, "usb" | "mmc"))
+            {
+                return None;
+            }
+            let bytes = disk
+                .get("size")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or_default();
+            let name = disk
+                .get("model")
+                .and_then(serde_json::Value::as_str)
+                .filter(|s| !s.trim().is_empty())
+                .unwrap_or("Support amovible")
+                .trim()
+                .to_string();
+            Some(PiBootTarget {
+                id,
+                name,
+                size: format_bytes(bytes),
+                connection: if transport.is_empty() {
+                    "Externe".into()
+                } else {
+                    transport.to_uppercase()
+                },
+            })
+        })
+        .collect();
+    Ok(targets)
+}
+
+fn format_bytes(bytes: u64) -> String {
+    if bytes == 0 {
+        return "Taille inconnue".into();
+    }
+    format!("{:.1} Go", bytes as f64 / 1_000_000_000.0)
 }
 
 fn valid_host(value: &str) -> bool {
@@ -359,6 +561,7 @@ pub fn run() {
             inspect_system,
             probe_ssh,
             discover_pi,
+            discover_pi_boot_targets,
             get_compatibility,
             create_server,
             install_pi,

@@ -26,6 +26,7 @@ type CompatibilityReport = {
 type ProgressMessage = { step: string; percent: number };
 type OperationResult = { path: string; detail: string; sha256: string | null };
 type DiscoveredPi = { host: string; address: string; model: string };
+type PiBootTarget = { id: string; name: string; size: string; connection: string };
 type PiInstallation = {
   host: string;
   username: string;
@@ -62,6 +63,9 @@ function App() {
   const [piVerified, setPiVerified] = useState(false);
   const [piDiscovering, setPiDiscovering] = useState(false);
   const [piCandidates, setPiCandidates] = useState<DiscoveredPi[]>([]);
+  const [piBootTargets, setPiBootTargets] = useState<PiBootTarget[]>([]);
+  const [piBootScanState, setPiBootScanState] = useState<"idle" | "scanning" | "done">("idle");
+  const [piBootScanError, setPiBootScanError] = useState("");
   const [piInstallation, setPiInstallation] = useState<PiInstallation | null>(
     () => {
       try {
@@ -249,6 +253,19 @@ function App() {
       setConnection(String(error));
     } finally {
       setPiDiscovering(false);
+    }
+  };
+
+  const findPiBootTargets = async () => {
+    setPiBootScanState("scanning");
+    setPiBootScanError("");
+    setPiBootTargets([]);
+    try {
+      setPiBootTargets(await invoke<PiBootTarget[]>("discover_pi_boot_targets"));
+      setPiBootScanState("done");
+    } catch (error) {
+      setPiBootScanError(String(error));
+      setPiBootScanState("idle");
     }
   };
 
@@ -649,18 +666,41 @@ function App() {
                         error={operationError}
                       />
                     )}
-                    <details className="pi-first-boot">
-                      <summary>
-                        Mon Raspberry Pi est neuf et n’a pas encore de système
-                      </summary>
+                    <section className="pi-first-boot" aria-labelledby="pi-fresh-title">
+                      <div className="eyebrow">PRÉPARATION D’UN PI NEUF</div>
+                      <h4 id="pi-fresh-title">Vérifier la carte SD ou le SSD</h4>
                       <p>
-                        Cette version peut détecter et installer le serveur sur
-                        un Pi déjà démarré. Elle ne peut pas encore installer le
-                        système sur une carte ou un SSD vierge. L’écriture d’un
-                        système efface le support choisi; garde-le débranché
-                        jusqu’à ce que cette étape guidée soit disponible.
+                        Branche le support du Raspberry Pi à cet ordinateur, puis
+                        lance la détection. Cette vérification ne modifie aucun disque.
                       </p>
-                    </details>
+                      <button
+                        className="button secondary"
+                        onClick={findPiBootTargets}
+                        disabled={piBootScanState === "scanning"}
+                      >
+                        {piBootScanState === "scanning" ? "Recherche des supports…" : "Détecter la carte SD ou le SSD"}
+                      </button>
+                      {piBootScanError && <p className="pi-error">{piBootScanError}</p>}
+                      {piBootScanState === "done" && piBootTargets.length === 0 && (
+                        <p className="pi-help">Aucun support externe compatible n’a été détecté. Vérifie son branchement puis relance la recherche.</p>
+                      )}
+                      {piBootTargets.length > 0 && (
+                        <ul className="pi-storage-list">
+                          {piBootTargets.map((device) => (
+                            <li key={device.id}>
+                              <strong>{device.name}</strong>
+                              <span>{device.size} · {device.connection}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                      <p className="pi-help">
+                        Cette vérification ne prépare pas encore le système. Le
+                        parcours complet doit aussi écrire Raspberry Pi OS, démarrer
+                        le Pi puis contrôler le serveur. L’écriture efface le support
+                        choisi et nécessitera une confirmation explicite.
+                      </p>
+                    </section>
                   </div>
                 )}
                 <div className="notice safe">

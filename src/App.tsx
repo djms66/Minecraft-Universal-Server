@@ -43,6 +43,8 @@ type PiOsRecommendation = {
   image_size_gb: number;
   devices: string[];
   init_format: string;
+  minimum_server_memory_gb: number;
+  initial_server_storage_gb: number;
   checked_at: string;
 };
 type PiInstallation = {
@@ -477,7 +479,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.6.2
+          MONDE ENSEMBLE <span>·</span> 0.6.3
         </div>
       </aside>
 
@@ -721,7 +723,7 @@ function App() {
                             Modèles compatibles : {describePiModels(piOsRecommendation.devices)}.
                           </span>
                           <small>
-                            L’application choisit ce système sans te faire choisir le modèle. Après le premier démarrage, elle vérifiera automatiquement le modèle du Pi et sa mémoire avant d’installer le serveur.
+                            Les Pi 3 ne conviennent pas à ce serveur. Pour l’héberger, choisis un Pi 4 ou 5 avec au moins {piOsRecommendation.minimum_server_memory_gb} Go de mémoire. L’application vérifiera le modèle et la mémoire avant l’installation.
                           </small>
                         </>
                       )}
@@ -754,13 +756,13 @@ function App() {
                               </div>
                               {piOsRecommendation && device.size_bytes > 0 && (
                                 <em className={
-                                  device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + 8) * 1_000_000_000
+                                  device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb) * 1_000_000_000
                                     ? "storage-ready"
                                     : "storage-small"
                                 }>
-                                  {device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + 8) * 1_000_000_000
+                                  {device.size_bytes >= Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb) * 1_000_000_000
                                     ? "Assez de place pour l’OS et le serveur"
-                                    : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + 8)} Go`}
+                                    : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go`}
                                 </em>
                               )}
                             </li>
@@ -769,7 +771,7 @@ function App() {
                       )}
                       {piOsRecommendation && (
                         <p className="pi-storage-guidance">
-                          Il faut au minimum {Math.ceil(piOsRecommendation.image_size_gb + 8)} Go pour le système et l’espace de départ du serveur. Une carte microSD de 16 Go suffit au profil initial; 32 Go laisse plus de place au monde. Un SSD USB dépend du modèle du Pi.
+                          Il faut environ {Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go pour le système et l’espace initial du serveur. Une carte microSD de 16 Go suffit au profil initial; 32 Go laisse plus de place au monde. Un SSD USB dépend du modèle du Pi.
                         </p>
                       )}
                       <p className="pi-help">

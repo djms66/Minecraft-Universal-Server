@@ -24,6 +24,10 @@ use tar::{Archive, Builder, EntryType};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
+/// Minimum resources required by the shared Java/Bedrock server profile.
+pub const MINIMUM_SERVER_MEMORY_GB: f64 = 2.0;
+pub const INITIAL_SERVER_STORAGE_GB: f64 = 8.0;
+
 const JAVA_DEFAULT_PORT: u16 = 25565;
 const BEDROCK_DEFAULT_PORT: u16 = 19132;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
@@ -93,6 +97,8 @@ pub struct PiOsRecommendation {
     pub image_size_gb: f64,
     pub devices: Vec<String>,
     pub init_format: String,
+    pub minimum_server_memory_gb: f64,
+    pub initial_server_storage_gb: f64,
     pub checked_at: String,
 }
 
@@ -269,6 +275,8 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
             / 10.0,
         devices: image.devices.unwrap_or_default(),
         init_format: image.init_format.unwrap_or_default(),
+        minimum_server_memory_gb: MINIMUM_SERVER_MEMORY_GB,
+        initial_server_storage_gb: INITIAL_SERVER_STORAGE_GB,
         checked_at: Utc::now().to_rfc3339(),
     })
 }
@@ -370,7 +378,7 @@ pub fn install_local(
         return Err("Confirme le CLUF Minecraft avant de préparer le serveur.".into());
     }
     let memory_gb = memory_gb.ok_or_else(|| "La mémoire de cet ordinateur n’a pas pu être mesurée; installation bloquée pour éviter un réglage hasardeux.".to_string())?;
-    if memory_gb < 2.0 {
+    if memory_gb < MINIMUM_SERVER_MEMORY_GB {
         return Err("Cette machine a moins de 2 Go de mémoire. L’application bloque la préparation plutôt que de créer un serveur instable.".into());
     }
     // Keep enough memory for the operating system and the desktop. The cap is
@@ -436,7 +444,7 @@ pub fn install_remote_pi(
             facts.architecture
         ));
     }
-    if facts.memory_gb < 2.0 {
+    if facts.memory_gb < MINIMUM_SERVER_MEMORY_GB {
         return Err(format!(
             "{} n’a que {:.1} Go de mémoire. Le serveur partagé demande au moins 2 Go.",
             facts.model, facts.memory_gb

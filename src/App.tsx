@@ -403,12 +403,60 @@ function App() {
     resetOperation();
     setBusy(true);
     try {
+      if (localInstallation) {
+        const currentStatus = await invoke<LocalServerStatus>(
+          "inspect_local_server",
+          { serverPath: localInstallation.serverPath },
+        ).catch(() => null);
+        if (currentStatus) setLocalServerStatus(currentStatus);
+        if (
+          currentStatus &&
+          (currentStatus.running ||
+            currentStatus.java_port_open ||
+            currentStatus.bedrock_tcp_port_open ||
+            currentStatus.bedrock_udp_port_open)
+        ) {
+          throw new Error(
+            "Arrête d’abord le serveur local depuis son tableau de bord. Il reste sélectionné et aucun monde n’a été restauré.",
+          );
+        }
+      }
       const result = await invoke<OperationResult>("restore_server", {
         archive: restoreArchive,
         destinationRoot: restoreDestination,
         progress: progressChannel(),
       });
       setOperationResult(result);
+      try {
+        const restoredStatus = await invoke<LocalServerStatus>(
+          "inspect_local_server",
+          { serverPath: result.path },
+        );
+        if (
+          restoredStatus.running ||
+          restoredStatus.java_port_open ||
+          restoredStatus.bedrock_tcp_port_open ||
+          restoredStatus.bedrock_udp_port_open
+        ) {
+          setOperationResult({
+            ...result,
+            detail: `${result.detail}. Les ports Minecraft sont occupés; la copie restaurée n’a pas été sélectionnée.`,
+          });
+          return;
+        }
+        setLocalInstallation({ serverPath: result.path });
+        setLocalServerStatus(restoredStatus);
+        setLocalStatusError("");
+        setLocalActionMessage(
+          "Le monde restauré est chargé dans le tableau de bord. Démarre-le quand tu veux jouer.",
+        );
+        setPage("home");
+      } catch {
+        setOperationResult({
+          ...result,
+          detail: `${result.detail}. Le dossier est restauré, mais son profil ne peut pas être chargé dans le tableau de bord. Le chemin ci-dessus permet de le retrouver.`,
+        });
+      }
     } catch (error) {
       setOperationError(String(error));
     } finally {
@@ -1287,7 +1335,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.2
+          MONDE ENSEMBLE <span>·</span> 0.18.3
         </div>
       </aside>
 
@@ -1864,6 +1912,12 @@ function App() {
               progress={operationProgress}
               result={operationResult}
               error={operationError}
+              restoreBlocked={Boolean(
+                localServerStatus?.running ||
+                localServerStatus?.java_port_open ||
+                localServerStatus?.bedrock_tcp_port_open ||
+                localServerStatus?.bedrock_udp_port_open,
+              )}
               onChooseSource={() => selectFolder(setBackupSource)}
               onChooseArchive={selectArchive}
               onChooseDestination={() => selectFolder(setRestoreDestination)}
@@ -3197,6 +3251,7 @@ function Backups({
   progress,
   result,
   error,
+  restoreBlocked,
   onChooseSource,
   onChooseArchive,
   onChooseDestination,
@@ -3216,6 +3271,7 @@ function Backups({
   progress: ProgressMessage | null;
   result: OperationResult | null;
   error: string;
+  restoreBlocked: boolean;
   onChooseSource: () => void;
   onChooseArchive: () => void;
   onChooseDestination: () => void;
@@ -3318,10 +3374,14 @@ function Backups({
         </div>
         <button
           className="button primary action-button"
-          disabled={busy || !archive || !destination}
+          disabled={busy || !archive || !destination || restoreBlocked}
           onClick={onRestore}
         >
-          {busy ? "Vérification en cours…" : "Vérifier et restaurer"}
+          {restoreBlocked
+            ? "Arrête le serveur avant de restaurer"
+            : busy
+              ? "Vérification en cours…"
+              : "Vérifier et restaurer"}
         </button>
       </div>
       {progress && (

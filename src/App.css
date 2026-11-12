@@ -1530,10 +1530,26 @@ button {
   font-size: 11px;
 }
 .terracotta-note p {
-  margin: 5px 0 0;
+  margin: 5px 0 4px;
   color: #826b5c;
-  font-size: 9px;
+  font-size: 11px;
   line-height: 1.6;
+}
+.terracotta-note ol {
+  margin: 5px 0 8px;
+  padding-left: 20px;
+  color: #59463a;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.terracotta-note li + li {
+  margin-top: 4px;
+}
+.terracotta-note small {
+  display: block;
+  color: #826b5c;
+  font-size: 10px;
+  line-height: 1.55;
 }
 .action-panel,
 .operation-card,

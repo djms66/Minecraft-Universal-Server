@@ -1400,7 +1400,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.18.6
+          MONDE ENSEMBLE <span>·</span> 0.18.7
         </div>
       </aside>
 
@@ -3269,15 +3269,28 @@ function Compatibility({
         <div>
           <div className="eyebrow">ERREUR TERRACOTTA · IPAD</div>
           <strong>Bedrock 1.26.62 · InitialConnection-149</strong>
-          <p>
-            L’erreur InitialConnection-149 seule ne permet pas d’identifier la
-            cause. Geyser doit être configuré en NetherNet pour les clients
-            Bedrock récents; le signalement utilise TCP et le jeu utilise UDP.
-            L’application contrôle maintenant les deux ports, puis affiche le
-            journal du serveur géré pour trouver où la connexion bloque. Ce
-            contrôle local ne vérifie pas les règles du routeur ni les réseaux
-            externes.
-          </p>
+          <p>Essaie dans cet ordre :</p>
+          <ol>
+            <li>
+              Sur le même Wi-Fi que le serveur, utilise l’adresse et le port
+              Bedrock affichés dans le tableau de bord; évite le réseau invité.
+            </li>
+            <li>
+              Si cela marche à la maison mais pas à l’extérieur, le routeur doit
+              laisser passer le port Bedrock en TCP et UDP. L’application ne
+              modifie pas le routeur.
+            </li>
+            <li>
+              Si cela échoue aussi à la maison, vérifie « Signal Bedrock TCP »
+              et « Jeu Bedrock UDP » dans le tableau, puis ouvre ou exporte le
+              journal du serveur.
+            </li>
+          </ol>
+          <small>
+            Plage Bedrock actuellement publiée par Geyser :{" "}
+            {report?.bedrock_versions ?? "non vérifiée pour l’instant"}. Le
+            tableau « Compatibilité » relit cette plage à chaque contrôle.
+          </small>
         </div>
       </div>
       <div className="notice amber">
@@ -3290,8 +3303,8 @@ function Compatibility({
           <br />
           Au prochain démarrage, l’application vérifie ensemble Java, Bedrock,
           Paper, Geyser et Floodgate. Elle ne met à jour qu’un profil reconnu,
-          compatible et sauvegardable, puis vérifie que le serveur redémarre.
-          Si un contrôle échoue, la copie précédente reste intacte et le serveur
+          compatible et sauvegardable, puis vérifie que le serveur redémarre. Si
+          un contrôle échoue, la copie précédente reste intacte et le serveur
           garde la version actuelle. Le bouton « Vérifier une mise à jour sûre »
           affiche les versions sans rien modifier.
         </p>

@@ -4704,10 +4704,16 @@ fn build_fresh_server(
     ))
 }
 
-/// Paper's current Java requirement follows its published game-version matrix.
-/// Unknown formats are rejected rather than guessed.
+/// Paper's published matrix requires Java 25 for Minecraft 26.1 and later in
+/// the 26.x release line. Unknown versions are rejected rather than guessed;
+/// update this gate only after checking Paper's current requirements.
 fn java_major_for(game_version: &str) -> Result<u8, String> {
-    if game_version.starts_with("26.") {
+    let mut parts = game_version.split('.');
+    let major = parts.next().and_then(|part| part.parse::<u16>().ok());
+    let minor = parts.next().and_then(|part| part.parse::<u16>().ok());
+    let has_extra_parts = parts.next().is_some();
+
+    if major == Some(26) && minor.is_some_and(|minor| minor >= 1) && !has_extra_parts {
         Ok(25)
     } else {
         Err(format!(
@@ -6189,8 +6195,8 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        RemoveDirOnDrop, artifact_hash_matches, record_managed_artifact_hashes, restore_backup,
-        safe_archive_path, safe_version, valid_plugin_filename,
+        RemoveDirOnDrop, artifact_hash_matches, java_major_for, record_managed_artifact_hashes,
+        restore_backup, safe_archive_path, safe_version, valid_plugin_filename,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, path::Path};
@@ -6261,6 +6267,17 @@ mod tests {
         assert!(valid_plugin_filename("Geyser-Spigot.jar"));
         assert!(!valid_plugin_filename("../Geyser.jar"));
         assert!(!valid_plugin_filename("Geyser.jar.sh"));
+    }
+
+    #[test]
+    fn java_runtime_gate_matches_papers_published_26_1_requirement() {
+        for version in ["26.1", "26.3", "26.10"] {
+            assert_eq!(java_major_for(version).unwrap(), 25, "{version}");
+        }
+
+        for unknown in ["26.0", "26.", "26.3-preview", "26.3.1", "27.0", "1.21.11"] {
+            assert!(java_major_for(unknown).is_err(), "{unknown}");
+        }
     }
 
     #[test]

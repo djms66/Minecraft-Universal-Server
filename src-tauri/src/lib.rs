@@ -207,7 +207,7 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         .output()
         .map_err(|_| "macOS n’a pas pu rechercher les supports externes. Vérifie les autorisations de l’application.".to_string())?;
     if !output.status.success() {
-        return Err("macOS n’a pas autorisé la recherche des supports externes. Aucun disque n’a été modifié.".into());
+        return Err("macOS n’a pas fourni la liste des supports externes. Redémarre l’application puis relance la détection. Aucun disque n’a été modifié.".into());
     }
     let listing = String::from_utf8_lossy(&output.stdout);
     let mut devices = Vec::new();

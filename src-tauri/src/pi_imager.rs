@@ -96,12 +96,10 @@ pub fn flash_pi_os(
     let _sensitive_files =
         SensitiveConfigFiles(user_data_path.clone(), network_config_path.clone());
     let log_path = config_dir.join("ecriture.log");
-    fs::write(&user_data_path, user_data(&ssh_key, &hostname)).map_err(io_error)?;
-    fs::write(
-        &network_config_path,
-        network_config(wifi_ssid, wifi_password, wifi_country),
-    )
-    .map_err(io_error)?;
+    let user_data_contents = user_data(&ssh_key, &hostname);
+    let network_config_contents = network_config(wifi_ssid, wifi_password, wifi_country);
+    fs::write(&user_data_path, &user_data_contents).map_err(io_error)?;
+    fs::write(&network_config_path, &network_config_contents).map_err(io_error)?;
     restrict_file_permissions(&user_data_path)?;
     restrict_file_permissions(&network_config_path)?;
     let _ = OpenOptions::new()
@@ -127,23 +125,24 @@ pub fn flash_pi_os(
         return Err("La version de l’outil Raspberry Pi Imager n’est pas celle qui a été vérifiée. Aucun support n’a été modifié.".into());
     }
 
-    let args = [
-        "--cli".to_string(),
-        "--debug".to_string(),
-        "--sha256".to_string(),
-        image_sha256.to_string(),
-        "--cloudinit-userdata".to_string(),
-        user_data_path.display().to_string(),
-        "--cloudinit-networkconfig".to_string(),
-        network_config_path.display().to_string(),
-        image_url.to_string(),
-        target_device.to_string(),
-    ];
+    let args = imager_cli_args(
+        image_sha256,
+        &user_data_path,
+        &network_config_path,
+        image_url,
+        target_device,
+    );
+    let redactions = sensitive_log_values(
+        wifi_ssid,
+        wifi_password,
+        &user_data_contents,
+        &network_config_contents,
+    );
     progress(
         "Téléchargement, écriture puis vérification de la carte…",
         18,
     );
-    run_imager(&tool, &args, &log_path, &progress)?;
+    run_imager(&tool, &args, &log_path, &redactions, &progress)?;
 
     // Sensitive cloud-init files are removed by the guard on success or error.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
@@ -156,6 +155,58 @@ pub fn flash_pi_os(
         imager_version: IMAGER_VERSION.into(),
         hostname,
     })
+}
+
+fn imager_cli_args(
+    image_sha256: &str,
+    user_data_path: &Path,
+    network_config_path: &Path,
+    image_url: &str,
+    target_device: &str,
+) -> Vec<String> {
+    [
+        "--cli".to_string(),
+        "--disable-telemetry".to_string(),
+        "--debug".to_string(),
+        "--sha256".to_string(),
+        image_sha256.to_string(),
+        "--cloudinit-userdata".to_string(),
+        user_data_path.display().to_string(),
+        "--cloudinit-networkconfig".to_string(),
+        network_config_path.display().to_string(),
+        image_url.to_string(),
+        target_device.to_string(),
+    ]
+    .into()
+}
+
+fn sensitive_log_values(
+    wifi_ssid: &str,
+    wifi_password: &str,
+    user_data: &str,
+    network_config: &str,
+) -> Vec<Vec<u8>> {
+    let mut values = [wifi_password, user_data, network_config]
+        .into_iter()
+        .filter(|value| !value.is_empty())
+        .map(|value| value.as_bytes().to_vec())
+        .collect::<Vec<_>>();
+
+    // Debug logs may print these cloud-init values with JSON escaping. Keep
+    // both the entered text and escaped forms out of the persistent log.
+    for value in [wifi_ssid, wifi_password] {
+        if !value.is_empty() {
+            if let Ok(encoded) = serde_json::to_string(value) {
+                values.push(encoded.as_bytes().to_vec());
+                if let Ok(double_encoded) = serde_json::to_string(&encoded) {
+                    values.push(double_encoded.as_bytes().to_vec());
+                }
+            }
+        }
+    }
+    values.sort_by_key(|value| std::cmp::Reverse(value.len()));
+    values.dedup();
+    values
 }
 
 fn first_boot_network_instructions(wifi_ssid: &str) -> &'static str {
@@ -332,6 +383,7 @@ fn run_imager(
     tool: &MountedImager,
     args: &[String],
     log_path: &Path,
+    redactions: &[Vec<u8>],
     progress: &impl Fn(&str, u8),
 ) -> Result<(), String> {
     let mut child = match std::env::consts::OS {
@@ -352,11 +404,11 @@ fn run_imager(
     let stdout_thread = child
         .stdout
         .take()
-        .map(|pipe| copy_pipe_to_log(pipe, Arc::clone(&log)));
+        .map(|pipe| copy_pipe_to_log(pipe, Arc::clone(&log), redactions.to_vec()));
     let stderr_thread = child
         .stderr
         .take()
-        .map(|pipe| copy_pipe_to_log(pipe, Arc::clone(&log)));
+        .map(|pipe| copy_pipe_to_log(pipe, Arc::clone(&log), redactions.to_vec()));
     let mut last_percent = 18u8;
     loop {
         update_write_progress(log_path, &mut last_percent, progress);
@@ -401,9 +453,12 @@ fn run_imager(
 fn copy_pipe_to_log(
     mut pipe: impl Read + Send + 'static,
     log: Arc<Mutex<File>>,
+    redactions: Vec<Vec<u8>>,
 ) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let mut buffer = [0u8; 8192];
+        let mut pending = Vec::new();
+        let max_secret_len = redactions.iter().map(Vec::len).max().unwrap_or(1);
         loop {
             let Ok(count) = pipe.read(&mut buffer) else {
                 break;
@@ -411,16 +466,69 @@ fn copy_pipe_to_log(
             if count == 0 {
                 break;
             }
-            if let Ok(mut file) = log.lock() {
-                use std::io::Write;
-                if file.write_all(&buffer[..count]).is_err() {
-                    break;
+            pending.extend_from_slice(&buffer[..count]);
+            let safe_len = redacted_prefix_len(&pending, max_secret_len, &redactions);
+            if safe_len > 0 {
+                let safe = pending.drain(..safe_len).collect::<Vec<_>>();
+                if write_redacted(&safe, &redactions, &log).is_err() {
+                    return;
                 }
-            } else {
-                break;
+            }
+        }
+        if !pending.is_empty() {
+            if write_redacted(&pending, &redactions, &log).is_err() {
+                return;
             }
         }
     })
+}
+
+fn redacted_prefix_len(input: &[u8], max_secret_len: usize, redactions: &[Vec<u8>]) -> usize {
+    let mut safe_len = input.len().saturating_sub(max_secret_len.saturating_sub(1));
+    for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
+        let mut offset = 0;
+        while let Some(found) = find_bytes(&input[offset..], secret) {
+            let start = offset + found;
+            let end = start + secret.len();
+            if start < safe_len && end > safe_len {
+                safe_len = start;
+            }
+            offset = start + 1;
+            if offset >= input.len() {
+                break;
+            }
+        }
+    }
+    safe_len
+}
+
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || needle.len() > haystack.len() {
+        return None;
+    }
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn write_redacted(input: &[u8], redactions: &[Vec<u8>], log: &Arc<Mutex<File>>) -> io::Result<()> {
+    let mut output = input.to_vec();
+    for secret in redactions.iter().filter(|secret| !secret.is_empty()) {
+        let mut redacted = Vec::with_capacity(output.len());
+        let mut remaining = output.as_slice();
+        while let Some(found) = find_bytes(remaining, secret) {
+            redacted.extend_from_slice(&remaining[..found]);
+            redacted.extend_from_slice(b"[confidential redacted]");
+            remaining = &remaining[found + secret.len()..];
+        }
+        redacted.extend_from_slice(remaining);
+        output = redacted;
+    }
+    let mut file = log
+        .lock()
+        .map_err(|_| io::Error::other("log lock poisoned"))?;
+    use std::io::Write;
+    file.write_all(&output)
 }
 
 fn spawn_macos_elevated(tool: &MountedImager, args: &[String]) -> Result<Child, String> {
@@ -684,12 +792,18 @@ fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        first_boot_network_instructions, network_config, powershell_quote,
-        restrict_file_permissions, user_data, windows_quote,
+        copy_pipe_to_log, first_boot_network_instructions, imager_cli_args, network_config,
+        powershell_quote, redacted_prefix_len, restrict_file_permissions, sensitive_log_values,
+        user_data, windows_quote,
     };
-    use std::fs;
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
+    use std::path::Path;
+    use std::{
+        fs,
+        io::Cursor,
+        sync::{Arc, Mutex},
+    };
 
     #[test]
     fn cloud_init_user_data_is_multiline_and_enables_ssh_at_root() {
@@ -718,6 +832,71 @@ mod tests {
     fn first_boot_instructions_match_the_selected_network() {
         assert!(first_boot_network_instructions("").contains("avec un câble réseau"));
         assert!(first_boot_network_instructions("Maison").contains("réseau Wi-Fi configuré"));
+    }
+
+    #[test]
+    fn imager_cli_disables_telemetry_without_disabling_image_verification() {
+        let args = imager_cli_args(
+            &"a".repeat(64),
+            Path::new("/private/user-data"),
+            Path::new("/private/network-config"),
+            "https://downloads.raspberrypi.com/raspios.img.xz",
+            "/dev/disk4",
+        );
+
+        assert!(args.contains(&"--disable-telemetry".to_string()));
+        assert!(args.contains(&"--sha256".to_string()));
+        assert!(args.contains(&"--cloudinit-userdata".to_string()));
+        assert!(args.contains(&"--cloudinit-networkconfig".to_string()));
+        assert!(args.contains(&"--debug".to_string()));
+        assert!(!args.contains(&"--disable-verify".to_string()));
+    }
+
+    #[test]
+    fn persistent_imager_log_redacts_secrets_even_across_read_boundaries() {
+        let secret = b"wifi-secret".to_vec();
+        let first_chunk = b"start wifi-se";
+        let second_chunk = b"cret done";
+        let mut combined = first_chunk.to_vec();
+        combined.extend_from_slice(second_chunk);
+
+        let safe_len = redacted_prefix_len(&combined, secret.len(), &[secret.clone()]);
+
+        assert!(safe_len <= b"start ".len());
+        assert!(safe_len < combined.len());
+    }
+
+    #[test]
+    fn imager_pipe_never_persists_a_wifi_password_split_across_reads() {
+        let path = std::env::temp_dir().join(format!(
+            "monde-ensemble-redacted-log-{}.log",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let file = fs::File::create(&path).unwrap();
+        let log = Arc::new(Mutex::new(file));
+        let secret = b"wifi-secret".to_vec();
+        let mut output = vec![b'x'; 8_189];
+        output.extend_from_slice(&secret);
+        output.extend_from_slice(b" done\n");
+
+        copy_pipe_to_log(Cursor::new(output), log, vec![secret])
+            .join()
+            .unwrap();
+
+        let contents = fs::read_to_string(&path).unwrap();
+        assert!(!contents.contains("wifi-secret"));
+        assert!(contents.contains("[confidential redacted]"));
+        assert!(contents.ends_with(" done\n"));
+        fs::remove_file(path).unwrap();
+    }
+
+    #[test]
+    fn sensitive_log_values_keep_short_wifi_names_from_over_redacting_progress() {
+        let values = sensitive_log_values("a", "password-123", "userdata", "network-config");
+
+        assert!(!values.iter().any(|value| value == b"a"));
+        assert!(values.iter().any(|value| value == b"password-123"));
+        assert!(values.iter().any(|value| value == b"\"a\""));
     }
 
     #[test]

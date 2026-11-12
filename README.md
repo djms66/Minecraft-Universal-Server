@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.22
+# Monde Ensemble 0.18.23
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -25,6 +25,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - bloque l’écriture d’un système Pi s’il détecte plusieurs supports externes, affiche l’identifiant du support choisi et demande une confirmation explicite de son effacement ;
 - lit le catalogue Raspberry Pi officiel pour proposer l’image Raspberry Pi OS Lite 64 bits avec le format de démarrage requis, sa date de publication et sa taille ;
 - prépare une carte SD ou un SSD depuis l’application avec Raspberry Pi Imager officiel, téléchargé à la demande et vérifié par SHA-256 ; choisit Raspberry Pi OS Lite et configure l’accès sécurisé sans demander au débutant d’installer Imager séparément ;
+- désactive la télémétrie d’écriture de Raspberry Pi Imager et masque les données Wi-Fi dans les journaux de diagnostic conservés par l’application ; la vérification de l’image et de l’écriture reste active ;
 - prépare Ethernet en automatique ou le Wi-Fi saisi dans l’application, crée une clé SSH si l’ordinateur n’en possède pas, attend le premier démarrage du Pi et lance ensuite l’installation du serveur ;
 - affiche les modèles Pi compatibles avec cette image et compare la capacité des supports externes détectés à la place nécessaire au système et au serveur ;
 - distingue la compatibilité de l’image de celle du serveur : un Pi 4 ou 5 doit avoir au moins 2 Go de mémoire ; le Pi 3 standard n’est pas adapté à ce profil ;

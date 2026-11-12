@@ -252,6 +252,7 @@ fn discover_linux_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                 .unwrap_or_default()
                 == 1;
             if id.trim_start_matches("/dev/") == root_disk
+                || contains_root_mount(&disk)
                 || !(removable || matches!(transport, "usb" | "mmc"))
             {
                 return None;
@@ -280,6 +281,19 @@ fn discover_linux_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         })
         .collect();
     Ok(targets)
+}
+
+fn contains_root_mount(device: &serde_json::Value) -> bool {
+    let mounted_here = device
+        .get("mountpoints")
+        .and_then(serde_json::Value::as_array)
+        .is_some_and(|mounts| mounts.iter().any(|mount| mount.as_str() == Some("/")))
+        || device.get("mountpoint").and_then(serde_json::Value::as_str) == Some("/");
+    mounted_here
+        || device
+            .get("children")
+            .and_then(serde_json::Value::as_array)
+            .is_some_and(|children| children.iter().any(contains_root_mount))
 }
 
 fn format_bytes(bytes: u64) -> String {

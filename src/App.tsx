@@ -92,6 +92,7 @@ type LocalServerStatus = {
   players: string;
   log: string;
 };
+type LocalWhitelistStatus = { enabled: boolean; entries: string };
 type PiServerStatus = {
   running: boolean;
   ready: boolean;
@@ -171,6 +172,12 @@ function App() {
     });
   const [localServerStatus, setLocalServerStatus] =
     useState<LocalServerStatus | null>(null);
+  const [localWhitelistStatus, setLocalWhitelistStatus] =
+    useState<LocalWhitelistStatus | null>(null);
+  const [localPlayerName, setLocalPlayerName] = useState("");
+  const [localPlayerPlatform, setLocalPlayerPlatform] = useState<
+    "java" | "bedrock"
+  >("java");
   const [localUpdateCheck, setLocalUpdateCheck] =
     useState<PiUpdateCheck | null>(null);
   const [localUpdateError, setLocalUpdateError] = useState("");
@@ -629,6 +636,74 @@ function App() {
     }
   };
 
+  const refreshLocalWhitelist = async () => {
+    if (!localInstallation || !localServerStatus?.running) {
+      setLocalWhitelistStatus(null);
+      return;
+    }
+    try {
+      setLocalWhitelistStatus(
+        await invoke<LocalWhitelistStatus>("local_whitelist_status", {
+          serverPath: localInstallation.serverPath,
+        }),
+      );
+    } catch (error) {
+      setLocalStatusError(String(error));
+    }
+  };
+
+  const manageLocalPlayer = async (action: "add" | "remove") => {
+    if (!localInstallation) return;
+    setBusy(true);
+    setLocalStatusError("");
+    setLocalActionMessage("Mise à jour de la liste des joueurs…");
+    try {
+      const response = await invoke<string>("change_local_whitelist", {
+        serverPath: localInstallation.serverPath,
+        platform: localPlayerPlatform,
+        action,
+        playerName: localPlayerName,
+      });
+      setLocalActionMessage(
+        response || "La liste des joueurs a été actualisée.",
+      );
+      setLocalWhitelistStatus(
+        await invoke<LocalWhitelistStatus>("local_whitelist_status", {
+          serverPath: localInstallation.serverPath,
+        }),
+      );
+      setLocalPlayerName("");
+    } catch (error) {
+      setLocalStatusError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const setLocalWhitelist = async (enabled: boolean) => {
+    if (!localInstallation) return;
+    setBusy(true);
+    setLocalStatusError("");
+    setLocalActionMessage("Modification de la protection du serveur…");
+    try {
+      setLocalActionMessage(
+        await invoke<string>("set_local_whitelist_enabled", {
+          serverPath: localInstallation.serverPath,
+          enabled,
+        }),
+      );
+      setLocalWhitelistStatus(
+        await invoke<LocalWhitelistStatus>("local_whitelist_status", {
+          serverPath: localInstallation.serverPath,
+        }),
+      );
+    } catch (error) {
+      setLocalStatusError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const checkLocalUpdate = async () => {
     if (!localInstallation) return;
     setCheckingLocalUpdate(true);
@@ -651,6 +726,16 @@ function App() {
     // The saved local path is the only input to this read-only status refresh.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, localInstallation?.serverPath]);
+
+  useEffect(() => {
+    if (page === "home" && localServerStatus?.running) {
+      void refreshLocalWhitelist();
+    } else {
+      setLocalWhitelistStatus(null);
+    }
+    // RCON refresh is read-only; the saved local path is its only target.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [page, localServerStatus?.running, localInstallation?.serverPath]);
 
   const startLocalServer = async () => {
     if (!localInstallation) return;
@@ -884,7 +969,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> 0.10.0
+          MONDE ENSEMBLE <span>·</span> 0.11.0
         </div>
       </aside>
 
@@ -930,6 +1015,13 @@ function App() {
               localUpdateCheck={localUpdateCheck}
               localUpdateError={localUpdateError}
               checkingLocalUpdate={checkingLocalUpdate}
+              localWhitelistStatus={localWhitelistStatus}
+              localPlayerName={localPlayerName}
+              localPlayerPlatform={localPlayerPlatform}
+              onLocalPlayerNameChange={setLocalPlayerName}
+              onLocalPlayerPlatformChange={setLocalPlayerPlatform}
+              onManageLocalPlayer={manageLocalPlayer}
+              onSetLocalWhitelist={setLocalWhitelist}
               onRefreshLocal={refreshLocalStatus}
               onCheckLocalUpdate={checkLocalUpdate}
               onStartLocal={startLocalServer}
@@ -1713,6 +1805,13 @@ function Home({
   localUpdateCheck,
   localUpdateError,
   checkingLocalUpdate,
+  localWhitelistStatus,
+  localPlayerName,
+  localPlayerPlatform,
+  onLocalPlayerNameChange,
+  onLocalPlayerPlatformChange,
+  onManageLocalPlayer,
+  onSetLocalWhitelist,
   onRefreshLocal,
   onCheckLocalUpdate,
   onStartLocal,
@@ -1745,6 +1844,13 @@ function Home({
   localUpdateCheck: PiUpdateCheck | null;
   localUpdateError: string;
   checkingLocalUpdate: boolean;
+  localWhitelistStatus: LocalWhitelistStatus | null;
+  localPlayerName: string;
+  localPlayerPlatform: "java" | "bedrock";
+  onLocalPlayerNameChange: (value: string) => void;
+  onLocalPlayerPlatformChange: (value: "java" | "bedrock") => void;
+  onManageLocalPlayer: (action: "add" | "remove") => void;
+  onSetLocalWhitelist: (enabled: boolean) => void;
   onRefreshLocal: () => void;
   onCheckLocalUpdate: () => void;
   onStartLocal: () => void;
@@ -1936,6 +2042,120 @@ function Home({
               {localActionMessage}
             </p>
           )}
+          <section
+            className="player-tools"
+            aria-labelledby="local-players-title"
+          >
+            <div className="player-tools-heading">
+              <div>
+                <div className="eyebrow">ACCÈS AU MONDE</div>
+                <h3 id="local-players-title">Joueurs autorisés</h3>
+              </div>
+              <span
+                className={
+                  localWhitelistStatus?.enabled
+                    ? "player-state enabled"
+                    : "player-state"
+                }
+              >
+                {localWhitelistStatus
+                  ? localWhitelistStatus.enabled
+                    ? "Liste active"
+                    : "Liste inactive"
+                  : "Serveur à démarrer"}
+              </span>
+            </div>
+            {localWhitelistStatus ? (
+              <>
+                <p className="player-tools-note">
+                  {localWhitelistStatus.enabled
+                    ? "Seuls les joueurs listés peuvent rejoindre."
+                    : "La liste est inactive : toute personne connaissant l’adresse du serveur peut tenter de rejoindre."}
+                </p>
+                <div className="player-entry-row">
+                  <label>
+                    <span>Édition</span>
+                    <select
+                      value={localPlayerPlatform}
+                      onChange={(event) =>
+                        onLocalPlayerPlatformChange(
+                          event.target.value as "java" | "bedrock",
+                        )
+                      }
+                      disabled={busy}
+                    >
+                      <option value="java">Java · PC et Mac</option>
+                      <option value="bedrock">
+                        Bedrock · mobile, console, Windows
+                      </option>
+                    </select>
+                  </label>
+                  <label className="player-name-input">
+                    <span>
+                      {localPlayerPlatform === "java"
+                        ? "Nom Java"
+                        : "Gamertag Xbox"}
+                    </span>
+                    <input
+                      value={localPlayerName}
+                      onChange={(event) =>
+                        onLocalPlayerNameChange(event.target.value)
+                      }
+                      placeholder={
+                        localPlayerPlatform === "java"
+                          ? "Ex. Alex_12"
+                          : "Ex. Alex 12"
+                      }
+                      maxLength={16}
+                      disabled={busy}
+                    />
+                  </label>
+                  <button
+                    className="button primary"
+                    onClick={() => onManageLocalPlayer("add")}
+                    disabled={busy || !localPlayerName.trim()}
+                  >
+                    Ajouter
+                  </button>
+                  <button
+                    className="button secondary"
+                    onClick={() => onManageLocalPlayer("remove")}
+                    disabled={busy || !localPlayerName.trim()}
+                  >
+                    Retirer
+                  </button>
+                </div>
+                {localPlayerPlatform === "bedrock" && (
+                  <p className="player-tools-note">
+                    Floodgate peut ajouter un gamertag après sa première
+                    connexion à un serveur Geyser. Si la liste est déjà active,
+                    il faut d’abord l’autoriser autrement; l’application ne
+                    désactive jamais la protection pour le faire.
+                  </p>
+                )}
+                <details className="player-list-output">
+                  <summary>Voir la réponse du serveur</summary>
+                  <pre>{localWhitelistStatus.entries}</pre>
+                </details>
+                <button
+                  className="text-button"
+                  onClick={() =>
+                    onSetLocalWhitelist(!localWhitelistStatus.enabled)
+                  }
+                  disabled={busy}
+                >
+                  {localWhitelistStatus.enabled
+                    ? "Désactiver la liste d’accès"
+                    : "Activer la liste d’accès"}
+                </button>
+              </>
+            ) : (
+              <p className="player-tools-note">
+                Démarre le serveur pour ajouter ou retirer un joueur. La liste
+                d’accès protège ton monde lorsque tu l’actives.
+              </p>
+            )}
+          </section>
           {localStatusError && (
             <p className="pi-error" role="alert">
               {localStatusError}

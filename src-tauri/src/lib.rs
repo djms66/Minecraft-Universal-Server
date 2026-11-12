@@ -629,6 +629,45 @@ async fn stop_local_server(server_path: String) -> Result<String, String> {
 }
 
 #[tauri::command]
+async fn local_whitelist_status(
+    server_path: String,
+) -> Result<engine::LocalWhitelistStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::local_whitelist_status(std::path::Path::new(&server_path))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn change_local_whitelist(
+    server_path: String,
+    platform: String,
+    action: String,
+    player_name: String,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::change_local_whitelist(
+            &std::path::Path::new(&server_path),
+            &platform,
+            &action,
+            &player_name,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn set_local_whitelist_enabled(server_path: String, enabled: bool) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        engine::set_local_whitelist_enabled(std::path::Path::new(&server_path), enabled)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn export_local_server_log(
     server_path: String,
     output_file: String,
@@ -803,6 +842,9 @@ pub fn run() {
             check_local_update,
             start_local_server,
             stop_local_server,
+            local_whitelist_status,
+            change_local_whitelist,
+            set_local_whitelist_enabled,
             export_local_server_log,
             install_pi,
             inspect_pi_server,

@@ -1888,6 +1888,97 @@ button {
   margin-top: 8px;
   color: #b9bdb3;
 }
+.player-tools {
+  margin-top: 21px;
+  padding-top: 19px;
+  border-top: 1px solid #464b43;
+}
+.player-tools-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+.player-tools-heading h3 {
+  margin: 5px 0 0;
+  color: #f0eee3;
+  font-size: 17px;
+}
+.player-state {
+  padding: 7px 10px;
+  color: #f1d28c;
+  background: #423a2b;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+.player-state.enabled {
+  color: #a6d5a8;
+  background: #293d2c;
+}
+.player-tools-note {
+  margin: 10px 0;
+  color: #c6c9c0;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.player-entry-row {
+  display: grid;
+  grid-template-columns: minmax(170px, 0.9fr) minmax(170px, 1fr) auto auto;
+  align-items: end;
+  gap: 10px;
+  margin-top: 13px;
+}
+.player-entry-row label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 6px;
+  color: #acb2a6;
+  font-size: 11px;
+  font-weight: 700;
+}
+.player-entry-row input,
+.player-entry-row select {
+  width: 100%;
+  min-height: 40px;
+  padding: 9px 11px;
+  color: #f0eee3;
+  background: #1d211e;
+  border: 1px solid #596057;
+  border-radius: 3px;
+}
+.player-entry-row input:focus,
+.player-entry-row select:focus {
+  outline: 2px solid #c3e879;
+  outline-offset: 1px;
+}
+.player-entry-row .button {
+  min-height: 40px;
+  padding: 9px 13px;
+  font-size: 12px;
+}
+.player-list-output {
+  margin-top: 12px;
+  color: #d8dacd;
+  font-size: 12px;
+}
+.player-list-output summary {
+  cursor: pointer;
+}
+.player-list-output pre {
+  margin: 8px 0;
+  padding: 10px;
+  color: #dce2d6;
+  background: #1d211e;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font:
+    11px/1.5 ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
+}
 @media (max-width: 800px) {
   .pi-dashboard {
     padding: 19px;
@@ -1906,5 +1997,11 @@ button {
     width: 100%;
     flex-direction: column;
     align-items: flex-start;
+  }
+  .player-entry-row {
+    grid-template-columns: 1fr 1fr;
+  }
+  .player-entry-row label {
+    grid-column: span 2;
   }
 }

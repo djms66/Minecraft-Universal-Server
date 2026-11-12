@@ -186,6 +186,12 @@ pub struct LocalStartResult {
     pub message: String,
 }
 
+#[derive(Serialize)]
+pub struct LocalWhitelistStatus {
+    pub enabled: bool,
+    pub entries: String,
+}
+
 #[derive(Deserialize)]
 struct PaperBuild {
     id: u64,
@@ -1080,6 +1086,108 @@ pub fn stop_local_server(server_dir: &Path) -> Result<String, String> {
     Err("Le serveur a reçu l’ordre de sauvegarder et de s’arrêter, mais son port reste actif. Aucun arrêt forcé n’a été tenté.".into())
 }
 
+pub fn local_whitelist_status(server_dir: &Path) -> Result<LocalWhitelistStatus, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    let profile = local_profile(&server_dir)?;
+    require_local_rcon(&profile)?;
+    let properties_path = server_dir.join("server.properties");
+    if !fs::symlink_metadata(&properties_path)
+        .map(|metadata| metadata.file_type().is_file())
+        .unwrap_or(false)
+    {
+        return Err(
+            "Les réglages du serveur sont absents ou ne sont pas un fichier normal.".into(),
+        );
+    }
+    let properties = fs::read_to_string(properties_path).map_err(io_error)?;
+    let enabled = properties
+        .lines()
+        .find_map(|line| line.strip_prefix("white-list="))
+        .is_some_and(|value| value.trim().eq_ignore_ascii_case("true"));
+    let entries = rcon_command(&profile, "whitelist list")?;
+    Ok(LocalWhitelistStatus { enabled, entries })
+}
+
+pub fn change_local_whitelist(
+    server_dir: &Path,
+    platform: &str,
+    action: &str,
+    player_name: &str,
+) -> Result<String, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    let profile = local_profile(&server_dir)?;
+    require_local_rcon(&profile)?;
+    let canonical_name = match platform {
+        "java"
+            if Regex::new(r"^[A-Za-z0-9_]{3,16}$")
+                .is_ok_and(|pattern| pattern.is_match(player_name)) =>
+        {
+            player_name.to_string()
+        }
+        "bedrock"
+            if !player_name.trim().is_empty()
+                && player_name.len() <= 16
+                && player_name.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '_' | ' ')
+                }) =>
+        {
+            player_name.split_whitespace().collect::<Vec<_>>().join("_")
+        }
+        "java" => {
+            return Err(
+                "Nom Java invalide. Utilise 3 à 16 lettres, chiffres ou tirets bas.".into(),
+            );
+        }
+        "bedrock" => {
+            return Err("Gamertag Bedrock invalide. Pour cette première version, saisis jusqu’à 16 lettres, chiffres, espaces ou tirets bas.".into());
+        }
+        _ => return Err("Choix d’édition invalide.".into()),
+    };
+    if !matches!(action, "add" | "remove") {
+        return Err("Action de liste d’accès invalide.".into());
+    }
+    let command = if platform == "bedrock" {
+        format!("fwhitelist {action} {canonical_name}")
+    } else {
+        format!("whitelist {action} {canonical_name}")
+    };
+    let response = rcon_command(&profile, &command)?;
+    Ok(response.trim().to_string())
+}
+
+pub fn set_local_whitelist_enabled(server_dir: &Path, enabled: bool) -> Result<String, String> {
+    let server_dir = server_dir
+        .canonicalize()
+        .map_err(|_| "Le dossier du serveur local enregistré est introuvable.".to_string())?;
+    let profile = local_profile(&server_dir)?;
+    require_local_rcon(&profile)?;
+    if enabled {
+        let entries = rcon_command(&profile, "whitelist list")?;
+        let count = Regex::new(r"(?i)There are\s+(\d+)\s+whitelisted player")
+            .ok()
+            .and_then(|pattern| pattern.captures(&entries))
+            .and_then(|captures| captures.get(1))
+            .and_then(|value| value.as_str().parse::<u32>().ok())
+            .ok_or_else(|| "Le serveur n’a pas confirmé le nombre de joueurs autorisés. Ajoute d’abord un joueur et actualise la liste.".to_string())?;
+        if count == 0 {
+            return Err("Ajoute au moins un joueur avant d’activer la liste, pour éviter de te verrouiller dehors.".into());
+        }
+    }
+    let response = rcon_command(
+        &profile,
+        if enabled {
+            "whitelist on"
+        } else {
+            "whitelist off"
+        },
+    )?;
+    Ok(response.trim().to_string())
+}
+
 pub fn export_local_server_log(server_dir: &Path, output_file: &Path) -> Result<String, String> {
     let server_dir = server_dir
         .canonicalize()
@@ -1411,6 +1519,21 @@ fn local_profile(server_dir: &Path) -> Result<serde_json::Value, String> {
         return Err("Ce dossier n’a pas été créé par Monde Ensemble.".into());
     }
     Ok(profile)
+}
+
+fn require_local_rcon(profile: &serde_json::Value) -> Result<(), String> {
+    if profile
+        .get("rcon_port")
+        .and_then(serde_json::Value::as_u64)
+        .is_none()
+        || profile
+            .get("rcon_password")
+            .and_then(serde_json::Value::as_str)
+            .is_none()
+    {
+        return Err("Ce serveur a été créé par une version antérieure et ne possède pas le contrôle local sécurisé. Il reste intact.".into());
+    }
+    Ok(())
 }
 
 fn prepare_local_update_copy(

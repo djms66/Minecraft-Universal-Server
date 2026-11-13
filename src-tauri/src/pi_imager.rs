@@ -166,7 +166,6 @@ fn imager_cli_args(
 ) -> Vec<String> {
     [
         "--cli".to_string(),
-        "--disable-telemetry".to_string(),
         "--debug".to_string(),
         "--sha256".to_string(),
         image_sha256.to_string(),
@@ -849,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn imager_cli_disables_telemetry_without_disabling_image_verification() {
+    fn imager_cli_uses_supported_options_and_keeps_image_verification() {
         let args = imager_cli_args(
             &"a".repeat(64),
             Path::new("/private/user-data"),
@@ -858,7 +857,7 @@ mod tests {
             "/dev/disk4",
         );
 
-        assert!(args.contains(&"--disable-telemetry".to_string()));
+        assert!(!args.contains(&"--disable-telemetry".to_string()));
         assert!(args.contains(&"--sha256".to_string()));
         assert!(args.contains(&"--cloudinit-userdata".to_string()));
         assert!(args.contains(&"--cloudinit-networkconfig".to_string()));

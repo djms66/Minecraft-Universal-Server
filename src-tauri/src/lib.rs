@@ -210,7 +210,7 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         return Err("macOS n’a pas fourni la liste des supports externes. Redémarre l’application puis relance la détection. Aucun disque n’a été modifié.".into());
     }
     let listing = String::from_utf8_lossy(&output.stdout);
-    let mut devices = Vec::new();
+    let mut disks = std::collections::BTreeMap::<String, Option<(String, u64)>>::new();
     for line in listing.lines() {
         let Some(rest) = line.strip_prefix("/dev/") else {
             continue;
@@ -221,6 +221,49 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         if !flags.contains("external") || !flags.contains("physical") || !disk.starts_with("disk") {
             continue;
         }
+        disks.insert(disk.to_string(), None);
+    }
+
+    // macOS reports an SD card in the MacBook's built-in reader as
+    // "internal, physical", so `diskutil list external physical` omits it.
+    // Only add disks that System Profiler explicitly identifies as removable
+    // media inside a card reader; never broaden this to all internal disks.
+    if let Ok(output) = Command::new("/usr/sbin/system_profiler")
+        .args(["SPCardReaderDataType", "-json"])
+        .output()
+    {
+        if output.status.success() {
+            if let Ok(profile) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
+                if let Some(readers) = profile["SPCardReaderDataType"].as_array() {
+                    for card in readers
+                        .iter()
+                        .filter_map(|reader| reader["_items"].as_array())
+                        .flatten()
+                        .filter(|card| card["removable_media"].as_str() == Some("yes"))
+                    {
+                        let Some(disk) = card["bsd_name"].as_str().filter(|disk| {
+                            disk.strip_prefix("disk").is_some_and(|suffix| {
+                                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                            })
+                        }) else {
+                            continue;
+                        };
+                        let name = card["_name"]
+                            .as_str()
+                            .unwrap_or("Carte SD amovible")
+                            .to_string();
+                        let size_bytes = card["size_in_bytes"].as_u64().unwrap_or_default();
+                        disks
+                            .entry(disk.to_string())
+                            .or_insert(Some((name, size_bytes)));
+                    }
+                }
+            }
+        }
+    }
+
+    let mut devices = Vec::new();
+    for (disk, card_reader_info) in disks {
         let info = Command::new("/usr/sbin/diskutil")
             .args(["info", &format!("/dev/{disk}")])
             .output()
@@ -234,17 +277,29 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                 (name.trim() == key).then(|| value.trim().to_string())
             })
         };
-        let name = field("Media Name")
+        let name = card_reader_info
+            .as_ref()
+            .map(|(name, _)| name.clone())
+            .or_else(|| field("Media Name"))
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "Support externe".into());
         let disk_size = field("Disk Size").unwrap_or_default();
-        let size_bytes = parse_disk_size_bytes(&disk_size).unwrap_or_default();
+        let size_bytes = card_reader_info
+            .as_ref()
+            .map(|(_, bytes)| *bytes)
+            .filter(|bytes| *bytes > 0)
+            .or_else(|| parse_disk_size_bytes(&disk_size))
+            .unwrap_or_default();
         let size = if disk_size.is_empty() {
             "Taille inconnue".into()
         } else {
             disk_size
         };
-        let connection = field("Bus Protocol").unwrap_or_else(|| "Externe".into());
+        let connection = if card_reader_info.is_some() {
+            "Lecteur SD intégré".into()
+        } else {
+            field("Bus Protocol").unwrap_or_else(|| "Externe".into())
+        };
         devices.push(PiBootTarget {
             id: disk.to_string(),
             name,

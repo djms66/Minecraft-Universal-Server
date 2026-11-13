@@ -1934,12 +1934,13 @@ function App() {
                       {piBootScanState === "done" &&
                         piBootTargets.length === 0 && (
                           <p className="pi-help">
-                            Aucun support externe n’a été détecté. Le format Mac
-                            de la carte ne pose pas de problème et tu n’as pas
-                            besoin de la reformater. Vérifie que la carte est
-                            insérée dans un lecteur branché au Mac et qu’elle
-                            apparaît sous « Externe » dans Utilitaire de disque,
-                            puis relance la détection. Rien n’a été écrit.
+                            Aucune carte SD ni aucun disque amovible n’a été
+                            détecté. Une carte dans le lecteur SD intégré au
+                            Mac peut apparaître comme « interne » dans Utilitaire
+                            de disque : c’est normal, l’application la reconnaît
+                            aussi. Vérifie qu’elle est bien insérée, puis relance
+                            la détection. Son format Mac ne pose pas de problème.
+                            Rien n’a été écrit.
                           </p>
                         )}
                       {piBootTargets.length > 0 && (

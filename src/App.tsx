@@ -3573,6 +3573,39 @@ function Home({
   );
 }
 
+function rangeIncludesVersion(
+  range: string | undefined,
+  target: string,
+): boolean | null {
+  if (!range) return null;
+  const candidates = Array.from(
+    range.matchAll(/(\d+(?:\.\d+){1,2})(?:\s*[-–]\s*(\d+(?:\.\d+){1,2}))?/g),
+  );
+  if (candidates.length === 0) return null;
+
+  const compare = (left: string, right: string) => {
+    const leftParts = left.split(".").map(Number);
+    const rightParts = right.split(".").map(Number);
+    for (
+      let index = 0;
+      index < Math.max(leftParts.length, rightParts.length);
+      index += 1
+    ) {
+      const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+      if (difference !== 0) return Math.sign(difference);
+    }
+    return 0;
+  };
+
+  return candidates.some(([, start, end]) => {
+    if (!start) return false;
+    return (
+      compare(target, start) >= 0 &&
+      (end ? compare(target, end) <= 0 : compare(target, start) === 0)
+    );
+  });
+}
+
 function Compatibility({
   report,
   error,
@@ -3580,6 +3613,10 @@ function Compatibility({
   report: CompatibilityReport | null;
   error: string;
 }) {
+  const terracottaClientSupported = rangeIncludesVersion(
+    report?.bedrock_versions,
+    "26.62",
+  );
   const rows = [
     ["PC / Mac Java", "Profil Java", "Paper · version listée"],
     ["Windows Bedrock", "Profil Bedrock", "Geyser · version listée"],
@@ -3746,6 +3783,18 @@ function Compatibility({
             {report?.bedrock_versions ?? "non vérifiée pour l’instant"}. Le
             tableau « Compatibilité » relit cette plage à chaque contrôle.
           </small>
+          <p className="terracotta-diagnosis">
+            {terracottaClientSupported === true
+              ? "La version 1.26.62 de ta capture est comprise dans la plage annoncée par le catalogue actuel. Cela ne prouve pas que ton serveur utilise déjà ce build ni que le signal réseau passe."
+              : terracottaClientSupported === false
+                ? "La plage annoncée par le catalogue actuel ne comprend pas la version 1.26.62 de ta capture. Cette passerelle ne peut donc pas encore confirmer sa compatibilité."
+                : "La plage du catalogue n’a pas pu être comparée à la version 1.26.62 de ta capture."}{" "}
+            Dans « Mon monde », vérifie le build Geyser installé et les états «
+            Signal Bedrock TCP » et « Jeu Bedrock UDP ». Si les deux sont au
+            vert sur le même Wi-Fi mais que l’erreur persiste, exporte le
+            journal pour le diagnostic. Cette erreur, à elle seule, ne signifie
+            pas que le monde est abîmé.
+          </p>
         </div>
       </div>
       <div className="notice amber">

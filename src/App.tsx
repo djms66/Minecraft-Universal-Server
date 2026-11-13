@@ -73,7 +73,7 @@ type PiOsRecommendation = {
   release_date: string;
   image_url: string;
   image_sha256: string;
-  download_sha256: string;
+  download_sha256?: string;
   download_size_gb: number;
   image_size_gb: number;
   devices: string[];
@@ -644,7 +644,7 @@ function App() {
         targetName: device.name,
         targetSizeBytes: device.size_bytes,
         imageUrl: piOsRecommendation.image_url,
-        imageSha256: piOsRecommendation.download_sha256,
+        imageSha256: piOsRecommendation.image_sha256,
         wifiSsid: piWifiSsid,
         wifiPassword: piWifiPassword,
         wifiCountry: piWifiCountry,
@@ -2001,7 +2001,7 @@ function App() {
                                       disabled={
                                         busy ||
                                         Boolean(piFlashResult) ||
-                                        !piOsRecommendation.download_sha256
+                                        !piOsRecommendation.image_sha256
                                       }
                                     >
                                       {busy

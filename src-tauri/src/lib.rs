@@ -148,7 +148,7 @@ async fn prepare_pi_sd(
     tauri::async_runtime::spawn_blocking(move || {
         let current_recommendation = engine::pi_os_recommendation()?;
         if image_url != current_recommendation.image_url
-            || image_sha256 != current_recommendation.download_sha256
+            || image_sha256 != current_recommendation.image_sha256
         {
             return Err("Le catalogue Raspberry Pi a changé depuis l’affichage. Actualise la recommandation avant d’écrire la carte.".into());
         }

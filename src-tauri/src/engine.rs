@@ -174,7 +174,7 @@ pub struct PiOsRecommendation {
     pub release_date: String,
     pub image_url: String,
     pub image_sha256: String,
-    pub download_sha256: String,
+    pub download_sha256: Option<String>,
     pub download_size_gb: f64,
     pub image_size_gb: f64,
     pub devices: Vec<String>,
@@ -1093,9 +1093,6 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
     let image_sha256 = image.extract_sha256.ok_or_else(|| {
         "Le catalogue officiel ne fournit pas l’empreinte de l’image.".to_string()
     })?;
-    let download_sha256 = image.image_download_sha256.ok_or_else(|| {
-        "Le catalogue officiel ne fournit pas l’empreinte du téléchargement.".to_string()
-    })?;
     let download_size = image.image_download_size.ok_or_else(|| {
         "Le catalogue officiel ne fournit pas la taille du téléchargement.".to_string()
     })?;
@@ -1110,7 +1107,9 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
         release_date,
         image_url,
         image_sha256,
-        download_sha256,
+        download_sha256: image
+            .image_download_sha256
+            .filter(|hash| valid_sha256(hash)),
         download_size_gb: (download_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
         image_size_gb: (image_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
         devices: image.devices.unwrap_or_default(),
@@ -2093,7 +2092,8 @@ fn latest_supported_pi_image(os_list: Vec<RaspberryPiOsEntry>) -> Option<Raspber
         .filter(|entry| {
             entry
                 .name
-                .eq_ignore_ascii_case("Raspberry Pi OS Lite (64-bit)")
+                .to_ascii_lowercase()
+                .starts_with("raspberry pi os lite (64-bit)")
                 && entry.init_format.as_deref() == Some("cloudinit-rpi")
                 && entry
                     .url
@@ -2107,10 +2107,6 @@ fn latest_supported_pi_image(os_list: Vec<RaspberryPiOsEntry>) -> Option<Raspber
                     })
                 })
                 && entry.extract_sha256.as_deref().is_some_and(valid_sha256)
-                && entry
-                    .image_download_sha256
-                    .as_deref()
-                    .is_some_and(valid_sha256)
                 && entry.extract_size.is_some_and(|size| size > 0)
                 && entry.image_download_size.is_some_and(|size| size > 0)
                 && entry
@@ -7038,7 +7034,7 @@ mod tests {
         parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
         restore_backup, safe_archive_path, safe_version, shell_single_quote,
         start_updated_local_copy_with_fallback, valid_bedrock_pack_filename, valid_plugin_filename,
-        validate_game_settings,
+        valid_sha256, validate_game_settings,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, io::Write, path::Path, process::Command};
@@ -7097,25 +7093,25 @@ mod tests {
     }
 
     #[test]
-    fn pi_os_selection_skips_newer_images_without_verified_download_metadata() {
+    fn pi_os_selection_accepts_release_named_entries_and_requires_image_verification() {
         let older_verified = pi_os_entry("2026-09-01");
-        let newer_unverified = RaspberryPiOsEntry {
+        let newer_release_without_optional_download_hash = RaspberryPiOsEntry {
+            name: "Raspberry Pi OS Lite (64-bit), 2026-10-01 release (Debian 13 Trixie)".into(),
             release_date: Some("2026-10-01".into()),
             image_download_sha256: None,
             ..pi_os_entry("2026-10-01")
         };
 
-        let selected = latest_supported_pi_image(vec![older_verified, newer_unverified]).unwrap();
-        assert_eq!(selected.release_date.as_deref(), Some("2026-09-01"));
-        assert!(
-            selected
-                .image_download_sha256
-                .as_deref()
-                .is_some_and(|checksum| checksum.len() == 64)
-        );
+        let selected = latest_supported_pi_image(vec![
+            older_verified,
+            newer_release_without_optional_download_hash,
+        ])
+        .unwrap();
+        assert_eq!(selected.release_date.as_deref(), Some("2026-10-01"));
+        assert!(selected.extract_sha256.as_deref().is_some_and(valid_sha256));
 
         let only_unverified = RaspberryPiOsEntry {
-            image_download_sha256: None,
+            extract_sha256: None,
             ..pi_os_entry("2026-10-01")
         };
         assert!(latest_supported_pi_image(vec![only_unverified]).is_none());

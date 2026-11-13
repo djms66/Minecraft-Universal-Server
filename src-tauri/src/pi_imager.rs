@@ -663,6 +663,10 @@ fn network_config(ssid: &str, password: &str, country: &str) -> String {
 
 fn user_data(public_key: &str, hostname: &str) -> String {
     let key = serde_json::to_string(public_key.trim()).unwrap_or_else(|_| "\"\"".into());
+    // Raspberry Pi OS cloud-init merges `user:` over the distro's default
+    // account. Keep its standard memberships while explicitly suppressing the
+    // image's passwordless sudo policy; this account has no password and only
+    // needs SSH access to run the server as an unprivileged user.
     let cleanup = serde_json::to_string(
         r#"for d in /boot/firmware /boot /var/lib/cloud/instance /var/lib/cloud/instances; do find "$d" -maxdepth 2 -type f \( -name user-data -o -name network-config -o -name user-data.txt -o -name network-config.txt \) -delete 2>/dev/null || true; done"#,
     )
@@ -670,7 +674,7 @@ fn user_data(public_key: &str, hostname: &str) -> String {
     format!(
         // Cloud-init parses this as YAML; these must be real line breaks, not
         // the two-character sequence `\\n` (which makes the whole file invalid).
-        "#cloud-config\nhostname: {hostname}\nmanage_etc_hosts: true\nusers:\n  - name: minecraft\n    gecos: Monde Ensemble\n    groups: [users]\n    shell: /bin/bash\n    lock_passwd: true\n    ssh_authorized_keys:\n      - {key}\nssh_pwauth: false\nenable_ssh: true\nruncmd:\n  - [systemctl, enable, ssh]\n  - [systemctl, start, ssh]\n  - [bash, -lc, {cleanup}]\n"
+        "#cloud-config\nhostname: \"{hostname}\"\nmanage_etc_hosts: true\nuser:\n  name: \"minecraft\"\n  gecos: \"Monde Ensemble\"\n  shell: /bin/bash\n  lock_passwd: true\n  ssh_authorized_keys:\n    - {key}\n  sudo: null\nssh_pwauth: false\nruncmd:\n  - [systemctl, enable, --now, ssh]\n  - [bash, -lc, {cleanup}]\n"
     )
 }
 
@@ -811,14 +815,19 @@ mod tests {
     };
 
     #[test]
-    fn cloud_init_user_data_is_multiline_and_enables_ssh_at_root() {
+    fn cloud_init_user_data_preserves_default_user_safely_and_enables_ssh() {
         let config = user_data(
             "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleKey monde-ensemble",
             "monde-ensemble-test",
         );
 
-        assert!(config.starts_with("#cloud-config\nhostname: monde-ensemble-test\n"));
-        assert!(config.contains("\nenable_ssh: true\nruncmd:\n"));
+        assert!(config.starts_with("#cloud-config\nhostname: \"monde-ensemble-test\"\n"));
+        assert!(config.contains("\nuser:\n  name: \"minecraft\"\n"));
+        assert!(config.contains("\n  lock_passwd: true\n"));
+        assert!(config.contains("\n  sudo: null\n"));
+        assert!(config.contains("\nruncmd:\n  - [systemctl, enable, --now, ssh]\n"));
+        assert!(!config.contains("enable_ssh:"));
+        assert!(!config.contains("users:"));
         assert!(!config.contains("\\n"));
         assert!(config.ends_with('\n'));
     }

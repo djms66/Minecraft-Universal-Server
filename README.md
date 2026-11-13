@@ -1,9 +1,10 @@
-# Monde Ensemble 0.18.41
+# Monde Ensemble 0.18.42
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
 ## Ce que fait cette version
 
+- démarre les nouveaux utilisateurs dans un guide « installer mon serveur » plutôt que dans un tableau de bord vide ; pour un Pi neuf, montre d’abord le matériel nécessaire et la préparation depuis la carte, puis présente uniquement l’adresse et les versions après installation ; les outils de réglage apparaissent ensuite dans le tableau de bord ;
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;

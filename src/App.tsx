@@ -156,15 +156,51 @@ type PiServerStatus = {
 };
 
 const nav: { id: Page; label: string; icon: string }[] = [
-  { id: "home", label: "Mon monde", icon: "▦" },
+  { id: "home", label: "Mon serveur", icon: "▦" },
   { id: "install", label: "Préparer le serveur", icon: "＋" },
   { id: "compat", label: "Compatibilité", icon: "◈" },
   { id: "backup", label: "Sauvegardes", icon: "▤" },
 ];
 
+function readSavedPiInstallation(): PiInstallation | null {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem("monde-ensemble.pi-installation") || "null",
+    ) as Partial<PiInstallation> | null;
+    return value &&
+      value.host &&
+      value.username &&
+      value.serverFolder &&
+      value.address
+      ? (value as PiInstallation)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readSavedLocalInstallation(): LocalInstallation | null {
+  try {
+    const value = JSON.parse(
+      localStorage.getItem("monde-ensemble.local-installation") || "null",
+    ) as Partial<LocalInstallation> | null;
+    return value?.serverPath ? (value as LocalInstallation) : null;
+  } catch {
+    return null;
+  }
+}
+
+function hasSavedServerRegistration() {
+  return Boolean(readSavedLocalInstallation() || readSavedPiInstallation());
+}
+
 function App() {
-  const [page, setPage] = useState<Page>("home");
+  const [page, setPage] = useState<Page>(() =>
+    hasSavedServerRegistration() ? "home" : "install",
+  );
   const [advanced, setAdvanced] = useState(false);
+  const [showExistingPiFlow, setShowExistingPiFlow] = useState(false);
+  const [justInstalled, setJustInstalled] = useState(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
   const [target, setTarget] = useState<"this" | "pi">("pi");
@@ -189,14 +225,7 @@ function App() {
   const [piOsLoading, setPiOsLoading] = useState(false);
   const [piOsError, setPiOsError] = useState("");
   const [piInstallation, setPiInstallation] = useState<PiInstallation | null>(
-    () => {
-      try {
-        const stored = localStorage.getItem("monde-ensemble.pi-installation");
-        return stored ? (JSON.parse(stored) as PiInstallation) : null;
-      } catch {
-        return null;
-      }
-    },
+    readSavedPiInstallation,
   );
   const [piServerStatus, setPiServerStatus] = useState<PiServerStatus | null>(
     null,
@@ -210,16 +239,11 @@ function App() {
   const [piPlayerError, setPiPlayerError] = useState("");
   const [piPlayerMessage, setPiPlayerMessage] = useState("");
   const [localInstallation, setLocalInstallation] =
-    useState<LocalInstallation | null>(() => {
-      try {
-        const stored = localStorage.getItem(
-          "monde-ensemble.local-installation",
-        );
-        return stored ? (JSON.parse(stored) as LocalInstallation) : null;
-      } catch {
-        return null;
-      }
-    });
+    useState<LocalInstallation | null>(readSavedLocalInstallation);
+  const hasManagedServer = Boolean(localInstallation || piInstallation);
+  const visibleNav = hasManagedServer
+    ? nav
+    : [{ id: "install" as const, label: "Installer", icon: "＋" }];
   const [localServerStatus, setLocalServerStatus] =
     useState<LocalServerStatus | null>(null);
   const [pluginInstallError, setPluginInstallError] = useState("");
@@ -363,6 +387,8 @@ function App() {
       } catch (error) {
         setLocalStatusError(String(error));
       }
+      setPage("home");
+      setJustInstalled(true);
     } catch (error) {
       setOperationError(String(error));
     } finally {
@@ -697,6 +723,8 @@ function App() {
             `Le serveur est installé, mais son tableau de bord n’a pas pu être actualisé : ${String(error)}`,
           );
         }
+        setPage("home");
+        setJustInstalled(true);
       }
     } catch (error) {
       setOperationError(String(error));
@@ -1366,16 +1394,17 @@ function App() {
   };
 
   const pageTitle: Record<Page, string> = {
-    home: "Ton monde, en sécurité",
-    install: "Préparer le serveur",
+    home: "Mon serveur",
+    install: hasManagedServer ? "Préparer un serveur" : "Installer mon serveur",
     compat: "Ce qui peut jouer ensemble",
     backup: "Sauvegarder et déplacer",
     advanced: "Réglages avancés",
   };
   const pageIntro: Record<Page, string> = {
-    home: "Prépare un serveur neuf, protège ton monde dans une archive et restaure-le sans écraser l’original.",
-    install:
-      "On vérifie d’abord la machine, puis on prépare une installation adaptée.",
+    home: "Vérifie l’état du serveur et retrouve l’adresse à saisir dans Minecraft.",
+    install: hasManagedServer
+      ? "Prépare un autre serveur dans un dossier séparé; celui déjà enregistré reste intact."
+      : "Je te guide de la première vérification jusqu’à l’adresse à saisir dans Minecraft.",
     compat:
       "Les règles qui rendront les mises à jour sûres, expliquées sans jargon.",
     backup:
@@ -1398,9 +1427,11 @@ function App() {
             <span>ENSEMBLE</span>
           </div>
         </div>
-        <div className="side-label">TON SERVEUR</div>
+        <div className="side-label">
+          {hasManagedServer ? "TON SERVEUR" : "PREMIÈRE INSTALLATION"}
+        </div>
         <nav>
-          {nav.map((item) => (
+          {visibleNav.map((item) => (
             <button
               key={item.id}
               onClick={() => setPage(item.id)}
@@ -1412,21 +1443,33 @@ function App() {
           ))}
         </nav>
         <div className="side-spacer" />
-        <button
-          className={advanced ? "nav-item active" : "nav-item"}
-          onClick={() => {
-            setAdvanced(!advanced);
-            setPage(!advanced ? "advanced" : "home");
-          }}
-        >
-          <b>⚙</b>
-          {advanced ? "Mode débutant" : "Mode avancé"}
-        </button>
+        {hasManagedServer && (
+          <button
+            className={advanced ? "nav-item active" : "nav-item"}
+            onClick={() => {
+              setAdvanced(!advanced);
+              setPage(!advanced ? "advanced" : "home");
+            }}
+          >
+            <b>⚙</b>
+            {advanced ? "Mode débutant" : "Mode avancé"}
+          </button>
+        )}
         <div className="server-mini">
-          <span className="status-dot" />
+          <span
+            className={hasManagedServer ? "status-dot" : "status-dot empty"}
+          />
           <div>
-            <strong>Installations protégées</strong>
-            <small>Le serveur actuel n’est jamais remplacé</small>
+            <strong>
+              {hasManagedServer
+                ? "Serveur enregistré"
+                : "Aucun serveur installé"}
+            </strong>
+            <small>
+              {hasManagedServer
+                ? "L’installation existante est conservée"
+                : "Le guide va partir de zéro"}
+            </small>
           </div>
         </div>
         <div className="side-version">
@@ -1440,7 +1483,11 @@ function App() {
             MONDE ENSEMBLE <span>/</span> {pageTitle[page].toUpperCase()}
           </div>
           <div className="top-status">
-            <span>AUCUN ÉCRASEMENT · COPIE NEUVE</span>
+            <span>
+              {hasManagedServer
+                ? "SERVEUR EXISTANT · DONNÉES PROTÉGÉES"
+                : "ÉTAPE 1 · AUCUN SERVEUR INSTALLÉ"}
+            </span>
             <div className="beginner-pill">
               <span>✦</span> MODE {advanced ? "AVANCÉ" : "DÉBUTANT"}
             </div>
@@ -1513,6 +1560,8 @@ function App() {
               piUpdateError={piUpdateError}
               checkingPiUpdate={checkingPiUpdate}
               onInstall={() => setPage("install")}
+              justInstalled={justInstalled}
+              onContinueFromInstall={() => setJustInstalled(false)}
               onCompat={() => setPage("compat")}
               onBackup={() => setPage("backup")}
             />
@@ -1520,6 +1569,16 @@ function App() {
           {page === "install" && (
             <section className="install-layout">
               <div className="wizard-main">
+                {!hasManagedServer && (
+                  <div className="first-run-note" role="status">
+                    <strong>On commence de zéro.</strong>
+                    <span>
+                      Choisis où le serveur vivra. Je te guiderai jusqu’à son
+                      démarrage, puis je te donnerai l’adresse à entrer dans
+                      Minecraft.
+                    </span>
+                  </div>
+                )}
                 <div className="step-ribbon">
                   <span className="step-num">1</span>
                   <div>
@@ -1577,155 +1636,152 @@ function App() {
                         NOUVEAU PI · PARCOURS DÉBUTANT
                       </div>
                       <p>
-                        Ton Pi peut être neuf, allumé et sans stockage : il n’a
-                        encore rien à démarrer. Branche sa carte vide au Mac qui
-                        exécute cette application. Elle y écrit le système, le
-                        réseau et l’accès sécurisé ; aucun serveur ne s’installe
-                        sur le Mac. Tu n’as pas à préparer le Pi ni à saisir son
-                        IP ou à configurer SSH.
+                        Pi neuf ou sans système ? Branche sa carte SD ou son SSD
+                        vide à ce Mac. L’application prépare le système et le
+                        Wi-Fi, puis installe le serveur sur le Pi. Tu n’as pas à
+                        connaître son adresse ni à utiliser SSH.
                       </p>
                       <button
-                        className="button secondary"
+                        className="text-button pi-existing-toggle"
                         type="button"
-                        onClick={() =>
-                          document
-                            .getElementById("pi-fresh-title")
-                            ?.scrollIntoView({
-                              behavior: "smooth",
-                              block: "start",
-                            })
-                        }
+                        onClick={() => setShowExistingPiFlow((show) => !show)}
                       >
-                        Préparer un Pi neuf depuis cette application
+                        {showExistingPiFlow
+                          ? "Masquer le parcours d’un Pi déjà configuré"
+                          : "Mon Pi a déjà son système et le Wi-Fi"}
                       </button>
                     </div>
-                    <div className="pi-separator">
-                      <span>PI DÉJÀ CONFIGURÉ</span>
-                    </div>
-                    <div className="eyebrow">INSTALLATION DISTANTE</div>
-                    <h3>Installer le serveur sur le Pi</h3>
-                    <p>
-                      L’application va trouver le Pi sur le réseau, vérifier son
-                      modèle, sa mémoire et l’espace disponible, puis installer
-                      et démarrer le serveur. Elle crée un nouveau dossier sans
-                      supprimer les fichiers déjà présents.
-                    </p>
-                    <p className="pi-setup-help">
-                      Pour éviter de te faire saisir une adresse IP, commence
-                      par « Trouver mon Pi ». Il faut seulement connaître le nom
-                      du compte créé sur le Pi. Cette version exige que son
-                      accès sécurisé soit déjà activé; elle ne te demandera ni
-                      ne conservera de mot de passe.
-                    </p>
-                    <div className="form-row">
-                      <label>
-                        Compte Raspberry Pi
-                        <input
-                          value={piUser}
-                          onChange={(e) => {
-                            setPiUser(e.target.value);
-                            setPiVerified(false);
-                          }}
-                          placeholder="ex. daniel"
-                          autoComplete="off"
-                        />
-                        <small>
-                          Le compte choisi lors de la première configuration du
-                          Raspberry Pi.
-                        </small>
-                      </label>
-                      <label>
-                        Adresse (si détection impossible)
-                        <input
-                          value={piHost}
-                          onChange={(e) => {
-                            setPiHost(e.target.value);
-                            setPiVerified(false);
-                          }}
-                          placeholder="Détection automatique"
-                          autoComplete="off"
-                        />
-                      </label>
-                    </div>
-                    {piCandidates.length > 1 && (
-                      <label className="pi-candidate-choice">
-                        Raspberry Pi trouvé
-                        <select
-                          value={piHost}
-                          onChange={(event) => {
-                            const selected = piCandidates.find(
-                              (pi) => pi.host === event.target.value,
-                            );
-                            setPiHost(selected?.host ?? "");
-                            setPiVerified(Boolean(selected));
-                            setConnection(
-                              selected
-                                ? `${selected.model} · ${selected.address} · accès vérifié`
-                                : "",
-                            );
-                          }}
-                        >
-                          <option value="">Choisir le bon appareil…</option>
-                          {piCandidates.map((pi) => (
-                            <option
-                              key={`${pi.host}-${pi.address}`}
-                              value={pi.host}
+                    {showExistingPiFlow && (
+                      <>
+                        <div className="pi-separator">
+                          <span>PI DÉJÀ CONFIGURÉ</span>
+                        </div>
+                        <div className="eyebrow">INSTALLATION DISTANTE</div>
+                        <h3>Installer le serveur sur le Pi</h3>
+                        <p>
+                          L’application va trouver le Pi sur le réseau, vérifier
+                          son modèle, sa mémoire et l’espace disponible, puis
+                          installer et démarrer le serveur. Elle crée un nouveau
+                          dossier sans supprimer les fichiers déjà présents.
+                        </p>
+                        <p className="pi-setup-help">
+                          Pour éviter de te faire saisir une adresse IP,
+                          commence par « Trouver mon Pi ». Il faut seulement
+                          connaître le nom du compte créé sur le Pi. Cette
+                          version exige que son accès sécurisé soit déjà activé;
+                          elle ne te demandera ni ne conservera de mot de passe.
+                        </p>
+                        <div className="form-row">
+                          <label>
+                            Compte Raspberry Pi
+                            <input
+                              value={piUser}
+                              onChange={(e) => {
+                                setPiUser(e.target.value);
+                                setPiVerified(false);
+                              }}
+                              placeholder="ex. daniel"
+                              autoComplete="off"
+                            />
+                            <small>
+                              Le compte choisi lors de la première configuration
+                              du Raspberry Pi.
+                            </small>
+                          </label>
+                          <label>
+                            Adresse (si détection impossible)
+                            <input
+                              value={piHost}
+                              onChange={(e) => {
+                                setPiHost(e.target.value);
+                                setPiVerified(false);
+                              }}
+                              placeholder="Détection automatique"
+                              autoComplete="off"
+                            />
+                          </label>
+                        </div>
+                        {piCandidates.length > 1 && (
+                          <label className="pi-candidate-choice">
+                            Raspberry Pi trouvé
+                            <select
+                              value={piHost}
+                              onChange={(event) => {
+                                const selected = piCandidates.find(
+                                  (pi) => pi.host === event.target.value,
+                                );
+                                setPiHost(selected?.host ?? "");
+                                setPiVerified(Boolean(selected));
+                                setConnection(
+                                  selected
+                                    ? `${selected.model} · ${selected.address} · accès vérifié`
+                                    : "",
+                                );
+                              }}
                             >
-                              {pi.model} · {pi.address}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    )}
-                    <div className="pi-actions">
-                      <button
-                        className="button secondary"
-                        onClick={findPi}
-                        disabled={busy || piDiscovering || !piUser}
-                      >
-                        {piDiscovering ? "Recherche…" : "Trouver mon Pi"}
-                      </button>
-                      <button
-                        className="button secondary"
-                        onClick={testPi}
-                        disabled={busy || !piHost || !piUser}
-                      >
-                        Vérifier cette adresse
-                      </button>
-                    </div>
-                    {connection && (
-                      <div className="connection-result">{connection}</div>
-                    )}
-                    <label className="eula-choice">
-                      <input
-                        type="checkbox"
-                        checked={piEulaAccepted}
-                        onChange={(event) =>
-                          setPiEulaAccepted(event.target.checked)
-                        }
-                      />
-                      <span>
-                        J’accepte le contrat de licence Minecraft pour ce
-                        serveur.
-                      </span>
-                    </label>
-                    <button
-                      className="button primary action-button"
-                      onClick={installPi}
-                      disabled={busy || !piVerified || !piEulaAccepted}
-                    >
-                      {busy
-                        ? "Installation du serveur sur le Pi…"
-                        : "Installer et démarrer le serveur"}
-                    </button>
-                    {(operationProgress ||
-                      operationResult ||
-                      operationError) && (
-                      <OperationStatus
-                        progress={operationProgress}
-                        result={operationResult}
-                        error={operationError}
-                      />
+                              <option value="">Choisir le bon appareil…</option>
+                              {piCandidates.map((pi) => (
+                                <option
+                                  key={`${pi.host}-${pi.address}`}
+                                  value={pi.host}
+                                >
+                                  {pi.model} · {pi.address}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        )}
+                        <div className="pi-actions">
+                          <button
+                            className="button secondary"
+                            onClick={findPi}
+                            disabled={busy || piDiscovering || !piUser}
+                          >
+                            {piDiscovering ? "Recherche…" : "Trouver mon Pi"}
+                          </button>
+                          <button
+                            className="button secondary"
+                            onClick={testPi}
+                            disabled={busy || !piHost || !piUser}
+                          >
+                            Vérifier cette adresse
+                          </button>
+                        </div>
+                        {connection && (
+                          <div className="connection-result">{connection}</div>
+                        )}
+                        <label className="eula-choice">
+                          <input
+                            type="checkbox"
+                            checked={piEulaAccepted}
+                            onChange={(event) =>
+                              setPiEulaAccepted(event.target.checked)
+                            }
+                          />
+                          <span>
+                            J’accepte le contrat de licence Minecraft pour ce
+                            serveur.
+                          </span>
+                        </label>
+                        <button
+                          className="button primary action-button"
+                          onClick={installPi}
+                          disabled={busy || !piVerified || !piEulaAccepted}
+                        >
+                          {busy
+                            ? "Installation du serveur sur le Pi…"
+                            : "Installer et démarrer le serveur"}
+                        </button>
+                        {(operationProgress ||
+                          operationResult ||
+                          operationError) && (
+                          <OperationStatus
+                            progress={operationProgress}
+                            result={operationResult}
+                            error={operationError}
+                          />
+                        )}
+                      </>
                     )}
                     <div className="pi-os-recommendation" aria-live="polite">
                       <div className="eyebrow">
@@ -1758,9 +1814,9 @@ function App() {
                           </span>
                           <small>
                             Le Pi 3B+ est pris en charge avec un profil léger
-                            automatique : mémoire Java réduite et portée de
-                            jeu limitée. Pour plus de joueurs ou d’extensions,
-                            un Pi 4 ou 5 avec 4 Go ou plus est recommandé.
+                            automatique : mémoire Java réduite et portée de jeu
+                            limitée. Pour plus de joueurs ou d’extensions, un Pi
+                            4 ou 5 avec 4 Go ou plus est recommandé.
                             L’application choisit le profil après avoir vérifié
                             le Pi.
                           </small>
@@ -1936,12 +1992,12 @@ function App() {
                         piBootTargets.length === 0 && (
                           <p className="pi-help">
                             Aucune carte SD ni aucun disque amovible n’a été
-                            détecté. Une carte dans le lecteur SD intégré au
-                            Mac peut apparaître comme « interne » dans Utilitaire
-                            de disque : c’est normal, l’application la reconnaît
-                            aussi. Vérifie qu’elle est bien insérée, puis relance
-                            la détection. Son format Mac ne pose pas de problème.
-                            Rien n’a été écrit.
+                            détecté. Une carte dans le lecteur SD intégré au Mac
+                            peut apparaître comme « interne » dans Utilitaire de
+                            disque : c’est normal, l’application la reconnaît
+                            aussi. Vérifie qu’elle est bien insérée, puis
+                            relance la détection. Son format Mac ne pose pas de
+                            problème. Rien n’a été écrit.
                           </p>
                         )}
                       {piBootTargets.length > 0 && (
@@ -2017,24 +2073,26 @@ function App() {
                         </>
                       )}
                       {piOsRecommendation && (
-                        <p className="pi-storage-guidance">
-                          Il faut environ{" "}
-                          {Math.ceil(
-                            piOsRecommendation.image_size_gb +
-                              piOsRecommendation.initial_server_storage_gb,
-                          )}{" "}
-                          Go pour le système et le serveur. Pour commencer
-                          simplement, prends une carte microSD de 32 Go. Tu
-                          pourras déplacer ton monde vers un autre support plus
-                          tard avec une sauvegarde. Un SSD USB peut démarrer un
-                          Pi 4 ou 5 si son boîtier est assez alimenté et si le
-                          Pi autorise le démarrage USB. Certains anciens Pi 4
-                          nécessitent une mise à jour de leur chargeur de
-                          démarrage. L’application vérifie la capacité et
-                          l’écriture; seul le premier démarrage confirme que le
-                          Pi accepte ce SSD. Si tu veux éviter cette
-                          incertitude, commence en microSD.
-                        </p>
+                        <>
+                          <p className="pi-storage-guidance">
+                            Pour commencer, utilise une microSD vide d’au moins
+                            32 Go. L’application vérifie l’espace avant toute
+                            écriture.
+                          </p>
+                          <details className="pi-advanced-storage">
+                            <summary>
+                              Je veux démarrer depuis un SSD USB
+                            </summary>
+                            <p>
+                              Le démarrage USB dépend du modèle du Pi, de son
+                              micrologiciel et de l’alimentation du boîtier. La
+                              détection vérifie l’espace et l’écriture; seul le
+                              premier démarrage confirme que le Pi accepte ce
+                              SSD. Pour une première installation, la microSD
+                              est le choix le plus simple.
+                            </p>
+                          </details>
+                        </>
                       )}
                       {(operationProgress || operationError) && (
                         <OperationStatus
@@ -2074,46 +2132,83 @@ function App() {
                     </section>
                   </div>
                 )}
-                <div className="notice safe">
-                  <span>✓</span>
+                <div
+                  className={hasManagedServer ? "notice safe" : "notice amber"}
+                >
+                  <span>{hasManagedServer ? "✓" : "!"}</span>
                   <p>
-                    <strong>Le serveur actuel reste intact.</strong>
-                    <br />
-                    Une installation neuve est créée dans un dossier distinct;
-                    la restauration ne remplace pas l’original.
+                    {hasManagedServer ? (
+                      <>
+                        <strong>Le serveur actuel reste intact.</strong>
+                        <br />
+                        Une installation neuve est créée à côté de l’existante.
+                      </>
+                    ) : (
+                      <>
+                        <strong>La carte choisie sera effacée.</strong>
+                        <br />
+                        Rien ne sera écrit avant ta confirmation du support
+                        détecté.
+                      </>
+                    )}
                   </p>
                 </div>
               </div>
               <aside className="wizard-aside">
-                <div className="aside-cap">COMMENT ÇA VA SE PASSER</div>
-                <ol>
-                  <li className="current">
-                    <i>1</i>
-                    <span>
-                      <b>Vérifier la machine</b>
-                      <small>Modèle, mémoire et disque</small>
-                    </span>
-                  </li>
-                  <li>
-                    <i>2</i>
-                    <span>
-                      <b>Choisir le profil compatible</b>
-                      <small>Java, Bedrock et extensions</small>
-                    </span>
-                  </li>
-                  <li>
-                    <i>3</i>
-                    <span>
-                      <b>Préparer le serveur</b>
-                      <small>Une copie sûre avant l’activation</small>
-                    </span>
-                  </li>
-                </ol>
-                <div className="aside-bottom">
-                  Tu peux arrêter à chaque étape.
-                  <br />
-                  Ton monde existant reste intact.
-                </div>
+                {!hasManagedServer && target === "pi" ? (
+                  <>
+                    <div className="aside-cap">À PRÉPARER</div>
+                    <ul className="beginner-needs">
+                      <li>
+                        Raspberry Pi 3B+ ou plus récent, avec son alimentation
+                      </li>
+                      <li>
+                        Carte microSD vide de 32 Go ou plus, branchée à ce Mac
+                      </li>
+                      <li>Wi-Fi et mot de passe, ou câble réseau</li>
+                    </ul>
+                    <div className="aside-bottom">
+                      Je vérifie chaque étape. La carte ne sera effacée qu’après
+                      confirmation.
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="aside-cap">COMMENT ÇA VA SE PASSER</div>
+                    <ol>
+                      <li className="current">
+                        <i>1</i>
+                        <span>
+                          <b>Vérifier la machine</b>
+                          <small>Modèle, mémoire et disque</small>
+                        </span>
+                      </li>
+                      <li>
+                        <i>2</i>
+                        <span>
+                          <b>Choisir le profil compatible</b>
+                          <small>Java, Bedrock et extensions</small>
+                        </span>
+                      </li>
+                      <li>
+                        <i>3</i>
+                        <span>
+                          <b>Préparer le serveur</b>
+                          <small>Une copie sûre avant l’activation</small>
+                        </span>
+                      </li>
+                    </ol>
+                    <div className="aside-bottom">
+                      Tu peux arrêter à chaque étape.
+                      {hasManagedServer && (
+                        <>
+                          <br />
+                          Ton monde existant reste intact.
+                        </>
+                      )}
+                    </div>
+                  </>
+                )}
               </aside>
             </section>
           )}
@@ -2512,6 +2607,8 @@ function Spec({
 }
 
 function Home({
+  justInstalled,
+  onContinueFromInstall,
   system,
   systemError,
   localInstallation,
@@ -2561,6 +2658,8 @@ function Home({
   onCompat,
   onBackup,
 }: {
+  justInstalled: boolean;
+  onContinueFromInstall: () => void;
   system: SystemInfo | null;
   systemError: string;
   localInstallation: LocalInstallation | null;
@@ -2620,6 +2719,99 @@ function Home({
       setCopiedAddress("Copie indisponible. Recopie l’adresse affichée.");
     }
   };
+
+  if (justInstalled) {
+    const isPi = Boolean(piInstallation);
+    const ready = isPi ? piServerStatus?.ready : localServerStatus?.ready;
+    const address = isPi
+      ? piServerStatus?.address || piInstallation?.address || ""
+      : localServerStatus?.address || "";
+    const javaPort = isPi
+      ? piServerStatus?.java_port || 25565
+      : localServerStatus?.java_port || 25565;
+    const bedrockPort = isPi
+      ? piServerStatus?.bedrock_port || 19132
+      : localServerStatus?.bedrock_port || 19132;
+    const javaVersion = isPi
+      ? piServerStatus?.minecraft_java
+      : localServerStatus?.minecraft_java;
+    const bedrockVersion = isPi
+      ? piServerStatus?.minecraft_bedrock
+      : localServerStatus?.minecraft_bedrock;
+    const statusError = isPi ? piStatusError : localStatusError;
+
+    return (
+      <section
+        className="install-finish"
+        aria-labelledby="install-finish-title"
+      >
+        <div className="install-finish-mark" aria-hidden="true">
+          {ready ? "✓" : "…"}
+        </div>
+        <div className="eyebrow">
+          INSTALLATION {ready ? "VÉRIFIÉE" : "TERMINÉE"}
+        </div>
+        <h2 id="install-finish-title">
+          {ready ? "Ton serveur est prêt." : "Ton serveur est installé."}
+        </h2>
+        <p>
+          {ready
+            ? "Utilise l’adresse ci-dessous dans Minecraft. Garde cette fenêtre ouverte pendant le premier essai."
+            : statusError
+              ? "L’installation est terminée, mais le contrôle du serveur a échoué. Le tableau de bord indiquera ce qu’il faut vérifier."
+              : "Le serveur termine son démarrage. Le tableau de bord permet de vérifier quand il répond."}
+        </p>
+        {address ? (
+          <div className="install-finish-addresses">
+            <div>
+              <span>PC ET MAC · MINECRAFT JAVA</span>
+              <strong>
+                {address}:{javaPort}
+              </strong>
+              <button
+                className="address-copy"
+                type="button"
+                onClick={() =>
+                  copyAddress(`${address}:${javaPort}`, "Adresse Java")
+                }
+              >
+                Copier l’adresse
+              </button>
+            </div>
+            <div>
+              <span>MOBILE, CONSOLE ET WINDOWS · BEDROCK</span>
+              <strong>{address}</strong>
+              <small>Port : {bedrockPort}</small>
+              <button
+                className="address-copy"
+                type="button"
+                onClick={() => copyAddress(address, "Adresse Bedrock")}
+              >
+                Copier l’adresse
+              </button>
+            </div>
+          </div>
+        ) : (
+          <p className="install-finish-missing">
+            L’adresse est en cours de vérification. Le tableau de bord affichera
+            l’état exact.
+          </p>
+        )}
+        <p className="install-finish-versions">
+          Installé : Java {javaVersion || "à vérifier"} · Bedrock compatible{" "}
+          {bedrockVersion || "à vérifier"}
+        </p>
+        {copiedAddress && <p role="status">{copiedAddress}</p>}
+        <button
+          className="button primary"
+          type="button"
+          onClick={onContinueFromInstall}
+        >
+          Terminé · ouvrir le tableau de bord
+        </button>
+      </section>
+    );
+  }
 
   return (
     <>

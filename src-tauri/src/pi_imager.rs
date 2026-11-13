@@ -47,6 +47,29 @@ struct MountedImager {
     mountpoint: Option<PathBuf>,
 }
 
+/// Confirms the pinned macOS Imager can launch before the user is asked to
+/// approve erasing a removable drive. Dropping the handle also releases any
+/// temporary mount created for this check.
+pub fn check_macos_writer(app_data: &Path) -> Result<String, String> {
+    if std::env::consts::OS != "macos" {
+        return Err("La vérification préalable est disponible sur macOS uniquement.".into());
+    }
+    let tool = ensure_macos_imager(app_data, &|_, _| {})?;
+    let output = Command::new(&tool.executable)
+        .args(["--cli", "--version"])
+        .output()
+        .map_err(|_| "Raspberry Pi Imager est introuvable ou ne peut pas démarrer. Aucun support n’a été modifié.".to_string())?;
+    let version = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if !output.status.success() || !version.contains(IMAGER_VERSION) {
+        return Err("La version vérifiée de Raspberry Pi Imager n’a pas démarré correctement. Aucun support n’a été modifié.".into());
+    }
+    Ok(format!("Raspberry Pi Imager {IMAGER_VERSION} est prêt."))
+}
+
 struct SensitiveConfigFiles(PathBuf, PathBuf);
 
 impl Drop for SensitiveConfigFiles {
@@ -234,6 +257,13 @@ fn ensure_macos_imager(
 ) -> Result<MountedImager, String> {
     let directory = app_data.join("tools");
     fs::create_dir_all(&directory).map_err(io_error)?;
+    if let Some(executable) = find_existing_macos_imager(app_data) {
+        progress("Raspberry Pi Imager est déjà prêt.", 8);
+        return Ok(MountedImager {
+            executable,
+            mountpoint: None,
+        });
+    }
     let dmg = verified_asset(
         &directory.join("rpi-imager-v2.0.12.dmg"),
         IMAGER_MAC_URL,
@@ -246,13 +276,35 @@ fn ensure_macos_imager(
         .args(["attach", "-quiet", "-readonly", "-nobrowse", "-mountpoint"])
         .arg(&mountpoint)
         .arg(&dmg)
-        .status()
+        .output()
         .map_err(|_| "macOS n’a pas pu ouvrir l’outil officiel Raspberry Pi Imager.".to_string())?;
-    if !attached.success() {
-        let _ = fs::remove_dir(&mountpoint);
-        return Err("macOS n’a pas pu ouvrir l’outil officiel Raspberry Pi Imager. Aucun support n’a été modifié.".into());
-    }
     let executable = mountpoint.join("Raspberry Pi Imager.app/Contents/MacOS/rpi-imager");
+    if !attached.status.success() {
+        if executable.is_file() && is_expected_imager(&executable) {
+            return Ok(MountedImager {
+                executable,
+                mountpoint: Some(mountpoint),
+            });
+        }
+        let _ = fs::remove_dir(&mountpoint);
+        if is_resource_busy(&attached.stderr) {
+            if let Some(executable) = find_existing_macos_imager(app_data) {
+                return Ok(MountedImager {
+                    executable,
+                    mountpoint: None,
+                });
+            }
+            return Err("Raspberry Pi Imager est déjà ouvert depuis une image disque, mais son emplacement n’a pas pu être retrouvé. Ferme cette image puis réessaie. Aucun support n’a été modifié.".into());
+        }
+        let details = String::from_utf8_lossy(&attached.stderr).trim().to_string();
+        return Err(if details.is_empty() {
+            "macOS n’a pas pu ouvrir l’outil officiel Raspberry Pi Imager. Aucun support n’a été modifié.".into()
+        } else {
+            format!(
+                "macOS n’a pas pu ouvrir Raspberry Pi Imager : {details}. Aucun support n’a été modifié."
+            )
+        });
+    }
     if !executable.is_file() {
         let _ = Command::new("hdiutil")
             .args(["detach", "-quiet"])
@@ -267,6 +319,78 @@ fn ensure_macos_imager(
         executable,
         mountpoint: Some(mountpoint),
     })
+}
+
+fn find_existing_macos_imager(app_data: &Path) -> Option<PathBuf> {
+    const APP_BUNDLE: &str = "Raspberry Pi Imager.app";
+
+    let mut search_roots = vec![PathBuf::from("/Applications"), PathBuf::from("/Volumes")];
+    if let Some(home) = std::env::var_os("HOME") {
+        search_roots.push(PathBuf::from(home).join("Applications"));
+    }
+    search_roots.push(app_data.join("tools"));
+
+    for root in search_roots {
+        let Ok(entries) = fs::read_dir(root) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let app = if path.file_name().is_some_and(|name| name == APP_BUNDLE) {
+                path
+            } else {
+                path.join(APP_BUNDLE)
+            };
+            let executable = app.join("Contents/MacOS/rpi-imager");
+            if executable.is_file() && is_expected_imager(&executable) {
+                return Some(executable);
+            }
+        }
+    }
+    None
+}
+
+fn is_expected_imager(executable: &Path) -> bool {
+    let Some(app_bundle) = executable
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+    else {
+        return false;
+    };
+    let signature_valid = Command::new("codesign")
+        .args(["--verify", "--deep", "--strict"])
+        .arg(app_bundle)
+        .status()
+        .is_ok_and(|status| status.success());
+    if !signature_valid {
+        return false;
+    }
+    let signer = Command::new("codesign")
+        .args(["-dv", "--verbose=4"])
+        .arg(app_bundle)
+        .output();
+    let signer_matches = signer.is_ok_and(|output| {
+        let details = String::from_utf8_lossy(&output.stderr);
+        details.contains("Identifier=com.raspberrypi.rpi-imager")
+            && details.contains("TeamIdentifier=8RDZTRXE62")
+    });
+    if !signer_matches {
+        return false;
+    }
+    Command::new(executable)
+        .args(["--cli", "--version"])
+        .output()
+        .is_ok_and(|output| {
+            output.status.success()
+                && (String::from_utf8_lossy(&output.stdout).contains(IMAGER_VERSION)
+                    || String::from_utf8_lossy(&output.stderr).contains(IMAGER_VERSION))
+        })
+}
+
+fn is_resource_busy(stderr: &[u8]) -> bool {
+    let message = String::from_utf8_lossy(stderr).to_lowercase();
+    message.contains("resource busy") || message.contains("ressource occupée")
 }
 
 fn ensure_windows_imager(

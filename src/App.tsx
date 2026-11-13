@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import "./App.css";
@@ -201,6 +201,7 @@ function App() {
   const [advanced, setAdvanced] = useState(false);
   const [showExistingPiFlow, setShowExistingPiFlow] = useState(false);
   const [justInstalled, setJustInstalled] = useState(false);
+  const piCardWriteStarted = useRef(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
   const [target, setTarget] = useState<"this" | "pi">("pi");
@@ -210,6 +211,8 @@ function App() {
   const [piDiscovering, setPiDiscovering] = useState(false);
   const [piCandidates, setPiCandidates] = useState<DiscoveredPi[]>([]);
   const [piBootTargets, setPiBootTargets] = useState<PiBootTarget[]>([]);
+  const [pendingPiTarget, setPendingPiTarget] =
+    useState<PiBootTarget | null>(null);
   const [piBootScanState, setPiBootScanState] = useState<
     "idle" | "scanning" | "done"
   >("idle");
@@ -640,7 +643,7 @@ function App() {
   };
 
   const flashPiOs = async (device: PiBootTarget) => {
-    if (!piOsRecommendation) return;
+    if (busy || !piOsRecommendation) return;
     const minimumGb = Math.ceil(
       piOsRecommendation.image_size_gb +
         piOsRecommendation.initial_server_storage_gb,
@@ -651,16 +654,33 @@ function App() {
       );
       return;
     }
-    const confirmed = window.confirm(
-      "Vérifie le support : " +
-        device.name +
-        ", " +
-        device.size +
-        ", identifiant " +
-        device.id +
-        ". Il sera entièrement effacé pour préparer le Raspberry Pi. Débranche les autres cartes et disques externes avant de continuer. Confirmer l’effacement ?",
-    );
-    if (!confirmed) return;
+    setOperationError("");
+    if (system?.os === "macos") {
+      setBusy(true);
+      setOperationProgress({
+        step: "Vérification de l’outil d’écriture avant l’effacement…",
+        percent: 5,
+      });
+      try {
+        await invoke<string>("check_macos_pi_writer");
+      } catch (error) {
+        setOperationError(String(error));
+        setOperationProgress(null);
+        setBusy(false);
+        return;
+      }
+      setBusy(false);
+      setOperationProgress(null);
+    }
+    setPendingPiTarget(device);
+  };
+
+  const confirmFlashPiOs = async () => {
+    const device = pendingPiTarget;
+    if (busy || piCardWriteStarted.current || !device || !piOsRecommendation)
+      return;
+    piCardWriteStarted.current = true;
+    setPendingPiTarget(null);
     resetOperation();
     setPiFlashResult(null);
     setBusy(true);
@@ -684,6 +704,7 @@ function App() {
       setPiWifiPassword("");
     } finally {
       setBusy(false);
+      piCardWriteStarted.current = false;
     }
   };
 
@@ -2016,8 +2037,7 @@ function App() {
                                 <div>
                                   <strong>{device.name}</strong>
                                   <span>
-                                    {device.size} · {device.connection} ·{" "}
-                                    {device.id}
+                                    {device.size} · {device.connection}
                                   </span>
                                 </div>
                                 {piBootTargets.length === 1 &&
@@ -2277,6 +2297,57 @@ function App() {
               onRefresh={() => refreshPiStatus(true)}
               onCheckUpdates={checkPiUpdate}
             />
+          )}
+          {pendingPiTarget && (
+            <div className="erase-confirm-backdrop">
+              <section
+                className="erase-confirm"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="erase-confirm-title"
+                aria-describedby="erase-confirm-warning"
+              >
+                <div className="eyebrow">CONFIRMATION REQUISE</div>
+                <h2 id="erase-confirm-title">Effacer cette carte SD ?</h2>
+                <p>Vérifie que le support détecté est bien celui du Raspberry Pi.</p>
+                <dl className="erase-confirm-device">
+                  <div>
+                    <dt>Carte détectée</dt>
+                    <dd>{pendingPiTarget.name}</dd>
+                  </div>
+                  <div>
+                    <dt>Capacité</dt>
+                    <dd>{pendingPiTarget.size}</dd>
+                  </div>
+                  <div>
+                    <dt>Branchée sur</dt>
+                    <dd>{pendingPiTarget.connection}</dd>
+                  </div>
+                </dl>
+                <p className="erase-confirm-warning" id="erase-confirm-warning">
+                  Tout le contenu de cette carte sera effacé. Les autres disques
+                  ne seront pas touchés.
+                </p>
+                <div className="erase-confirm-actions">
+                  <button
+                    className="button secondary"
+                    type="button"
+                    autoFocus
+                    onClick={() => setPendingPiTarget(null)}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    className="button destructive"
+                    type="button"
+                    onClick={confirmFlashPiOs}
+                    disabled={busy}
+                  >
+                    {busy ? "Préparation en cours…" : "Effacer la carte et continuer"}
+                  </button>
+                </div>
+              </section>
+            </div>
           )}
         </section>
         <footer className="footer">

@@ -373,6 +373,13 @@ button {
   color: #fff;
   margin-top: 14px;
 }
+.button.destructive {
+  background: #9e3c31;
+  color: #fff;
+}
+.button.destructive:hover {
+  background: #842f27;
+}
 .button:disabled {
   opacity: 0.5;
   cursor: wait;
@@ -1511,6 +1518,95 @@ button {
   padding-top: 9px;
   border-top: 1px solid #e5e9e1;
   color: #71806f;
+}
+.erase-confirm-backdrop {
+  position: fixed;
+  z-index: 20;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: #17231db8;
+}
+.erase-confirm {
+  width: min(100%, 520px);
+  padding: 28px;
+  border: 1px solid #dfe4d9;
+  border-top: 4px solid #a64738;
+  border-radius: 6px;
+  background: #fff;
+  box-shadow: 0 24px 80px #101b1652;
+}
+.erase-confirm h2 {
+  margin: 6px 0 8px;
+  color: #252f28;
+  font-size: 23px;
+}
+.erase-confirm > p {
+  color: #687267;
+  line-height: 1.55;
+}
+.erase-confirm-device {
+  display: grid;
+  gap: 10px;
+  margin: 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--line);
+  background: #f8f9f6;
+}
+.erase-confirm-device div {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+}
+.erase-confirm-device dt {
+  color: #79837b;
+}
+.erase-confirm-device dd {
+  color: #26372a;
+  font-weight: 700;
+  text-align: right;
+}
+.erase-confirm .erase-confirm-warning {
+  padding: 12px 14px;
+  border-left: 3px solid #b04c3d;
+  background: #fbf1ef;
+  color: #783a31;
+  font-weight: 600;
+}
+.erase-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 20px;
+}
+.erase-confirm-actions .button.secondary {
+  margin-top: 0;
+  background: #ebefe8;
+  color: #2d3c31;
+}
+.erase-confirm-actions .button.destructive {
+  margin-top: 0;
+}
+.erase-confirm button:focus-visible {
+  outline: 3px solid #83aaee;
+  outline-offset: 2px;
+}
+@media (max-width: 520px) {
+  .erase-confirm {
+    padding: 22px 18px;
+  }
+  .erase-confirm-device div {
+    display: grid;
+    gap: 2px;
+  }
+  .erase-confirm-device dd {
+    text-align: left;
+  }
+  .erase-confirm-actions > button {
+    width: 100%;
+  }
 }
 .pi-advanced-storage {
   margin-top: 8px;

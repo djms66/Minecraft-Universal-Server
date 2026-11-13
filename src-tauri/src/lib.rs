@@ -126,6 +126,17 @@ fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
 }
 
 #[tauri::command]
+async fn check_macos_pi_writer(app: tauri::AppHandle) -> Result<String, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Le dossier de l’application est inaccessible : {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || pi_imager::check_macos_writer(&app_data))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn prepare_pi_sd(
     app: tauri::AppHandle,
     target_id: String,
@@ -290,11 +301,7 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
             .filter(|bytes| *bytes > 0)
             .or_else(|| parse_disk_size_bytes(&disk_size))
             .unwrap_or_default();
-        let size = if disk_size.is_empty() {
-            "Taille inconnue".into()
-        } else {
-            disk_size
-        };
+        let size = format_bytes(size_bytes);
         let connection = if card_reader_info.is_some() {
             "Lecteur SD intégré".into()
         } else {
@@ -452,7 +459,7 @@ fn format_bytes(bytes: u64) -> String {
     if bytes == 0 {
         return "Taille inconnue".into();
     }
-    format!("{:.1} Go", bytes as f64 / 1_000_000_000.0)
+    format!("{:.1}", bytes as f64 / 1_000_000_000.0).replace('.', ",") + " Go"
 }
 
 fn parse_disk_size_bytes(value: &str) -> Option<u64> {
@@ -1156,6 +1163,7 @@ pub fn run() {
             discover_pi,
             discover_new_pi,
             discover_pi_boot_targets,
+            check_macos_pi_writer,
             prepare_pi_sd,
             get_compatibility,
             search_paper_plugins,

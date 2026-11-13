@@ -27,6 +27,11 @@ use walkdir::WalkDir;
 
 /// Minimum resources required by the shared Java/Bedrock server profile.
 pub const MINIMUM_SERVER_MEMORY_GB: f64 = 2.0;
+/// A Pi with 1 GB physical RAM reports about 0.9 GiB in /proc/meminfo.
+/// This is the lower bound for the automatically selected compact Pi profile.
+const MINIMUM_PI_MEMORY_GB: f64 = 0.8;
+const COMPACT_PI_MEMORY_GB: f64 = 2.0;
+const COMPACT_PI_HEAP_MB: u16 = 512;
 pub const INITIAL_SERVER_STORAGE_GB: f64 = 8.0;
 
 const JAVA_DEFAULT_PORT: u16 = 25565;
@@ -880,6 +885,26 @@ fn write_new_private_file(path: &Path, contents: &[u8]) -> Result<(), String> {
     set_private_file_permissions(path)
 }
 
+fn set_server_property_values(properties: &str, updates: &[(&str, &str)]) -> String {
+    let mut seen = HashSet::new();
+    let mut output = Vec::new();
+    for line in properties.lines() {
+        let key = line.split_once('=').map(|(key, _)| key).unwrap_or_default();
+        if let Some((_, value)) = updates.iter().find(|(candidate, _)| *candidate == key) {
+            seen.insert(key.to_string());
+            output.push(format!("{key}={value}"));
+        } else {
+            output.push(line.to_string());
+        }
+    }
+    for (key, value) in updates {
+        if seen.insert((*key).to_string()) {
+            output.push(format!("{key}={value}"));
+        }
+    }
+    format!("{}\n", output.join("\n"))
+}
+
 /// Gameplay options exposed in expert mode. Ports, authentication, RCON,
 /// whitelist and world identity remain app-managed because other controls rely
 /// on them for secure cross-play and safe updates.
@@ -1114,7 +1139,7 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
         image_size_gb: (image_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
         devices: image.devices.unwrap_or_default(),
         init_format: image.init_format.unwrap_or_default(),
-        minimum_server_memory_gb: MINIMUM_SERVER_MEMORY_GB,
+        minimum_server_memory_gb: 1.0,
         initial_server_storage_gb: INITIAL_SERVER_STORAGE_GB,
         checked_at: Utc::now().to_rfc3339(),
     })
@@ -2350,7 +2375,7 @@ pub fn install_local(
     }
     // Keep enough memory for the operating system and the desktop. The cap is
     // deliberately conservative for a beginner-friendly shared server.
-    let heap_gb = ((memory_gb * 0.4).floor() as u8).clamp(1, 6);
+    let heap_mb = (((memory_gb * 0.4).floor() as u16).clamp(1, 6)) * 1024;
     let java_port = available_game_port(JAVA_DEFAULT_PORT, JAVA_ALTERNATE_PORT, false)?;
     let bedrock_port = available_game_port(BEDROCK_DEFAULT_PORT, BEDROCK_ALTERNATE_PORT, true)?;
     let root = prepare_root(destination_root)?;
@@ -2358,7 +2383,7 @@ pub fn install_local(
     fs::create_dir(&staging).map_err(io_error)?;
     let result = build_fresh_server(
         &staging,
-        heap_gb,
+        heap_mb,
         false,
         java_port,
         bedrock_port,
@@ -2380,7 +2405,7 @@ pub fn install_local(
     progress("Premier démarrage du nouveau serveur…", 93);
     start_local_server_and_wait(
         &final_path,
-        heap_gb,
+        heap_mb,
         artifacts.4,
         artifacts.5,
         &progress,
@@ -2414,7 +2439,7 @@ pub fn install_local(
 
 fn start_local_server_and_wait(
     server_dir: &Path,
-    heap_gb: u8,
+    heap_mb: u16,
     java_port: u16,
     bedrock_port: u16,
     progress: &impl Fn(&str, u8),
@@ -2444,8 +2469,8 @@ fn start_local_server_and_wait(
     command
         .current_dir(server_dir)
         .args([
-            format!("-Xms1G"),
-            format!("-Xmx{heap_gb}G"),
+            initial_heap_argument(heap_mb),
+            format!("-Xmx{heap_mb}M"),
             "-jar".into(),
             "paper.jar".into(),
             "--nogui".into(),
@@ -3675,10 +3700,8 @@ fn start_local_server_impl(
         .find(|entry| entry.file_type().is_file() && entry.file_name() == runtime_name)
         .map(|entry| entry.into_path())
         .ok_or_else(|| "Le runtime Java inclus est introuvable.".to_string())?;
-    let heap_gb = profile
-        .get("java_heap_gb")
-        .and_then(serde_json::Value::as_u64)
-        .filter(|value| (1..=6).contains(value))
+    let heap_mb = profile_heap_megabytes(&profile)
+        .filter(|value| (128..=6144).contains(value))
         .ok_or_else(|| "La mémoire Java du profil est illisible.".to_string())?;
     let log_path = server_dir.join("serveur.log");
     let log = OpenOptions::new()
@@ -3691,8 +3714,8 @@ fn start_local_server_impl(
     command
         .current_dir(&server_dir)
         .args([
-            format!("-Xms1G"),
-            format!("-Xmx{heap_gb}G"),
+            initial_heap_argument(heap_mb),
+            format!("-Xmx{heap_mb}M"),
             "-jar".into(),
             "paper.jar".into(),
             "--nogui".into(),
@@ -4164,9 +4187,9 @@ pub fn install_remote_pi(
             facts.architecture
         ));
     }
-    if facts.memory_gb < MINIMUM_SERVER_MEMORY_GB {
+    if facts.memory_gb < MINIMUM_PI_MEMORY_GB {
         return Err(format!(
-            "{} n’a que {:.1} Go de mémoire. Le serveur partagé demande au moins 2 Go.",
+            "{} n’a que {:.1} Go de mémoire détectée. Il faut un Pi 3B+ ou plus récent avec 1 Go de mémoire.",
             facts.model, facts.memory_gb
         ));
     }
@@ -4197,7 +4220,7 @@ pub fn install_remote_pi(
         25575,
         25576,
     )?;
-    let heap_gb = ((facts.memory_gb * 0.4).floor() as u8).clamp(1, 6);
+    let heap_mb = pi_heap_megabytes(facts.memory_gb);
     let id = Uuid::new_v4().simple().to_string();
     let local_stage = std::env::temp_dir().join(format!("monde-ensemble-{id}"));
     fs::create_dir(&local_stage).map_err(io_error)?;
@@ -4205,7 +4228,7 @@ pub fn install_remote_pi(
     progress("Préparation du profil Linux ARM64 compatible…", 8);
     let profile = build_fresh_server(
         &local_stage,
-        heap_gb,
+        heap_mb,
         true,
         java_port,
         bedrock_port,
@@ -4269,8 +4292,13 @@ pub fn install_remote_pi(
     run_ssh(&destination, &prepare_command).map_err(|error| {
         format!("Les fichiers ont été transférés, mais leur préparation a échoué dans ~/Monde-Ensemble-{id}/server. Rien n’a été écrit dans les autres dossiers du Pi. Détail : {error}")
     })?;
+    let startup_attempts = if heap_mb <= COMPACT_PI_HEAP_MB {
+        90
+    } else {
+        30
+    };
     let mut started = false;
-    for attempt in 0..30 {
+    for attempt in 0..startup_attempts {
         let check_command = format!(
             "cd \"$HOME/Monde-Ensemble-{id}/server\"; if grep -q 'Done (' serveur.log; then echo READY; elif kill -0 \"$(cat serveur.pid)\" 2>/dev/null; then echo STARTING; else tail -n 60 serveur.log; exit 3; fi"
         );
@@ -4283,13 +4311,13 @@ pub fn install_remote_pi(
         }
         progress(
             "Le Pi démarre Minecraft pour la première fois…",
-            92 + (attempt / 5) as u8,
+            92 + (attempt / 15) as u8,
         );
         std::thread::sleep(Duration::from_secs(2));
     }
     if !started {
         return Err(format!(
-            "Le serveur a été installé, mais le premier démarrage dépasse 60 secondes. Consulte `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi."
+            "Les fichiers du serveur ont été installés, mais le Pi n’a pas confirmé son démarrage dans le délai prévu. Consulte `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi."
         ));
     }
     let autostart_configured = run_ssh(
@@ -4329,7 +4357,7 @@ pub fn install_remote_pi(
             profile.2,
             profile.3,
             java_major_for(&profile.0)?,
-            heap_gb,
+            format_heap(heap_mb),
             profile.4,
             profile.5
         ),
@@ -5435,7 +5463,7 @@ fn run_ssh_timeout_policy(
 
 fn build_fresh_server(
     stage: &Path,
-    heap_gb: u8,
+    heap_mb: u16,
     remote_linux: bool,
     java_port: u16,
     bedrock_port: u16,
@@ -5518,7 +5546,7 @@ fn build_fresh_server(
         &supported.java,
         &supported.bedrock,
         java_major,
-        heap_gb,
+        heap_mb,
         remote_linux,
         java_port,
         bedrock_port,
@@ -5601,7 +5629,7 @@ fn configure_server(
     java_version: &str,
     bedrock_versions: &str,
     java_major: u8,
-    heap_gb: u8,
+    heap_mb: u16,
     remote_linux: bool,
     java_port: u16,
     bedrock_port: u16,
@@ -5628,8 +5656,14 @@ fn configure_server(
             ]),
         )
     };
+    let compact_pi_profile = remote_linux && heap_mb <= COMPACT_PI_HEAP_MB;
+    let (max_players, view_distance, simulation_distance) = if compact_pi_profile {
+        ("3", "4", "3")
+    } else {
+        ("20", "8", "6")
+    };
     let properties = format!(
-        "motd=Monde Ensemble\nserver-port={java_port}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nview-distance=8\nsimulation-distance=6\n{rcon_properties}"
+        "motd=Monde Ensemble\nserver-port={java_port}\nserver-ip=\nonline-mode=true\nenforce-secure-profile=false\nmax-players={max_players}\nview-distance={view_distance}\nsimulation-distance={simulation_distance}\n{rcon_properties}"
     );
     fs::write(stage.join("server.properties"), properties).map_err(io_error)?;
     set_private_file_permissions(&stage.join("server.properties"))?;
@@ -5651,7 +5685,7 @@ fn configure_server(
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
     let geyser_config_sha256 = hash_file(&stage.join("plugins/Geyser-Spigot/config.yml"))?;
 
-    write_launch_files(stage, heap_gb, remote_linux, java_port, bedrock_port)?;
+    write_launch_files(stage, heap_mb, remote_linux, java_port, bedrock_port)?;
     let mut profile = serde_json::json!({
         "application": "Monde Ensemble",
         "minecraft_java": java_version,
@@ -5663,7 +5697,9 @@ fn configure_server(
         "floodgate_build_id": floodgate.build,
         "geyser_config_sha256": geyser_config_sha256,
         "java_runtime": java_major,
-        "java_heap_gb": heap_gb,
+        "java_heap_gb": heap_mb.div_ceil(1024),
+        "java_heap_mb": heap_mb,
+        "resource_profile": if compact_pi_profile { "compact-pi" } else { "standard" },
         "java_port": java_port,
         "bedrock_port": bedrock_port,
         "plugins": ["Geyser-Spigot", "Floodgate-Spigot"],
@@ -5722,19 +5758,21 @@ fn set_yaml(source: &str, section: &str, key: &str, value: &str) -> String {
 
 fn write_launch_files(
     stage: &Path,
-    heap_gb: u8,
+    heap_mb: u16,
     remote_linux: bool,
     java_port: u16,
     bedrock_port: u16,
 ) -> Result<(), String> {
     if cfg!(windows) && !remote_linux {
         let script = format!(
-            "@echo off\r\ncd /d \"%~dp0\"\r\nfor /r runtime %%J in (java.exe) do set JAVA_BIN=%%J\r\nif not defined JAVA_BIN echo Java inclus introuvable & exit /b 1\r\n\"%JAVA_BIN%\" -Xms1G -Xmx{heap_gb}G -jar paper.jar --nogui\r\npause\r\n"
+            "@echo off\r\ncd /d \"%~dp0\"\r\nfor /r runtime %%J in (java.exe) do set JAVA_BIN=%%J\r\nif not defined JAVA_BIN echo Java inclus introuvable & exit /b 1\r\n\"%JAVA_BIN%\" {} -Xmx{heap_mb}M -jar paper.jar --nogui\r\npause\r\n",
+            initial_heap_argument(heap_mb)
         );
         fs::write(stage.join("demarrer.bat"), script).map_err(io_error)?;
     } else {
         let script = format!(
-            "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nJAVA_BIN=$(find runtime -type f -name java -print -quit)\n[ -n \"$JAVA_BIN\" ] || {{ echo 'Java inclus introuvable.'; exit 1; }}\nexec \"$JAVA_BIN\" -Xms1G -Xmx{heap_gb}G -jar paper.jar --nogui\n"
+            "#!/bin/sh\nset -eu\ncd \"$(dirname \"$0\")\"\nJAVA_BIN=$(find runtime -type f -name java -print -quit)\n[ -n \"$JAVA_BIN\" ] || {{ echo 'Java inclus introuvable.'; exit 1; }}\nexec \"$JAVA_BIN\" {} -Xmx{heap_mb}M -jar paper.jar --nogui\n",
+            initial_heap_argument(heap_mb)
         );
         let path = stage.join("demarrer.sh");
         fs::write(&path, script).map_err(io_error)?;
@@ -5936,6 +5974,45 @@ fn ensure_backup_ports_closed(server_dir: &Path) -> Result<(), String> {
         return Err("Un port Minecraft est encore actif. Arrête le serveur puis relance la sauvegarde; aucun fichier n’a été copié.".into());
     }
     Ok(())
+}
+
+fn pi_heap_megabytes(memory_gb: f64) -> u16 {
+    if memory_gb < COMPACT_PI_MEMORY_GB {
+        COMPACT_PI_HEAP_MB
+    } else {
+        ((memory_gb * 0.4).floor() as u16).clamp(1, 6) * 1024
+    }
+}
+
+fn initial_heap_argument(heap_mb: u16) -> String {
+    if heap_mb <= COMPACT_PI_HEAP_MB {
+        "-Xms128M".into()
+    } else {
+        "-Xms1G".into()
+    }
+}
+
+fn profile_heap_megabytes(profile: &serde_json::Value) -> Option<u16> {
+    profile
+        .get("java_heap_mb")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .or_else(|| {
+            profile
+                .get("java_heap_gb")
+                .and_then(serde_json::Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .filter(|value| (1..=6).contains(value))
+                .map(|value| value * 1024)
+        })
+}
+
+fn format_heap(heap_mb: u16) -> String {
+    if heap_mb % 1024 == 0 {
+        format!("{} Go", heap_mb / 1024)
+    } else {
+        format!("{heap_mb} Mo")
+    }
 }
 
 pub fn create_pi_backup(
@@ -6261,12 +6338,9 @@ pub fn restore_backup(
                 .and_then(|value| u8::try_from(value).ok())
                 .or_else(|| profile.get("minecraft_java").and_then(serde_json::Value::as_str).and_then(|version| java_major_for(version).ok()))
                 .ok_or_else(|| "La sauvegarde ne précise pas un runtime Java vérifié. Le dossier original reste intact.".to_string())?;
-            let heap_gb = profile
-                .get("java_heap_gb")
-                .and_then(serde_json::Value::as_u64)
-                .and_then(|value| u8::try_from(value).ok())
-                .filter(|value| (1..=6).contains(value))
-                .unwrap_or(2);
+            let heap_mb = profile_heap_megabytes(&profile)
+                .filter(|value| (128..=6144).contains(value))
+                .unwrap_or(2048);
             let java_port = profile
                 .get("java_port")
                 .and_then(serde_json::Value::as_u64)
@@ -6292,7 +6366,7 @@ pub fn restore_backup(
                 fs::remove_dir_all(&original_runtime).map_err(io_error)?;
             }
             fs::rename(&portable_runtime, &original_runtime).map_err(io_error)?;
-            write_launch_files(&restored_root, heap_gb, false, java_port, bedrock_port)?;
+            write_launch_files(&restored_root, heap_mb, false, java_port, bedrock_port)?;
             set_private_file_permissions(&restored_root.join("server.properties"))?;
             set_private_file_permissions(&profile_path)?;
         }
@@ -6354,9 +6428,9 @@ pub fn restore_pi_backup(
             facts.model, facts.architecture
         ));
     }
-    if facts.memory_gb < MINIMUM_SERVER_MEMORY_GB {
+    if facts.memory_gb < MINIMUM_PI_MEMORY_GB {
         return Err(format!(
-            "{} n’a que {:.1} Go de mémoire. Il faut au moins 2 Go pour ce serveur.",
+            "{} n’a que {:.1} Go de mémoire détectée. La restauration du serveur demande un Pi 3B+ ou plus récent avec 1 Go de mémoire.",
             facts.model, facts.memory_gb
         ));
     }
@@ -6474,15 +6548,10 @@ pub fn restore_pi_backup(
         .and_then(|value| u16::try_from(value).ok())
         .filter(|port| *port > 0)
         .unwrap_or(BEDROCK_DEFAULT_PORT);
-    let heap_limit = (facts.memory_gb.floor() as u8)
-        .saturating_sub(1)
-        .clamp(1, 6);
-    let heap_gb = profile
-        .get("java_heap_gb")
-        .and_then(serde_json::Value::as_u64)
-        .and_then(|value| u8::try_from(value).ok())
-        .filter(|heap| (1..=heap_limit).contains(heap))
-        .unwrap_or(heap_limit.min(2));
+    let heap_limit_mb = pi_heap_megabytes(facts.memory_gb);
+    let heap_mb = profile_heap_megabytes(&profile)
+        .filter(|heap| (128..=heap_limit_mb).contains(heap))
+        .unwrap_or(heap_limit_mb);
     progress(
         "Téléchargement du Java officiel adapté au Raspberry Pi…",
         65,
@@ -6505,7 +6574,19 @@ pub fn restore_pi_backup(
         .as_object_mut()
         .ok_or_else(|| "Le profil du serveur est invalide.".to_string())?;
     object.insert("java_runtime".into(), serde_json::json!(java_major));
-    object.insert("java_heap_gb".into(), serde_json::json!(heap_gb));
+    object.insert(
+        "java_heap_gb".into(),
+        serde_json::json!(heap_mb.div_ceil(1024)),
+    );
+    object.insert("java_heap_mb".into(), serde_json::json!(heap_mb));
+    object.insert(
+        "resource_profile".into(),
+        serde_json::json!(if heap_mb <= COMPACT_PI_HEAP_MB {
+            "compact-pi"
+        } else {
+            "standard"
+        }),
+    );
     object.insert("restored_for".into(), serde_json::json!("linux-aarch64"));
     object.insert(
         "restored_at".into(),
@@ -6516,7 +6597,20 @@ pub fn restore_pi_backup(
         serde_json::to_vec_pretty(&profile).map_err(|error| error.to_string())?,
     )
     .map_err(io_error)?;
-    write_launch_files(&restored_root, heap_gb, true, java_port, bedrock_port)?;
+    write_launch_files(&restored_root, heap_mb, true, java_port, bedrock_port)?;
+    if heap_mb <= COMPACT_PI_HEAP_MB {
+        let properties_path = restored_root.join("server.properties");
+        let properties = read_server_properties(&properties_path)?;
+        let properties = set_server_property_values(
+            &properties,
+            &[
+                ("max-players", "3"),
+                ("view-distance", "4"),
+                ("simulation-distance", "3"),
+            ],
+        );
+        fs::write(&properties_path, properties).map_err(io_error)?;
+    }
     let _ = fs::remove_file(restored_root.join("demarrer.bat"));
     set_private_file_permissions(&restored_root.join("server.properties"))?;
     set_private_file_permissions(&profile_path)?;
@@ -6645,8 +6739,9 @@ printf 'RESTORED=%s\n' 'Monde-Ensemble-Restaure-{id}/server'
     Ok(OperationResult {
         path: server_folder,
         detail: format!(
-            "Copie restaurée sur le Pi · {} · Java {java_major} ARM64 · {heap_gb} Go attribués · l’ancien serveur est conservé · cette copie reste arrêtée",
-            facts.model
+            "Copie restaurée sur le Pi · {} · Java {java_major} ARM64 · mémoire Java {} · l’ancien serveur est conservé · cette copie reste arrêtée",
+            facts.model,
+            format_heap(heap_mb)
         ),
         sha256: Some(archive_hash_before),
     })

@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.40
+# Monde Ensemble 0.18.41
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -19,19 +19,19 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - applique la même mise à jour coordonnée aux serveurs locaux gérés sur Mac et Windows, après validation du profil, des contenus, de l’espace libre et des ports ; vérifie la nouvelle copie au démarrage et conserve l’ancienne pour retour arrière ;
 - conserve un aperçu lisible des dernières lignes et permet d’exporter le journal complet local ou Pi vers un nouveau fichier sans écraser une copie existante ;
 - choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
-- adapte la mémoire Java à la mémoire détectée et bloque les machines sous 2 Go ;
+- adapte automatiquement la mémoire et la portée de jeu aux ressources du Pi ; le profil compact accepte les Pi 3B+ et autres Pi ARM64 avec 1 Go, tandis que l’installation locale sur ordinateur garde son minimum de 2 Go ;
 - crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive existante ; vérifie que les ports Minecraft configurés restent libres pendant la copie du monde ;
 - vérifie l’intégrité et les chemins d’une archive avant restauration, puis crée une nouvelle copie ; si son profil Monde Ensemble est reconnu et que ses ports sont libres, la charge automatiquement dans le tableau de bord ;
 - restaure une archive vers un Raspberry Pi déjà configuré en créant un dossier serveur neuf, en vérifiant l’empreinte, en adaptant Java à Linux ARM64 et à sa mémoire, puis en contrôlant la copie à distance ; l’ancien dossier reste disponible et la copie restaurée n’est pas démarrée automatiquement ;
 - recherche les Raspberry Pi qui annoncent SSH sur le réseau local et affiche leur modèle et leur adresse ;
-- repère en lecture seule les cartes SD et supports USB externes sur Mac, Windows ou Linux pour préparer un futur parcours Pi vierge ;
+- repère en lecture seule les cartes SD dans les lecteurs intégrés et les supports USB externes sur Mac, Windows ou Linux pour préparer un futur parcours Pi vierge ;
 - bloque l’écriture d’un système Pi s’il détecte plusieurs supports externes, affiche l’identifiant du support choisi et demande une confirmation explicite de son effacement ;
 - lit le catalogue Raspberry Pi officiel pour proposer l’image Raspberry Pi OS Lite 64 bits avec le format de démarrage requis, sa date de publication et sa taille ;
 - prépare une carte SD ou un SSD depuis l’application avec Raspberry Pi Imager officiel, téléchargé à la demande et vérifié par SHA-256 ; choisit Raspberry Pi OS Lite et configure l’accès sécurisé sans demander au débutant d’installer Imager séparément ;
-- désactive la télémétrie d’écriture de Raspberry Pi Imager et masque les données Wi-Fi dans les journaux de diagnostic conservés par l’application ; la vérification de l’image et de l’écriture reste active ;
+- utilise uniquement les options reconnues par la version vérifiée de Raspberry Pi Imager et masque les données Wi-Fi dans les journaux de diagnostic conservés par l’application ; la vérification de l’image et de l’écriture reste active ;
 - prépare Ethernet en automatique ou le Wi-Fi saisi dans l’application, crée une clé SSH dédiée dans l’espace privé de l’application sans lire ni modifier les clés SSH personnelles, puis l’utilise pour communiquer avec le Pi ; attend le premier démarrage et lance ensuite l’installation du serveur ;
 - affiche les modèles Pi compatibles avec cette image et compare la capacité des supports externes détectés à la place nécessaire au système et au serveur ;
-- distingue la compatibilité de l’image de celle du serveur : un Pi 4 ou 5 doit avoir au moins 2 Go de mémoire ; le Pi 3 standard n’est pas adapté à ce profil ;
+- choisit un profil compact sur les Pi 3B+ et les appareils disposant de moins de 2 Go : portée de jeu et nombre de joueurs réduits ; un Pi 4 ou 5 avec au moins 4 Go est recommandé pour plus de joueurs ou d’extensions ;
 - vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
 - transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
 - affiche l’adresse et les ports à saisir dans Minecraft, avec le chemin du dossier et des journaux sur le Pi.

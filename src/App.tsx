@@ -1757,11 +1757,12 @@ function App() {
                             {describePiModels(piOsRecommendation.devices)}.
                           </span>
                           <small>
-                            Les Pi 3 ne conviennent pas à ce serveur. Pour
-                            l’héberger, choisis un Pi 4 ou 5 avec au moins{" "}
-                            {piOsRecommendation.minimum_server_memory_gb} Go de
-                            mémoire. L’application vérifiera le modèle et la
-                            mémoire avant l’installation.
+                            Le Pi 3B+ est pris en charge avec un profil léger
+                            automatique : mémoire Java réduite et portée de
+                            jeu limitée. Pour plus de joueurs ou d’extensions,
+                            un Pi 4 ou 5 avec 4 Go ou plus est recommandé.
+                            L’application choisit le profil après avoir vérifié
+                            le Pi.
                           </small>
                         </>
                       )}

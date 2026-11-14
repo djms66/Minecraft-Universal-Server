@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.51
+# Monde Ensemble 0.18.52
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -7,6 +7,7 @@ Application de bureau francophone qui prépare un nouveau serveur Minecraft Pape
 - démarre les nouveaux utilisateurs dans un guide « installer mon serveur » plutôt que dans un tableau de bord vide ; pour un Pi neuf, montre d’abord le matériel nécessaire et la préparation depuis la carte, puis présente uniquement l’adresse et les versions après installation ; les outils de réglage apparaissent ensuite dans le tableau de bord ;
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
+- lit le format actuel du catalogue Java Adoptium ; après deux lectures HTTP/1, utilise `curl` sécurisé comme secours pour éviter qu’un corps HTTP mal décodé bloque l’installation ; le JRE ne passe à l’installation qu’après validation de son SHA-256 ;
 - prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;
 - démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done » et vérifie les ports Java TCP, Bedrock TCP (signalement NetherNet) et Bedrock UDP avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
 - mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de copier l’adresse Java complète ou l’IP Bedrock depuis le tableau de bord ; les boutons démarrent ou arrêtent le serveur proprement avec le contrôle RCON limité à la boucle locale ;

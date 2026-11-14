@@ -1009,7 +1009,7 @@ struct BridgeDownload {
 
 #[derive(Deserialize)]
 struct RuntimeAsset {
-    binaries: Vec<RuntimeBinary>,
+    binary: RuntimeBinary,
 }
 
 #[derive(Deserialize)]
@@ -5657,53 +5657,106 @@ fn runtime_package(
         "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={arch}&image_type=jre&os={os}&vendor=eclipse"
     );
     let mut last_error = String::new();
-    for attempt in 1..=3 {
+    for attempt in 1..=2 {
         progress(
-            &format!("Lecture du catalogue Java… tentative {attempt}/3"),
+            &format!("Lecture du catalogue Java… tentative {attempt}/2"),
             progress_percent,
         );
         let runtime_client = Client::builder()
             .user_agent(concat!("MondeEnsemble/", env!("CARGO_PKG_VERSION")))
             .timeout(Duration::from_secs(25))
             .connect_timeout(Duration::from_secs(10))
+            .http1_only()
             .build()
             .map_err(|error| error.to_string())?;
         let assets = runtime_client
             .get(&url)
             .header(reqwest::header::ACCEPT, "application/json")
             .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .header(reqwest::header::CONNECTION, "close")
             .send()
             .map_err(network_error)
             .and_then(|response| response.error_for_status().map_err(network_error))
-            .and_then(|response| {
-                response
-                    .json::<Vec<RuntimeAsset>>()
+            .and_then(|response| response.bytes().map_err(network_error))
+            .and_then(|body| {
+                runtime_package_from_json(&body, major)
                     .map_err(|error| format!("Réponse catalogue Java illisible : {error}"))
             });
         match assets {
-            Ok(assets) => {
-                return assets
-                    .into_iter()
-                    .flat_map(|asset| asset.binaries)
-                    .map(|binary| binary.package)
-                    .find(|package| {
-                        !package.checksum.is_empty() && package.link.starts_with("https://")
-                    })
-                    .ok_or_else(|| {
-                        format!("Aucun Java {major} officiel ne correspond à cet appareil.")
-                    });
-            }
+            Ok(package) => return Ok(package),
             Err(error) => {
                 last_error = error;
-                if attempt < 3 {
+                if attempt < 2 {
                     std::thread::sleep(Duration::from_secs(attempt as u64));
                 }
             }
         }
     }
-    Err(format!(
-        "Impossible de lire le catalogue Java après 3 tentatives : {last_error}. Vérifie ta connexion, puis relance l’installation. Le serveur déjà présent reste intact."
-    ))
+    progress("Lecture de secours du catalogue Java…", progress_percent);
+    match runtime_package_with_curl(&url, major) {
+        Ok(package) => Ok(package),
+        Err(curl_error) => Err(format!(
+            "Impossible de lire le catalogue Java avec les deux méthodes. Lecture HTTP : {last_error}. Lecture de secours : {curl_error}. Vérifie ta connexion puis relance; aucun fichier Java incomplet n’a été installé et le serveur déjà présent reste intact."
+        )),
+    }
+}
+
+fn runtime_package_from_json(body: &[u8], major: u8) -> Result<RuntimePackage, String> {
+    let assets: Vec<RuntimeAsset> = serde_json::from_slice(body)
+        .map_err(|error| format!("JSON du catalogue invalide : {error}"))?;
+    assets
+        .into_iter()
+        .map(|asset| asset.binary.package)
+        .find(|package| valid_sha256(&package.checksum) && package.link.starts_with("https://"))
+        .ok_or_else(|| {
+            format!("Aucun Java {major} officiel vérifiable ne correspond à cet appareil.")
+        })
+}
+
+fn runtime_package_with_curl(url: &str, major: u8) -> Result<RuntimePackage, String> {
+    let executable = if cfg!(target_os = "windows") {
+        "curl.exe"
+    } else {
+        "curl"
+    };
+    let output = Command::new(executable)
+        .args([
+            "--http1.1",
+            "--fail",
+            "--silent",
+            "--show-error",
+            "--location",
+            "--max-redirs",
+            "5",
+            "--max-time",
+            "30",
+            "--connect-timeout",
+            "10",
+            "--max-filesize",
+            "2097152",
+            "--proto",
+            "=https",
+            "--proto-redir",
+            "=https",
+            "--header",
+            "Accept: application/json",
+            "--header",
+            "Accept-Encoding: identity",
+        ])
+        .arg("--user-agent")
+        .arg(concat!("MondeEnsemble/", env!("CARGO_PKG_VERSION")))
+        .arg(url)
+        .output()
+        .map_err(|error| format!("curl est indisponible : {error}"))?;
+    if !output.status.success() {
+        let detail: String = String::from_utf8_lossy(&output.stderr)
+            .chars()
+            .take(300)
+            .collect();
+        return Err(format!("curl n’a pas pu lire le catalogue : {detail}"));
+    }
+    runtime_package_from_json(&output.stdout, major)
+        .map_err(|error| format!("curl a reçu une réponse inutilisable : {error}"))
 }
 
 fn runtime_target(remote_linux: bool) -> Result<(&'static str, &'static str), String> {
@@ -7290,6 +7343,21 @@ mod tests {
             devices: Some(vec!["pi4-64bit".into(), "pi5-64bit".into()]),
             subitems: None,
         }
+    }
+
+    #[test]
+    fn java_catalog_reads_current_adoptium_binary_shape_and_requires_sha256() {
+        let body = format!(
+            r#"[{{"binary":{{"package":{{"checksum":"{}","link":"https://example.com/java.tar.gz","name":"java.tar.gz"}}}}}}]"#,
+            "a".repeat(64)
+        );
+        let package = super::runtime_package_from_json(body.as_bytes(), 25).unwrap();
+        assert_eq!(package.name, "java.tar.gz");
+        assert_eq!(package.checksum, "a".repeat(64));
+
+        let missing_checksum = br#"[{"binary":{"package":{"checksum":"","link":"https://example.com/java.tar.gz","name":"java.tar.gz"}}}]"#;
+        assert!(super::runtime_package_from_json(missing_checksum, 25).is_err());
+        assert!(super::runtime_package_from_json(b"not json", 25).is_err());
     }
 
     #[test]

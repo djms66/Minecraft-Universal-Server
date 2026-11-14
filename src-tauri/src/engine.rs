@@ -39,6 +39,7 @@ const BEDROCK_DEFAULT_PORT: u16 = 19132;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
+const REMOTE_SERVER_ARTIFACT_CHECK: &str = "for f in paper.jar plugins/Geyser-Spigot.jar plugins/Floodgate-Spigot.jar; do if [ ! -s \"$f\" ]; then printf 'Fichier requis absent ou vide : %s\\n' \"$f\" >&2; exit 42; fi; done;";
 static APP_DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
 /// Stores the app-owned location used for first-boot Raspberry Pi SSH access.
@@ -4350,7 +4351,7 @@ pub fn install_remote_pi(
 
     progress("Installation et démarrage du serveur sur le Pi…", 91);
     let prepare_command = format!(
-        "set -eu; umask 077; chmod 600 \"$HOME/{remote_archive}\"; trap 'rm -f \"$HOME/{remote_archive}\"' EXIT; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; trap - EXIT; cd \"$d/server\"; test -s paper.jar; test -s plugins/Geyser-Spigot.jar; test -s plugins/Floodgate-Spigot.jar; chmod 600 server.properties monde-ensemble-profile.json; AUTOSTART=no; if command -v crontab >/dev/null 2>&1 && (systemctl is-enabled --quiet cron 2>/dev/null || systemctl is-enabled --quiet crond 2>/dev/null); then t=\"$(mktemp)\"; (crontab -l 2>/dev/null || true) | grep -Fv '# MONDE_ENSEMBLE_AUTO_START' > \"$t\" || true; printf '%s\\n' '@reboot \"$HOME/Monde-Ensemble-{id}/server/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START' >> \"$t\"; crontab \"$t\"; rm -f \"$t\"; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then AUTOSTART=yes; fi; fi; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; printf 'AUTOSTART=%s\\n' \"$AUTOSTART\""
+        "set -eu; umask 077; chmod 600 \"$HOME/{remote_archive}\"; trap 'rm -f \"$HOME/{remote_archive}\"' EXIT; d=\"$HOME/Monde-Ensemble-{id}\"; mkdir \"$d\"; tar -xzf \"$HOME/{remote_archive}\" -C \"$d\"; rm \"$HOME/{remote_archive}\"; trap - EXIT; cd \"$d/server\"; {REMOTE_SERVER_ARTIFACT_CHECK} chmod 600 server.properties monde-ensemble-profile.json; AUTOSTART=no; if command -v crontab >/dev/null 2>&1 && (systemctl is-enabled --quiet cron 2>/dev/null || systemctl is-enabled --quiet crond 2>/dev/null); then t=\"$(mktemp)\"; (crontab -l 2>/dev/null || true) | grep -Fv '# MONDE_ENSEMBLE_AUTO_START' > \"$t\" || true; printf '%s\\n' '@reboot \"$HOME/Monde-Ensemble-{id}/server/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START' >> \"$t\"; crontab \"$t\"; rm -f \"$t\"; if crontab -l 2>/dev/null | grep -Fq '# MONDE_ENSEMBLE_AUTO_START'; then AUTOSTART=yes; fi; fi; nohup ./demarrer.sh > serveur.log 2>&1 < /dev/null & echo $! > serveur.pid; printf 'AUTOSTART=%s\\n' \"$AUTOSTART\""
     );
     run_ssh(&destination, &prepare_command).map_err(|error| {
         format!("Les fichiers ont été transférés, mais leur préparation a échoué dans ~/Monde-Ensemble-{id}/server. Rien n’a été écrit dans les autres dossiers du Pi. Détail : {error}")
@@ -5514,14 +5515,22 @@ fn run_ssh_timeout_policy(
             .filter(|part| !part.is_empty())
             .collect::<Vec<_>>()
             .join("\n");
-        let detail = detail.chars().take(6000).collect::<String>();
-        return Err(if detail.is_empty() {
-            "Connexion SSH refusée. Vérifie que le Pi est allumé et que sa clé d’hôte est déjà approuvée sur cet ordinateur.".into()
-        } else {
-            format!("Connexion SSH impossible : {detail}")
-        });
+        return Err(ssh_failure_message(output.status.code(), &detail));
     }
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn ssh_failure_message(exit_code: Option<i32>, detail: &str) -> String {
+    if detail.is_empty() {
+        return format!(
+            "La connexion SSH ou la commande distante a échoué sans fournir de détail (code {}). Le Pi n’a pas confirmé cette étape.",
+            exit_code.map_or_else(|| "inconnu".into(), |code| code.to_string())
+        );
+    }
+    format!(
+        "Connexion SSH impossible : {}",
+        detail.chars().take(6000).collect::<String>()
+    )
 }
 
 fn build_fresh_server(
@@ -7398,12 +7407,12 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GEYSER_CONFIG_FALLBACK, GameSettings, LocalStartResult, RaspberryPiOsEntry,
-        RemoveDirOnDrop, add_identity_file, apply_game_settings, artifact_hash_matches,
-        copy_verified_pack, geyser_config_from_archive, hash_file, inspect_bedrock_resource_pack,
-        java_major_for, latest_supported_pi_image, parse_game_settings,
-        parse_supported_versions_page, record_managed_artifact_hashes, restore_backup,
-        safe_archive_path, safe_version, shell_single_quote,
+        GEYSER_CONFIG_FALLBACK, GameSettings, LocalStartResult, REMOTE_SERVER_ARTIFACT_CHECK,
+        RaspberryPiOsEntry, RemoveDirOnDrop, add_identity_file, apply_game_settings,
+        artifact_hash_matches, copy_verified_pack, geyser_config_from_archive, hash_file,
+        inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
+        parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
+        restore_backup, safe_archive_path, safe_version, shell_single_quote, ssh_failure_message,
         start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
         valid_plugin_filename, valid_sha256, validate_game_settings,
     };
@@ -7418,6 +7427,26 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         (path.clone(), RemoveDirOnDrop(path))
+    }
+
+    #[test]
+    fn pi_install_reports_the_exact_server_artifact_missing_after_transfer() {
+        assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("paper.jar"));
+        assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("plugins/Geyser-Spigot.jar"));
+        assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("plugins/Floodgate-Spigot.jar"));
+        assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("Fichier requis absent ou vide"));
+    }
+
+    #[test]
+    fn silent_remote_command_failure_is_not_misreported_as_ssh_refusal() {
+        let message = ssh_failure_message(Some(42), "");
+        assert!(message.contains("commande distante"));
+        assert!(message.contains("code 42"));
+        assert!(!message.contains("refusée"));
+        assert!(
+            ssh_failure_message(Some(255), "ssh: Connection refused")
+                .contains("Connection refused")
+        );
     }
 
     #[test]

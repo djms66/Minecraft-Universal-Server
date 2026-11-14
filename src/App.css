@@ -1638,6 +1638,13 @@ button {
   margin: 0;
   overflow-wrap: anywhere;
 }
+.pi-first-boot-steps {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.5;
+}
 .pi-flash-success small {
   font-size: 8px;
   opacity: 0.8;

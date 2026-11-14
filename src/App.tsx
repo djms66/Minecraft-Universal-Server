@@ -2143,14 +2143,19 @@ function App() {
                         <div className="pi-flash-success" aria-live="polite">
                           <strong>Carte prête · vérification terminée</strong>
                           <p>{piFlashResult.detail}</p>
-                          <p>
-                            Éteins le Pi avant d’insérer la carte, puis relie-le
-                            au même routeur (câble ou Wi-Fi configuré) et
-                            rallume-le. Attends quelques minutes ; l’application
-                            le recherchera et installera le serveur sur le Pi.
-                            Le Mac ne sert qu’à préparer la carte et piloter
-                            l’installation.
-                          </p>
+                          <ol className="pi-first-boot-steps">
+                            <li>Éteins le Raspberry Pi et insère la carte.</li>
+                            <li>
+                              Relie-le au même routeur que ce Mac avec un câble
+                              Ethernet. Si tu as configuré le Wi-Fi plus haut,
+                              il se connectera au démarrage.
+                            </li>
+                            <li>
+                              Rallume le Pi et laisse-le allumé. Après quelques
+                              minutes, l’application le détectera sur le réseau
+                              et installera le serveur.
+                            </li>
+                          </ol>
                           <label className="eula-choice">
                             <input
                               type="checkbox"

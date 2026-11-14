@@ -193,6 +193,15 @@ function readSavedPiInstallation(): PiInstallation | null {
 }
 
 const PI_FLASH_SESSION_KEY = "monde-ensemble.pi-flash-session";
+const PI_FORCE_FRESH_KEY = "monde-ensemble.pi-force-fresh";
+
+function readSavedPiForceFresh(): boolean {
+  try {
+    return localStorage.getItem(PI_FORCE_FRESH_KEY) === "true";
+  } catch {
+    return false;
+  }
+}
 
 function readSavedPiFlashResult(): PiFlashResult | null {
   try {
@@ -258,6 +267,8 @@ function App() {
   const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(
     readSavedPiFlashResult,
   );
+  const [forceFreshPiSetup, setForceFreshPiSetup] =
+    useState(readSavedPiForceFresh);
   const [piOsRecommendation, setPiOsRecommendation] =
     useState<PiOsRecommendation | null>(null);
   const [piOsOptions, setPiOsOptions] = useState<PiOsRecommendation[]>([]);
@@ -368,6 +379,14 @@ function App() {
       localStorage.removeItem(PI_FLASH_SESSION_KEY);
     }
   }, [piFlashResult]);
+
+  useEffect(() => {
+    if (forceFreshPiSetup) {
+      localStorage.setItem(PI_FORCE_FRESH_KEY, "true");
+    } else {
+      localStorage.removeItem(PI_FORCE_FRESH_KEY);
+    }
+  }, [forceFreshPiSetup]);
 
   useEffect(() => {
     if (localInstallation) {
@@ -716,7 +735,12 @@ function App() {
       const targets = await invoke<PiBootTarget[]>("discover_pi_boot_targets");
       setPiBootTargets(targets);
       setPiBootScanState("done");
-      if (!piFlashResult && targets.length === 1 && activePiOs) {
+      if (
+        !piFlashResult &&
+        !forceFreshPiSetup &&
+        targets.length === 1 &&
+        activePiOs
+      ) {
         const target = targets[0];
         const recovered = await invoke<PiFlashResult | null>(
           "recover_pi_flash_result",
@@ -744,6 +768,28 @@ function App() {
       setPiBootScanError(String(error));
       setPiBootScanState("idle");
     }
+  };
+
+  const restartPiSetupFromZero = () => {
+    if (!piFlashResult || busy) return;
+    const sizeGb = (piFlashResult.target_size_bytes / 1_000_000_000).toFixed(1);
+    const confirmed = window.confirm(
+      `Repartir de zéro sur « ${piFlashResult.target_name} » (${sizeGb} Go, ${piFlashResult.target_id}) ? Tout le contenu de cette carte sera effacé.`,
+    );
+    if (!confirmed) return;
+
+    setPiFlashResult(null);
+    setPiFlashExpectedModel("");
+    setPiFlashExpectedDevices([]);
+    setPiBootTargets([]);
+    setPiBootScanState("idle");
+    setPiBootScanError("");
+    setPiWifiSsid("");
+    setPiWifiPassword("");
+    setPiWifiCountry("FR");
+    setPiEulaAccepted(false);
+    setForceFreshPiSetup(true);
+    setConnection("Nouvelle préparation depuis zéro · carte à détecter");
   };
 
   const flashPiOs = async (device: PiBootTarget) => {
@@ -803,6 +849,7 @@ function App() {
       setPiFlashResult(result);
       setPiFlashExpectedModel(result.target_model);
       setPiFlashExpectedDevices(result.expected_devices);
+      setForceFreshPiSetup(false);
       setPiWifiPassword("");
     } catch (error) {
       setOperationError(String(error));
@@ -2465,6 +2512,18 @@ function App() {
                             Outil officiel Raspberry Pi Imager{" "}
                             {piFlashResult.imager_version} · journal :{" "}
                             {piFlashResult.log_path}
+                          </small>
+                          <button
+                            className="button secondary pi-restart-setup"
+                            onClick={restartPiSetupFromZero}
+                            disabled={busy}
+                          >
+                            Repartir de zéro · effacer et réinstaller
+                          </button>
+                          <small>
+                            La carte sera entièrement effacée après une
+                            confirmation, puis le parcours recommencera à
+                            l’étape de détection.
                           </small>
                         </div>
                       )}

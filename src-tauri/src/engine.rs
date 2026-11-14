@@ -36,13 +36,16 @@ pub const INITIAL_SERVER_STORAGE_GB: f64 = 8.0;
 
 const JAVA_DEFAULT_PORT: u16 = 25565;
 const BEDROCK_DEFAULT_PORT: u16 = 19132;
+// GeyserMC announced NetherNet support beginning at build 1237; Bedrock 26.60+
+// requires this transport. Older builds are not safe for managed cross-play.
+const MIN_GEYSER_NETHERNET_BUILD: u64 = 1237;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const GEYSER_PLUGIN_JAR: &str = "Geyser-Spigot.jar";
 const FLOODGATE_PLUGIN_JAR: &str = "Floodgate-Spigot.jar";
 const PAPER_READY_LOG_PATTERN: &str = r"INFO\]: Done \(";
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
-const REMOTE_SERVER_ARTIFACT_CHECK: &str = "for f in paper.jar plugins/Geyser-Spigot.jar plugins/Floodgate-Spigot.jar; do if [ ! -s \"$f\" ]; then printf 'Fichier requis absent ou vide : %s\\n' \"$f\" >&2; exit 42; fi; done;";
+const REMOTE_SERVER_ARTIFACT_CHECK: &str = "for f in paper.jar plugins/Geyser-Spigot.jar plugins/Floodgate-Spigot.jar plugins/Geyser-Spigot/config.yml; do if [ ! -s \"$f\" ]; then printf 'Fichier requis absent ou vide : %s\\n' \"$f\" >&2; exit 42; fi; done; if ! grep -Eq '^[[:space:]]*transport:[[:space:]]*nethernet([[:space:]#]|$)' plugins/Geyser-Spigot/config.yml; then echo 'Configuration Geyser sans NetherNet.' >&2; exit 43; fi;";
 static APP_DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
 
 /// Stores the app-owned location used for first-boot Raspberry Pi SSH access.
@@ -132,6 +135,7 @@ pub struct CompatibilityReport {
 pub struct PiUpdateCheck {
     pub ready: bool,
     pub update_available: bool,
+    pub bedrock_transport_migration: bool,
     pub current_java: String,
     pub current_bedrock: String,
     pub current_geyser: String,
@@ -206,6 +210,7 @@ pub struct PiServerStatus {
     pub java_port_open: bool,
     pub bedrock_tcp_port_open: bool,
     pub bedrock_port_open: bool,
+    pub bedrock_nethernet_ready: bool,
     pub autostart_configured: bool,
     pub minecraft_java: String,
     pub minecraft_bedrock: String,
@@ -233,6 +238,7 @@ pub struct LocalServerStatus {
     pub bedrock_port: u16,
     pub bedrock_tcp_port_open: bool,
     pub bedrock_udp_port_open: bool,
+    pub bedrock_nethernet_ready: bool,
     pub address: String,
     pub players: String,
     pub log: String,
@@ -1097,6 +1103,12 @@ pub fn compatibility() -> Result<CompatibilityReport, String> {
     let paper = paper_build(&client, &supported.java)?;
     let geyser = bridge_build(&client, "geyser", "spigot")?;
     let floodgate = bridge_build(&client, "floodgate", "spigot")?;
+    if geyser.build < MIN_GEYSER_NETHERNET_BUILD {
+        return Err(format!(
+            "Geyser build {} ne prend pas en charge le transport Bedrock NetherNet requis. Installation et mise à jour coordonnées bloquées.",
+            geyser.build
+        ));
+    }
 
     Ok(CompatibilityReport {
         paper_version: format!("{} · build {}", supported.java, paper.id),
@@ -2585,6 +2597,11 @@ fn start_local_server_and_wait(
                     "Le serveur Java est prêt, mais le port Bedrock UDP {bedrock_port} n’est pas ouvert."
                 ));
             }
+            if !geyser_nethernet_ready(server_dir) {
+                terminate_local_process(&mut child);
+                let _ = fs::remove_file(&pid_file);
+                return Err("Geyser n’a pas démarré avec le transport Bedrock NetherNet attendu. Le serveur n’est pas déclaré prêt.".into());
+            }
             return Ok(());
         }
         if let Some(status) = child.try_wait().map_err(io_error)? {
@@ -2716,7 +2733,8 @@ pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, Stri
         && bedrock_port > 0
         && tcp_port_open(java_port)
         && tcp_port_open(bedrock_port)
-        && !udp_port_available(bedrock_port);
+        && !udp_port_available(bedrock_port)
+        && geyser_nethernet_ready(&server_dir);
     Ok(LocalServerStatus {
         running,
         ready,
@@ -2727,6 +2745,7 @@ pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, Stri
         bedrock_port,
         bedrock_tcp_port_open: tcp_port_open(bedrock_port),
         bedrock_udp_port_open: !udp_port_available(bedrock_port),
+        bedrock_nethernet_ready: geyser_nethernet_ready(&server_dir),
         address: local_network_address().unwrap_or_else(|| "127.0.0.1".into()),
         players: players.unwrap_or_default(),
         log,
@@ -2915,6 +2934,7 @@ pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
     if !geyser_config_matches_profile(&server_dir, &profile) {
         reasons.push("La configuration Geyser a été modifiée ou ne peut pas être reconnue comme configuration standard; la mise à jour automatique est bloquée.".into());
     }
+    let bedrock_transport_migration = !geyser_nethernet_ready(&server_dir);
     let bedrock_packs = server_dir.join("plugins/Geyser-Spigot/packs");
     match fs::read_dir(&bedrock_packs) {
         Ok(entries) => {
@@ -3000,7 +3020,8 @@ pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
         .and_then(serde_json::Value::as_str)
         .unwrap_or("inconnue")
         .to_string();
-    let update_available = current_java != latest.java_version
+    let update_available = bedrock_transport_migration
+        || current_java != latest.java_version
         || current_bedrock != latest.bedrock_versions
         || current_geyser != latest_geyser
         || current_floodgate != latest_floodgate
@@ -3020,6 +3041,7 @@ pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
     Ok(PiUpdateCheck {
         ready: reasons.is_empty(),
         update_available,
+        bedrock_transport_migration,
         current_java,
         current_bedrock,
         current_geyser,
@@ -4037,6 +4059,16 @@ fn prepare_local_update_copy(
         fs::copy(artifact_stage.join(&artifact.name), destination).map_err(io_error)?;
     }
 
+    let geyser_jar = File::open(staging.join("plugins/Geyser-Spigot.jar")).map_err(io_error)?;
+    let mut geyser_archive = zip::ZipArchive::new(geyser_jar).map_err(|error| {
+        format!("Le nouveau fichier Geyser n’est pas une archive valide : {error}")
+    })?;
+    let template = geyser_config_from_archive(&mut geyser_archive)?;
+    let config = managed_geyser_config(&template, bedrock_port);
+    let config_path = staging.join("plugins/Geyser-Spigot/config.yml");
+    fs::create_dir_all(config_path.parent().expect("parent de config Geyser")).map_err(io_error)?;
+    fs::write(&config_path, config).map_err(io_error)?;
+
     let mut updated_profile = profile;
     record_managed_artifact_hashes(&mut updated_profile, &staging)?;
     let object = updated_profile
@@ -4061,6 +4093,7 @@ fn prepare_local_update_copy(
             &staging.join("plugins/Geyser-Spigot/config.yml")
         )?),
     );
+    object.insert("bedrock_transport".into(), serde_json::json!("nethernet"));
     object.insert(
         "updated_at".into(),
         serde_json::json!(Utc::now().to_rfc3339()),
@@ -4398,6 +4431,33 @@ pub fn install_remote_pi(
             "Les fichiers du serveur ont été installés, mais le Pi n’a pas confirmé son démarrage dans le délai prévu. Consulte `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi."
         ));
     }
+    progress("Contrôle du pont Bedrock et de NetherNet…", 98);
+    let mut bedrock_ready = false;
+    for attempt in 0..60 {
+        let check_command = format!(
+            "cd \"$HOME/Monde-Ensemble-{id}/server\"; if grep -q 'Done (' serveur.log && grep -Eq '^[[:space:]]*transport:[[:space:]]*nethernet([[:space:]#]|$)' plugins/Geyser-Spigot/config.yml && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]({bedrock_port})$' && ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.]({bedrock_port})$'; then echo BEDROCK_READY; else echo BEDROCK_STARTING; fi"
+        );
+        let status = run_ssh(&destination, &check_command).map_err(|error| {
+            format!("Paper a démarré, mais Geyser n’a pas encore confirmé NetherNet. Le monde reste sur le Pi. Détail : {error}")
+        })?;
+        if status.lines().any(|line| line == "BEDROCK_READY") {
+            bedrock_ready = true;
+            break;
+        }
+        progress(
+            &format!(
+                "Geyser prépare la connexion Bedrock… vérification {}/60",
+                attempt + 1
+            ),
+            98,
+        );
+        std::thread::sleep(Duration::from_secs(2));
+    }
+    if !bedrock_ready {
+        return Err(format!(
+            "Paper a démarré, mais Geyser n’a pas confirmé NetherNet sur le port Bedrock {bedrock_port} en TCP et UDP. Le monde et les fichiers installés restent sur le Pi; consulte `~/Monde-Ensemble-{id}/server/serveur.log`."
+        ));
+    }
     let autostart_configured = run_ssh(
         &destination,
         &format!(
@@ -4601,7 +4661,7 @@ pub fn inspect_pi_server(
     }
     let destination = format!("{username}@{host}");
     let command = format!(
-        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; @NETWORK_IDENTITY@; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
+        "d=\"$HOME/{server_folder}\"; test -d \"$d\" || {{ echo 'DOSSIER_ABSENT'; exit 5; }}; printf 'RUNNING='; pid=; if test -r \"$d/serveur.pid\"; then pid=\"$(cat \"$d/serveur.pid\")\"; fi; case \"$pid\" in ''|*[!0-9]*) pid=;; esac; if test -n \"$pid\" && kill -0 \"$pid\" 2>/dev/null && test \"$(awk '{{print $3}}' \"/proc/$pid/stat\" 2>/dev/null || true)\" != Z && test \"$(readlink -f \"/proc/$pid/cwd\" 2>/dev/null || true)\" = \"$(readlink -f \"$d\")\" && tr -d '\\000' < \"/proc/$pid/cmdline\" 2>/dev/null | grep -q 'paper.jar'; then echo yes; else echo no; fi; printf 'READY='; if grep -q 'Done (' \"$d/serveur.log\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JAVA_PORT='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$'; then echo yes; else echo no; fi; printf 'BEDROCK_TCP='; if ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_PORT='; if ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then echo yes; else echo no; fi; printf 'BEDROCK_NETHERNET='; if grep -Eq '^[[:space:]]*transport:[[:space:]]*nethernet([[:space:]#]|$)' \"$d/plugins/Geyser-Spigot/config.yml\" 2>/dev/null; then echo yes; else echo no; fi; printf 'AUTOSTART='; if crontab -l 2>/dev/null | grep -Fq '@reboot \"$HOME/{server_folder}/demarrer-au-redemarrage.sh\" # MONDE_ENSEMBLE_AUTO_START'; then echo yes; else echo no; fi; @NETWORK_IDENTITY@; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\" 2>/dev/null || true; printf '\\nPROFILE_END\\n'; printf 'LOG_START\\n'; tail -n 200 \"$d/serveur.log\" 2>/dev/null || true"
     );
     let command = command.replace("@NETWORK_IDENTITY@", REMOTE_NETWORK_IDENTITY_COMMAND);
     let output = run_ssh(&destination, &command)?;
@@ -4629,10 +4689,12 @@ pub fn inspect_pi_server(
             && get("READY=") == "yes"
             && get("JAVA_PORT=") == "yes"
             && get("BEDROCK_TCP=") == "yes"
-            && get("BEDROCK_PORT=") == "yes",
+            && get("BEDROCK_PORT=") == "yes"
+            && get("BEDROCK_NETHERNET=") == "yes",
         java_port_open: get("JAVA_PORT=") == "yes",
         bedrock_tcp_port_open: get("BEDROCK_TCP=") == "yes",
         bedrock_port_open: get("BEDROCK_PORT=") == "yes",
+        bedrock_nethernet_ready: get("BEDROCK_NETHERNET=") == "yes",
         autostart_configured: get("AUTOSTART=") == "yes",
         minecraft_java: profile
             .get("minecraft_java")
@@ -4698,7 +4760,7 @@ pub fn check_pi_update(
     let latest = compatibility()?;
     let destination = format!("{username}@{host}");
     let command = format!(
-        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nPROFILE_SHA256='; sha256sum \"$d/monde-ensemble-profile.json\" | cut -d' ' -f1; printf 'FILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'PAPER_SHA256='; sha256sum \"$d/paper.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_SHA256='; sha256sum \"$d/plugins/Geyser-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'FLOODGATE_SHA256='; sha256sum \"$d/plugins/Floodgate-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nGEYSER_PACKS='; if find \"$d/plugins/Geyser-Spigot/packs\" -type f -not -name '.*' -print -quit 2>/dev/null | grep -q .; then echo yes; else echo no; fi; printf 'SYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
+        "set -eu; d=\"$HOME/{server_folder}\"; test -s \"$d/monde-ensemble-profile.json\"; printf 'PROFILE_START\\n'; cat \"$d/monde-ensemble-profile.json\"; printf '\\nPROFILE_END\\nPROFILE_SHA256='; sha256sum \"$d/monde-ensemble-profile.json\" | cut -d' ' -f1; printf 'FILES_PAPER='; test -s \"$d/paper.jar\" && echo yes || echo no; printf 'FILES_GEYSER='; test -s \"$d/plugins/Geyser-Spigot.jar\" && echo yes || echo no; printf 'FILES_FLOODGATE='; test -s \"$d/plugins/Floodgate-Spigot.jar\" && echo yes || echo no; printf 'PAPER_SHA256='; sha256sum \"$d/paper.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_SHA256='; sha256sum \"$d/plugins/Geyser-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'FLOODGATE_SHA256='; sha256sum \"$d/plugins/Floodgate-Spigot.jar\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_CONFIG_SHA256='; sha256sum \"$d/plugins/Geyser-Spigot/config.yml\" 2>/dev/null | cut -d' ' -f1 || true; printf 'GEYSER_NETHERNET='; if grep -Eq '^[[:space:]]*transport:[[:space:]]*nethernet([[:space:]#]|$)' \"$d/plugins/Geyser-Spigot/config.yml\" 2>/dev/null; then echo yes; else echo no; fi; printf 'JARS_START\\n'; find \"$d/plugins\" -maxdepth 1 -type f -name '*.jar' -printf '%f\\n' 2>/dev/null | sort || true; printf 'JARS_END\\nMODS_START\\n'; find \"$d/mods\" -type f -name '*.jar' -printf '%P\\n' 2>/dev/null | sort || true; printf 'MODS_END\\nDATAPACKS_START\\n'; find \"$d/world/datapacks\" -type f -not -name '.*' -printf '%P\\n' 2>/dev/null | sort || true; printf 'DATAPACKS_END\\nGEYSER_PACKS='; if find \"$d/plugins/Geyser-Spigot/packs\" -type f -not -name '.*' -print -quit 2>/dev/null | grep -q .; then echo yes; else echo no; fi; printf 'SYMLINKS='; if find \"$d\" -type l -print -quit | grep -q .; then echo yes; else echo no; fi; printf 'RESOURCE_PACK='; sed -n 's/^resource-pack=//p' \"$d/server.properties\" | head -1"
     );
     let output = run_ssh(&destination, &command)?;
     let (_, profile_block) = output
@@ -4771,7 +4833,10 @@ pub fn check_pi_update(
     let paper_sha256 = output_field("PAPER_SHA256=");
     let geyser_sha256 = output_field("GEYSER_SHA256=");
     let floodgate_sha256 = output_field("FLOODGATE_SHA256=");
-    let update_available = current_java != latest.java_version
+    let geyser_config_sha256 = output_field("GEYSER_CONFIG_SHA256=");
+    let bedrock_transport_migration = output_field("GEYSER_NETHERNET=") != "yes";
+    let update_available = bedrock_transport_migration
+        || current_java != latest.java_version
         || current_bedrock != latest.bedrock_versions
         || current_geyser != latest_geyser
         || current_floodgate != latest_floodgate
@@ -4780,6 +4845,14 @@ pub fn check_pi_update(
         || current_floodgate_build != Some(latest.floodgate_build_id);
 
     let mut reasons = Vec::new();
+    match profile
+        .get("geyser_config_sha256")
+        .and_then(serde_json::Value::as_str)
+    {
+        Some(expected) if valid_sha256(expected) && expected == geyser_config_sha256 => {}
+        Some(_) => reasons.push("La configuration Geyser du Pi a changé depuis son enregistrement; aucune mise à jour automatique ne la remplacera.".into()),
+        None => reasons.push("La configuration Geyser de cette ancienne installation ne possède pas d’empreinte vérifiable; elle reste intacte.".into()),
+    }
     if profile
         .get("application")
         .and_then(serde_json::Value::as_str)
@@ -4876,6 +4949,7 @@ pub fn check_pi_update(
     Ok(PiUpdateCheck {
         ready: reasons.is_empty(),
         update_available,
+        bedrock_transport_migration,
         current_java,
         current_bedrock,
         current_geyser,
@@ -4991,6 +5065,26 @@ fn update_pi_server_if_ready(
         download_verified(&client, artifact, destination)?;
     }
 
+    let geyser_jar = File::open(staging.join("plugins/Geyser-Spigot.jar")).map_err(io_error)?;
+    let mut geyser_archive = zip::ZipArchive::new(geyser_jar).map_err(|error| {
+        format!("Le nouveau fichier Geyser n’est pas une archive valide : {error}")
+    })?;
+    let template = geyser_config_from_archive(&mut geyser_archive)?;
+    let bedrock_port = check
+        .profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|port| u16::try_from(port).ok())
+        .filter(|port| *port > 0)
+        .ok_or_else(|| {
+            PiUpdateFailure::Safe(
+                "Le port Bedrock du profil est invalide; le serveur actuel reste intact.".into(),
+            )
+        })?;
+    let config_path = staging.join("plugins/Geyser-Spigot/config.yml");
+    fs::create_dir_all(config_path.parent().expect("parent de config Geyser")).map_err(io_error)?;
+    fs::write(&config_path, managed_geyser_config(&template, bedrock_port)).map_err(io_error)?;
+
     let mut profile = check.profile.clone();
     record_managed_artifact_hashes(&mut profile, &staging)?;
     let object = profile.as_object_mut().ok_or_else(|| {
@@ -5010,6 +5104,11 @@ fn update_pi_server_if_ready(
         serde_json::json!(floodgate.build),
     );
     object.insert(
+        "geyser_config_sha256".into(),
+        serde_json::json!(hash_file(&config_path)?),
+    );
+    object.insert("bedrock_transport".into(), serde_json::json!("nethernet"));
+    object.insert(
         "updated_at".into(),
         serde_json::json!(Utc::now().to_rfc3339()),
     );
@@ -5024,6 +5123,7 @@ fn update_pi_server_if_ready(
         "paper.jar",
         "plugins/Geyser-Spigot.jar",
         "plugins/Floodgate-Spigot.jar",
+        "plugins/Geyser-Spigot/config.yml",
         "monde-ensemble-profile.json",
     ] {
         let checksum = hash_file(&staging.join(name))?;
@@ -5090,6 +5190,15 @@ fn update_pi_server_if_ready(
     let paper_sha256 = &check.paper_sha256;
     let geyser_sha256 = &check.geyser_sha256;
     let floodgate_sha256 = &check.floodgate_sha256;
+    let geyser_config_sha256 = check
+        .profile
+        .get("geyser_config_sha256")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            PiUpdateFailure::Safe(
+                "L’empreinte de configuration Geyser est absente; serveur inchangé.".into(),
+            )
+        })?;
     let remote_script = format!(
         r#"set -eu
 umask 077
@@ -5124,6 +5233,7 @@ test "$(sha256sum "$d/monde-ensemble-profile.json" | cut -d' ' -f1)" = "{profile
 test "$(sha256sum "$d/paper.jar" | cut -d' ' -f1)" = "{paper_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
 test "$(sha256sum "$d/plugins/Geyser-Spigot.jar" | cut -d' ' -f1)" = "{geyser_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
 test "$(sha256sum "$d/plugins/Floodgate-Spigot.jar" | cut -d' ' -f1)" = "{floodgate_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
+test "$(sha256sum "$d/plugins/Geyser-Spigot/config.yml" | cut -d' ' -f1)" = "{geyser_config_sha256}" || {{ echo 'UPDATE_SERVER_CHANGED'; rm -f "$upload"; exit 0; }}
 used="$(du -sb "$d" | awk '{{print $1}}')"
 free="$(df -Pk "$HOME" | awk 'END {{print $4 * 1024}}')"
 pkg="$(wc -c < "$upload" | tr -d ' ')"
@@ -5155,7 +5265,7 @@ start_game() {{
 wait_ready() {{
   start_lines="$1"
   for i in $(seq 1 60); do
-    if tail -n +$((start_lines + 1)) "$d/serveur.log" 2>/dev/null | grep -q 'Done (' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$' && ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$'; then return 0; fi
+    if tail -n +$((start_lines + 1)) "$d/serveur.log" 2>/dev/null | grep -q 'Done (' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](25565|25566)$' && ss -H -lnt 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$' && ss -H -lnu 2>/dev/null | awk '{{print $4}}' | grep -qE '[:.](19132|19133)$' && grep -Eq '^[[:space:]]*transport:[[:space:]]*nethernet([[:space:]#]|$)' "$d/plugins/Geyser-Spigot/config.yml"; then return 0; fi
     if ! server_process_running; then return 1; fi
     sleep 2
   done
@@ -5192,10 +5302,12 @@ rollback_on_error() {{
 cp "$work/update/paper.jar" "$d/paper.jar.new"
 cp "$work/update/plugins/Geyser-Spigot.jar" "$d/plugins/Geyser-Spigot.jar.new"
 cp "$work/update/plugins/Floodgate-Spigot.jar" "$d/plugins/Floodgate-Spigot.jar.new"
+cp "$work/update/plugins/Geyser-Spigot/config.yml" "$d/plugins/Geyser-Spigot/config.yml.new"
 cp "$work/update/monde-ensemble-profile.json" "$d/monde-ensemble-profile.json.new"
 mv -f "$d/paper.jar.new" "$d/paper.jar"
 mv -f "$d/plugins/Geyser-Spigot.jar.new" "$d/plugins/Geyser-Spigot.jar"
 mv -f "$d/plugins/Floodgate-Spigot.jar.new" "$d/plugins/Floodgate-Spigot.jar"
+mv -f "$d/plugins/Geyser-Spigot/config.yml.new" "$d/plugins/Geyser-Spigot/config.yml"
 mv -f "$d/monde-ensemble-profile.json.new" "$d/monde-ensemble-profile.json"
 chmod 600 "$d/server.properties" "$d/monde-ensemble-profile.json"
 old_lines="$(wc -l < "$d/serveur.log" 2>/dev/null || echo 0)"
@@ -5562,6 +5674,12 @@ fn build_fresh_server(
     let paper = paper_build(&client, &supported.java)?;
     let geyser = bridge_build(&client, "geyser", "spigot")?;
     let floodgate = bridge_build(&client, "floodgate", "spigot")?;
+    if geyser.build < MIN_GEYSER_NETHERNET_BUILD {
+        return Err(format!(
+            "Geyser build {} ne prend pas en charge NetherNet. Aucun serveur n’a été préparé; le catalogue doit publier un build compatible.",
+            geyser.build
+        ));
+    }
     let paper_download = paper
         .downloads
         .get("server:default")
@@ -5857,8 +5975,7 @@ fn configure_server(
             format!("Le fichier Geyser téléchargé n’est pas une archive valide : {error}")
         })?;
     let template = geyser_config_from_archive(&mut jar)?;
-    let template = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
-    let template = set_yaml(&template, "remote", "auth-type", "floodgate");
+    let template = managed_geyser_config(&template, bedrock_port);
     fs::create_dir_all(stage.join("plugins/Geyser-Spigot")).map_err(io_error)?;
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
     let geyser_config_sha256 = hash_file(&stage.join("plugins/Geyser-Spigot/config.yml"))?;
@@ -5880,6 +5997,7 @@ fn configure_server(
         "resource_profile": if compact_pi_profile { "compact-pi" } else { "standard" },
         "java_port": java_port,
         "bedrock_port": bedrock_port,
+        "bedrock_transport": "nethernet",
         "plugins": ["Geyser-Spigot", "Floodgate-Spigot"],
         "created_at": Utc::now().to_rfc3339(),
     });
@@ -5932,6 +6050,46 @@ fn set_yaml(source: &str, section: &str, key: &str, value: &str) -> String {
         lines.insert(start + 1, format!("  {key}: {value}"));
     }
     lines.join("\n") + "\n"
+}
+
+fn yaml_section_value(source: &str, section: &str, key: &str) -> Option<String> {
+    let mut in_section = false;
+    for line in source.lines() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() || trimmed.starts_with('#') {
+            continue;
+        }
+        let indented = line.starts_with([' ', '\t']);
+        if !indented {
+            in_section = trimmed
+                .split_once(':')
+                .is_some_and(|(name, _)| name == section);
+            continue;
+        }
+        if in_section {
+            let Some((name, value)) = trimmed.split_once(':') else {
+                continue;
+            };
+            if name == key {
+                let value = value.split('#').next().unwrap_or(value).trim();
+                return Some(value.trim_matches(['\'', '"']).to_string());
+            }
+        }
+    }
+    None
+}
+
+fn managed_geyser_config(template: &str, bedrock_port: u16) -> String {
+    let configured = set_yaml(template, "bedrock", "port", &bedrock_port.to_string());
+    let configured = set_yaml(&configured, "bedrock", "transport", "nethernet");
+    set_yaml(&configured, "remote", "auth-type", "floodgate")
+}
+
+fn geyser_nethernet_ready(server_dir: &Path) -> bool {
+    fs::read_to_string(server_dir.join("plugins/Geyser-Spigot/config.yml"))
+        .ok()
+        .and_then(|config| yaml_section_value(&config, "bedrock", "transport"))
+        .is_some_and(|transport| transport.eq_ignore_ascii_case("nethernet"))
 }
 
 fn write_launch_files(
@@ -6503,7 +6661,7 @@ pub fn restore_backup(
     let restored_root = staging.join("server");
     let profile_path = restored_root.join("monde-ensemble-profile.json");
     if profile_path.is_file() {
-        let profile: serde_json::Value =
+        let mut profile: serde_json::Value =
             serde_json::from_slice(&fs::read(&profile_path).map_err(io_error)?)
                 .map_err(|_| "Le profil contenu dans la sauvegarde est illisible.".to_string())?;
         if profile
@@ -6545,6 +6703,7 @@ pub fn restore_backup(
             }
             fs::rename(&portable_runtime, &original_runtime).map_err(io_error)?;
             write_launch_files(&restored_root, heap_mb, false, java_port, bedrock_port)?;
+            migrate_restored_geyser_config(&restored_root, &mut profile)?;
             set_private_file_permissions(&restored_root.join("server.properties"))?;
             set_private_file_permissions(&profile_path)?;
         }
@@ -6748,6 +6907,7 @@ pub fn restore_pi_backup(
     fs::rename(&portable_runtime, &original_runtime).map_err(io_error)?;
     let profile_file = fs::read(&profile_path).map_err(io_error)?;
     let mut profile: serde_json::Value = serde_json::from_slice(&profile_file).map_err(io_error)?;
+    migrate_restored_geyser_config(&restored_root, &mut profile)?;
     let object = profile
         .as_object_mut()
         .ok_or_else(|| "Le profil du serveur est invalide.".to_string())?;
@@ -7354,8 +7514,7 @@ fn hash_file_sha512(path: &Path) -> Option<String> {
 /// Current Geyser plugin JARs can omit `config.yml`: Geyser supplies the rest
 /// of its configuration from annotated defaults when it loads this file.
 /// Keep only the settings needed for the managed Java/Bedrock bridge here.
-const GEYSER_CONFIG_FALLBACK: &str =
-    "bedrock:\n  port: 19132\nremote:\n  address: auto\n  auth-type: online\n";
+const GEYSER_CONFIG_FALLBACK: &str = "bedrock:\n  port: 19132\n  transport: nethernet\nremote:\n  address: auto\n  auth-type: online\n";
 
 fn geyser_config_from_archive<R: Read + Seek>(
     archive: &mut zip::ZipArchive<R>,
@@ -7376,12 +7535,13 @@ fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value)
     let Some(actual_hash) = hash_regular_file(&config_path) else {
         return false;
     };
-    if let Some(expected) = profile
+    if profile
         .get("geyser_config_sha256")
         .and_then(serde_json::Value::as_str)
         .filter(|digest| valid_sha256(digest))
+        .is_some_and(|expected| actual_hash != expected)
     {
-        return actual_hash == expected;
+        return false;
     }
 
     // Older managed profiles did not record a config digest. Compare their
@@ -7407,9 +7567,85 @@ fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value)
     let Ok(template) = geyser_config_from_archive(&mut archive) else {
         return false;
     };
-    let template = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
-    let template = set_yaml(&template, "remote", "auth-type", "floodgate");
-    format!("{:x}", Sha256::digest(template.as_bytes())) == actual_hash
+    let modern = managed_geyser_config(&template, bedrock_port);
+    if format!("{:x}", Sha256::digest(modern.as_bytes())) == actual_hash {
+        return true;
+    }
+
+    // Older managed profiles used the same official template without an
+    // explicit transport. Recognize that exact default so an update can
+    // migrate it transactionally instead of making the user edit YAML.
+    let legacy = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
+    let legacy = set_yaml(&legacy, "remote", "auth-type", "floodgate");
+    format!("{:x}", Sha256::digest(legacy.as_bytes())) == actual_hash
+}
+
+/// Migrates only an exact application-managed Geyser default during restore.
+/// Customized or unverifiable configurations are preserved byte-for-byte.
+fn migrate_restored_geyser_config(
+    server_dir: &Path,
+    profile: &mut serde_json::Value,
+) -> Result<bool, String> {
+    if profile
+        .get("application")
+        .and_then(serde_json::Value::as_str)
+        != Some("Monde Ensemble")
+        || geyser_nethernet_ready(server_dir)
+    {
+        return Ok(false);
+    }
+    let port = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .and_then(|value| u16::try_from(value).ok())
+        .filter(|value| *value > 0)
+        .ok_or_else(|| {
+            "Le port Bedrock de la sauvegarde est invalide; sa configuration reste inchangée."
+                .to_string()
+        })?;
+    let config_path = server_dir.join("plugins/Geyser-Spigot/config.yml");
+    let Some(actual_hash) = hash_regular_file(&config_path) else {
+        return Ok(false);
+    };
+    if profile
+        .get("geyser_config_sha256")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|expected| expected != actual_hash)
+    {
+        return Ok(false);
+    }
+
+    let jar = File::open(server_dir.join("plugins/Geyser-Spigot.jar")).map_err(io_error)?;
+    let mut archive = zip::ZipArchive::new(jar)
+        .map_err(|error| format!("Le fichier Geyser de la sauvegarde est illisible : {error}"))?;
+    let template = geyser_config_from_archive(&mut archive)?;
+    // An unchanged hash is not sufficient evidence that the file is the
+    // standard template: require the exact prior app-generated configuration
+    // before replacing it. Custom or unfamiliar YAML stays untouched.
+    let legacy = set_yaml(&template, "bedrock", "port", &port.to_string());
+    let legacy = set_yaml(&legacy, "remote", "auth-type", "floodgate");
+    if format!("{:x}", Sha256::digest(legacy.as_bytes())) != actual_hash {
+        return Ok(false);
+    }
+    let config = managed_geyser_config(&template, port);
+    if let Some(parent) = config_path.parent() {
+        fs::create_dir_all(parent).map_err(io_error)?;
+    }
+    fs::write(&config_path, config).map_err(io_error)?;
+    let object = profile
+        .as_object_mut()
+        .ok_or_else(|| "Le profil de la sauvegarde est invalide.".to_string())?;
+    object.insert(
+        "geyser_config_sha256".into(),
+        serde_json::json!(hash_file(&config_path)?),
+    );
+    object.insert("bedrock_transport".into(), serde_json::json!("nethernet"));
+    fs::write(
+        server_dir.join("monde-ensemble-profile.json"),
+        serde_json::to_vec_pretty(profile).map_err(|error| error.to_string())?,
+    )
+    .map_err(io_error)?;
+    Ok(true)
 }
 
 fn prepare_root(root: &Path) -> Result<PathBuf, String> {

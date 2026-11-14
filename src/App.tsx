@@ -30,6 +30,7 @@ type CompatibilityReport = {
 type PiUpdateCheck = {
   ready: boolean;
   update_available: boolean;
+  bedrock_transport_migration: boolean;
   current_java: string;
   current_bedrock: string;
   current_geyser: string;
@@ -122,6 +123,7 @@ type LocalServerStatus = {
   bedrock_port: number;
   bedrock_tcp_port_open: boolean;
   bedrock_udp_port_open: boolean;
+  bedrock_nethernet_ready: boolean;
   address: string;
   players: string;
   log: string;
@@ -154,6 +156,7 @@ type PiServerStatus = {
   java_port_open: boolean;
   bedrock_tcp_port_open: boolean;
   bedrock_port_open: boolean;
+  bedrock_nethernet_ready: boolean;
   autostart_configured: boolean;
   minecraft_java: string;
   minecraft_bedrock: string;
@@ -3442,6 +3445,12 @@ function Home({
                 ? "· ouvert"
                 : "· fermé"}
             </span>
+            <span className={localServerStatus?.bedrock_nethernet_ready ? "ok" : ""}>
+              Geyser NetherNet{" "}
+              {localServerStatus?.bedrock_nethernet_ready
+                ? "· prêt"
+                : "· à corriger"}
+            </span>
           </div>
           <ExternalAccessGuide
             address={localServerStatus?.address || ""}
@@ -3476,6 +3485,13 @@ function Home({
                 Installé : Java {localUpdateCheck.current_java} · Bedrock{" "}
                 {localUpdateCheck.current_bedrock}
               </span>
+              {localUpdateCheck.bedrock_transport_migration && (
+                <span>
+                  Geyser doit être migré vers NetherNet pour les clients Bedrock
+                  récents. Cette correction sera incluse dans la sauvegarde et
+                  la mise à jour coordonnées.
+                </span>
+              )}
               {localUpdateCheck.ready && localUpdateCheck.update_available && (
                 <span>
                   Disponible : Java {localUpdateCheck.latest_java} · Bedrock{" "}
@@ -3793,6 +3809,12 @@ function Home({
                 ? "· disponible"
                 : "· non vérifié"}
             </span>
+            <span className={piServerStatus?.bedrock_nethernet_ready ? "ok" : ""}>
+              Geyser NetherNet{" "}
+              {piServerStatus?.bedrock_nethernet_ready
+                ? "· prêt"
+                : "· à corriger"}
+            </span>
             <span className={piServerStatus?.autostart_configured ? "ok" : ""}>
               Après redémarrage{" "}
               {piServerStatus?.autostart_configured
@@ -3881,6 +3903,13 @@ function Home({
                     actuelles : Geyser {piUpdateCheck.latest_geyser} / Floodgate{" "}
                     {piUpdateCheck.latest_floodgate}.
                   </p>
+                  {piUpdateCheck.bedrock_transport_migration && (
+                    <p>
+                      Geyser doit être migré vers NetherNet pour Bedrock récent.
+                      L’application inclura ce réglage dans la sauvegarde et la
+                      mise à jour coordonnées.
+                    </p>
+                  )}
                   {piUpdateCheck.reasons.length > 0 && (
                     <ul>
                       {piUpdateCheck.reasons.map((reason) => (
@@ -4467,21 +4496,20 @@ function Compatibility({
         <div>
           <div className="eyebrow">ERREUR TERRACOTTA · IPAD</div>
           <strong>Bedrock 1.26.62 · InitialConnection-149</strong>
-          <p>Essaie dans cet ordre :</p>
+          <p>
+            L’application configure le pont Bedrock sur ton serveur et contrôle
+            NetherNet automatiquement. Tu n’as pas à ajouter un serveur de test
+            dans Minecraft.
+          </p>
           <ol>
             <li>
-              Sur le même Wi-Fi que le serveur, utilise l’adresse et le port
-              Bedrock affichés dans le tableau de bord; évite le réseau invité.
+              Sur le tableau de bord, vérifie « Geyser NetherNet », « Signal
+              Bedrock TCP » et « Jeu Bedrock UDP ».
             </li>
             <li>
-              Si cela marche à la maison mais pas à l’extérieur, le routeur doit
-              laisser passer le port Bedrock en TCP et UDP. L’application ne
-              modifie pas le routeur.
-            </li>
-            <li>
-              Si cela échoue aussi à la maison, vérifie « Signal Bedrock TCP »
-              et « Jeu Bedrock UDP » dans le tableau, puis ouvre ou exporte le
-              journal du serveur.
+              S’ils sont tous prêts et que l’iPad reçoit encore cette erreur,
+              ne modifie ni le monde ni la liste blanche : l’erreur peut venir
+              de cette version de Minecraft Bedrock.
             </li>
           </ol>
           <small>
@@ -4495,11 +4523,9 @@ function Compatibility({
               : terracottaClientSupported === false
                 ? "La plage annoncée par le catalogue actuel ne comprend pas la version 1.26.62 de ta capture. Cette passerelle ne peut donc pas encore confirmer sa compatibilité."
                 : "La plage du catalogue n’a pas pu être comparée à la version 1.26.62 de ta capture."}{" "}
-            Dans « Mon monde », vérifie le build Geyser installé et les états «
-            Signal Bedrock TCP » et « Jeu Bedrock UDP ». Si les deux sont au
-            vert sur le même Wi-Fi mais que l’erreur persiste, exporte le
-            journal pour le diagnostic. Cette erreur, à elle seule, ne signifie
-            pas que le monde est abîmé.
+            Le build Geyser, NetherNet et les deux ports sont vérifiés par
+            l’application à chaque installation et mise à jour coordonnées.
+            Cette erreur ne signifie pas que le monde est abîmé.
           </p>
         </div>
       </div>

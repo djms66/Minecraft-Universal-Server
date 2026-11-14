@@ -40,6 +40,7 @@ const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
 const GEYSER_PLUGIN_JAR: &str = "Geyser-Spigot.jar";
 const FLOODGATE_PLUGIN_JAR: &str = "Floodgate-Spigot.jar";
+const PAPER_READY_LOG_PATTERN: &str = r"INFO\]: Done \(";
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 const REMOTE_SERVER_ARTIFACT_CHECK: &str = "for f in paper.jar plugins/Geyser-Spigot.jar plugins/Floodgate-Spigot.jar; do if [ ! -s \"$f\" ]; then printf 'Fichier requis absent ou vide : %s\\n' \"$f\" >&2; exit 42; fi; done;";
 static APP_DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
@@ -4362,15 +4363,18 @@ pub fn install_remote_pi(
     run_ssh(&destination, &prepare_command).map_err(|error| {
         format!("Les fichiers ont été transférés, mais leur préparation a échoué dans ~/Monde-Ensemble-{id}/server. Rien n’a été écrit dans les autres dossiers du Pi. Détail : {error}")
     })?;
+    // A Pi 3B+ can take more than seven minutes on its first world generation
+    // and Geyser bootstrap. Keep polling long enough for that real startup,
+    // while still bounding a genuinely failed launch.
     let startup_attempts = if heap_mb <= COMPACT_PI_HEAP_MB {
-        90
+        360
     } else {
-        30
+        180
     };
     let mut started = false;
     for attempt in 0..startup_attempts {
         let check_command = format!(
-            "cd \"$HOME/Monde-Ensemble-{id}/server\"; if grep -q 'Done (' serveur.log; then echo READY; elif kill -0 \"$(cat serveur.pid)\" 2>/dev/null; then echo STARTING; else tail -n 60 serveur.log; exit 3; fi"
+            "cd \"$HOME/Monde-Ensemble-{id}/server\"; if grep -Eq '{PAPER_READY_LOG_PATTERN}' serveur.log; then echo READY; elif kill -0 \"$(cat serveur.pid)\" 2>/dev/null; then echo STARTING; else tail -n 60 serveur.log; exit 3; fi"
         );
         let status = run_ssh(&destination, &check_command).map_err(|error| {
             format!("Le serveur a été installé, mais n’a pas confirmé son démarrage. Les détails sont dans `~/Monde-Ensemble-{id}/server/serveur.log` sur le Pi. {error}")
@@ -4381,7 +4385,7 @@ pub fn install_remote_pi(
         }
         progress(
             "Le Pi démarre Minecraft pour la première fois…",
-            92 + (attempt / 15) as u8,
+            92 + ((attempt * 7) / startup_attempts) as u8,
         );
         std::thread::sleep(Duration::from_secs(2));
     }
@@ -7449,10 +7453,10 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GEYSER_CONFIG_FALLBACK, GameSettings, LocalStartResult, REMOTE_SERVER_ARTIFACT_CHECK,
-        RaspberryPiOsEntry, RemoveDirOnDrop, add_identity_file, apply_game_settings,
-        artifact_hash_matches, copy_verified_pack, geyser_config_from_archive, hash_file,
-        inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
+        GEYSER_CONFIG_FALLBACK, GameSettings, LocalStartResult, PAPER_READY_LOG_PATTERN,
+        REMOTE_SERVER_ARTIFACT_CHECK, RaspberryPiOsEntry, RemoveDirOnDrop, add_identity_file,
+        apply_game_settings, artifact_hash_matches, copy_verified_pack, geyser_config_from_archive,
+        hash_file, inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
         parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
         restore_backup, safe_archive_path, safe_version, shell_single_quote, ssh_failure_message,
         start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
@@ -7509,6 +7513,15 @@ mod tests {
         let canonical = directory.join("canonical.tar.gz");
         create_archive(&canonical, "server/plugins/Floodgate-Spigot.jar");
         assert!(validate_pi_server_package(&canonical).is_ok());
+    }
+
+    #[test]
+    fn pi_startup_waits_for_paper_done_not_geyser_done() {
+        let ready = regex::Regex::new(PAPER_READY_LOG_PATTERN).unwrap();
+        assert!(ready.is_match("[20:10:29 INFO]: Done (431.901s)! For help, type help"));
+        assert!(!ready.is_match(
+            "[20:10:20 INFO]: [Geyser-Spigot] Done (134.21s)! Run /geyser help for help"
+        ));
     }
 
     #[test]

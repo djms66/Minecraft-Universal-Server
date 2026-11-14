@@ -657,7 +657,7 @@ fn run_imager(
         }
     }
     let mut child = match std::env::consts::OS {
-        "macos" => spawn_macos_elevated(tool, args)?,
+        "macos" => spawn_macos_imager(tool, args)?,
         "windows" => spawn_windows_elevated(tool, args)?,
         "linux" => spawn_linux_elevated(tool, args)?,
         _ => return Err("L’écriture sécurisée n’est pas disponible sur ce système.".into()),
@@ -821,25 +821,19 @@ fn write_redacted(input: &[u8], redactions: &[Vec<u8>], log: &Arc<Mutex<File>>) 
     file.write_all(&output)
 }
 
-fn spawn_macos_elevated(tool: &MountedImager, args: &[String]) -> Result<Child, String> {
-    let command = format!(
-        "{} {}",
-        shell_quote(&tool.executable.display().to_string()),
-        args.iter()
-            .map(|arg| shell_quote(arg))
-            .collect::<Vec<_>>()
-            .join(" ")
-    );
-    let script = format!(
-        "do shell script {} with administrator privileges",
-        applescript_quote(&command)
-    );
-    Command::new("osascript")
-        .args(["-e", &script])
+/// Runs Imager as the signed-in user on macOS. Imager opens removable media
+/// through macOS authorization itself; wrapping the whole process in
+/// AppleScript elevation can stall device setup and buffers output until exit.
+fn spawn_macos_imager(tool: &MountedImager, args: &[String]) -> Result<Child, String> {
+    Command::new(&tool.executable)
+        .args(args)
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|_| "macOS n’a pas pu demander l’autorisation nécessaire à l’écriture.".into())
+        .map_err(|_| {
+            "macOS n’a pas pu démarrer Raspberry Pi Imager. Aucun support n’a été modifié.".into()
+        })
 }
 
 fn spawn_windows_elevated(tool: &MountedImager, args: &[String]) -> Result<Child, String> {
@@ -1042,10 +1036,6 @@ fn sha256_file(path: &Path) -> Option<String> {
 
 fn shell_quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\"'\"'"))
-}
-
-fn applescript_quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""))
 }
 
 fn powershell_quote(value: &str) -> String {

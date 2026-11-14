@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256, Sha512};
 use std::{
     collections::HashSet,
     fs::{self, File, OpenOptions},
-    io::{self, Read, Write},
+    io::{self, Read, Seek, Write},
     net::{TcpListener, TcpStream, UdpSocket},
     path::{Component, Path, PathBuf},
     process::{Command, Stdio},
@@ -5831,13 +5831,8 @@ fn configure_server(
         zip::ZipArchive::new(File::open(geyser_jar).map_err(io_error)?).map_err(|error| {
             format!("Le fichier Geyser téléchargé n’est pas une archive valide : {error}")
         })?;
-    let mut template = String::new();
-    jar.by_name("config.yml")
-        .map_err(|_| "Le modèle officiel de configuration Geyser est absent.".to_string())?
-        .read_to_string(&mut template)
-        .map_err(io_error)?;
+    let template = geyser_config_from_archive(&mut jar)?;
     let template = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
-    let template = set_yaml(&template, "bedrock", "transport", "nethernet");
     let template = set_yaml(&template, "remote", "auth-type", "floodgate");
     fs::create_dir_all(stage.join("plugins/Geyser-Spigot")).map_err(io_error)?;
     fs::write(stage.join("plugins/Geyser-Spigot/config.yml"), template).map_err(io_error)?;
@@ -7297,6 +7292,26 @@ fn hash_file_sha512(path: &Path) -> Option<String> {
     Some(format!("{:x}", hasher.finalize()))
 }
 
+/// Current Geyser plugin JARs can omit `config.yml`: Geyser supplies the rest
+/// of its configuration from annotated defaults when it loads this file.
+/// Keep only the settings needed for the managed Java/Bedrock bridge here.
+const GEYSER_CONFIG_FALLBACK: &str =
+    "bedrock:\n  port: 19132\nremote:\n  address: auto\n  auth-type: online\n";
+
+fn geyser_config_from_archive<R: Read + Seek>(
+    archive: &mut zip::ZipArchive<R>,
+) -> Result<String, String> {
+    match archive.by_name("config.yml") {
+        Ok(mut entry) => {
+            let mut template = String::new();
+            entry.read_to_string(&mut template).map_err(io_error)?;
+            Ok(template)
+        }
+        Err(zip::result::ZipError::FileNotFound) => Ok(GEYSER_CONFIG_FALLBACK.to_string()),
+        Err(error) => Err(format!("Impossible de lire le modèle Geyser : {error}")),
+    }
+}
+
 fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value) -> bool {
     let config_path = server_dir.join("plugins/Geyser-Spigot/config.yml");
     let Some(actual_hash) = hash_regular_file(&config_path) else {
@@ -7330,15 +7345,10 @@ fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value)
     let Ok(mut archive) = zip::ZipArchive::new(file) else {
         return false;
     };
-    let Ok(mut entry) = archive.by_name("config.yml") else {
+    let Ok(template) = geyser_config_from_archive(&mut archive) else {
         return false;
     };
-    let mut template = String::new();
-    if entry.read_to_string(&mut template).is_err() {
-        return false;
-    }
     let template = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
-    let template = set_yaml(&template, "bedrock", "transport", "nethernet");
     let template = set_yaml(&template, "remote", "auth-type", "floodgate");
     format!("{:x}", Sha256::digest(template.as_bytes())) == actual_hash
 }
@@ -7388,11 +7398,12 @@ fn io_error(error: impl std::fmt::Display) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        GameSettings, LocalStartResult, RaspberryPiOsEntry, RemoveDirOnDrop, add_identity_file,
-        apply_game_settings, artifact_hash_matches, copy_verified_pack, hash_file,
-        inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
-        parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
-        restore_backup, safe_archive_path, safe_version, shell_single_quote,
+        GEYSER_CONFIG_FALLBACK, GameSettings, LocalStartResult, RaspberryPiOsEntry,
+        RemoveDirOnDrop, add_identity_file, apply_game_settings, artifact_hash_matches,
+        copy_verified_pack, geyser_config_from_archive, hash_file, inspect_bedrock_resource_pack,
+        java_major_for, latest_supported_pi_image, parse_game_settings,
+        parse_supported_versions_page, record_managed_artifact_hashes, restore_backup,
+        safe_archive_path, safe_version, shell_single_quote,
         start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
         valid_plugin_filename, valid_sha256, validate_game_settings,
     };
@@ -7407,6 +7418,45 @@ mod tests {
         ));
         fs::create_dir_all(&path).unwrap();
         (path.clone(), RemoveDirOnDrop(path))
+    }
+
+    #[test]
+    fn geyser_config_uses_managed_defaults_when_jar_has_no_template() {
+        let (directory, _cleanup) = test_directory();
+        let jar_path = directory.join("geyser.jar");
+        zip::ZipWriter::new(File::create(&jar_path).unwrap())
+            .finish()
+            .unwrap();
+
+        let file = File::open(jar_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        let template = geyser_config_from_archive(&mut archive).unwrap();
+        let configured = super::set_yaml(&template, "bedrock", "port", "19133");
+        let configured = super::set_yaml(&configured, "remote", "auth-type", "floodgate");
+
+        assert_eq!(template, GEYSER_CONFIG_FALLBACK);
+        assert!(configured.contains("  port: 19133"));
+        assert!(configured.contains("  address: auto"));
+        assert!(configured.contains("  auth-type: floodgate"));
+    }
+
+    #[test]
+    fn geyser_config_keeps_template_when_jar_contains_one() {
+        let (directory, _cleanup) = test_directory();
+        let jar_path = directory.join("geyser.jar");
+        let mut writer = zip::ZipWriter::new(File::create(&jar_path).unwrap());
+        writer
+            .start_file("config.yml", zip::write::SimpleFileOptions::default())
+            .unwrap();
+        writer.write_all(b"bedrock:\n  port: 19132\n").unwrap();
+        writer.finish().unwrap();
+
+        let file = File::open(jar_path).unwrap();
+        let mut archive = zip::ZipArchive::new(file).unwrap();
+        assert_eq!(
+            geyser_config_from_archive(&mut archive).unwrap(),
+            "bedrock:\n  port: 19132\n"
+        );
     }
 
     fn write_gzip_tar_entry(path: &Path, entry_path: &str, contents: &[u8]) {

@@ -216,6 +216,7 @@ function App() {
   const [advanced, setAdvanced] = useState(false);
   const [showExistingPiFlow, setShowExistingPiFlow] = useState(false);
   const [justInstalled, setJustInstalled] = useState(false);
+  const [installNotice, setInstallNotice] = useState("");
   const piCardWriteStarted = useRef(false);
   const [system, setSystem] = useState<SystemInfo | null>(null);
   const [systemError, setSystemError] = useState("");
@@ -434,6 +435,7 @@ function App() {
 
   const createServer = async () => {
     resetOperation();
+    setInstallNotice("");
     setBusy(true);
     try {
       const result = await invoke<OperationResult>("create_server", {
@@ -444,18 +446,24 @@ function App() {
       });
       setOperationResult(result);
       setLocalInstallation({ serverPath: result.path });
+      let serverReady = false;
       try {
-        setLocalServerStatus(
-          await invoke<LocalServerStatus>("inspect_local_server", {
-            serverPath: result.path,
-          }),
-        );
+        const status = await invoke<LocalServerStatus>("inspect_local_server", {
+          serverPath: result.path,
+        });
+        setLocalServerStatus(status);
+        serverReady = status.ready;
         setLocalStatusError("");
       } catch (error) {
         setLocalStatusError(String(error));
       }
       setPage("home");
       setJustInstalled(true);
+      setInstallNotice(
+        serverReady
+          ? "Installation terminée : le serveur est prêt."
+          : "Installation terminée : consulte le résumé pour vérifier le démarrage du serveur.",
+      );
     } catch (error) {
       setOperationError(String(error));
     } finally {
@@ -796,6 +804,7 @@ function App() {
 
   const installPiAt = async (host: string, username: string) => {
     resetOperation();
+    setInstallNotice("");
     setBusy(true);
     try {
       const result = await invoke<OperationResult>("install_pi", {
@@ -818,6 +827,7 @@ function App() {
         };
         setPiInstallation(installation);
         setPiFlashResult(null);
+        let serverReady = false;
         try {
           const status = await invoke<PiServerStatus>("inspect_pi_server", {
             host: installation.host,
@@ -825,6 +835,7 @@ function App() {
             serverFolder: installation.serverFolder,
           });
           setPiServerStatus(status);
+          serverReady = status.ready;
           setPiStatusError("");
         } catch (error) {
           setPiStatusError(
@@ -833,6 +844,11 @@ function App() {
         }
         setPage("home");
         setJustInstalled(true);
+        setInstallNotice(
+          serverReady
+            ? "Installation terminée : le serveur est prêt."
+            : "Installation terminée : consulte le résumé pour vérifier le démarrage du serveur.",
+        );
       }
     } catch (error) {
       setOperationError(String(error));
@@ -1660,6 +1676,19 @@ function App() {
             </div>
           </div>
         </header>
+        {installNotice && (
+          <div className="install-notice" role="status" aria-live="assertive">
+            <span aria-hidden="true">✓</span>
+            <strong>{installNotice}</strong>
+            <button
+              type="button"
+              aria-label="Fermer le message d’installation terminée"
+              onClick={() => setInstallNotice("")}
+            >
+              Fermer
+            </button>
+          </div>
+        )}
         <section className="page-wrap">
           <div className="page-heading">
             <div>
@@ -3221,6 +3250,8 @@ function Home({
       <section
         className="install-finish"
         aria-labelledby="install-finish-title"
+        role="status"
+        aria-live="assertive"
       >
         <div className="install-finish-mark" aria-hidden="true">
           {ready ? "✓" : "…"}
@@ -4011,7 +4042,9 @@ function Home({
                   : "Liste inactive"
                 : piServerStatus?.running
                   ? "À vérifier"
-                  : "Serveur à démarrer"}
+                  : piStatusError
+                    ? "Pi inaccessible"
+                    : "Serveur à démarrer"}
             </span>
           </div>
           {piWhitelistStatus ? (
@@ -4097,7 +4130,9 @@ function Home({
             <>
               <p className="player-tools-note">
                 {piPlayerError ||
-                  (piServerStatus?.running
+                  (piStatusError
+                    ? "L’application ne joint pas le Pi. Vérifie qu’il est allumé et sur le même réseau, puis actualise l’état avant de gérer la whitelist."
+                    : piServerStatus?.running
                     ? "La liste sera disponible après vérification du contrôle sécurisé."
                     : "Démarre le serveur pour gérer la liste des joueurs.")}
               </p>

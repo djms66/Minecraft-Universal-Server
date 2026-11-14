@@ -3197,7 +3197,9 @@ pub fn prepare_pi_whitelist_migration(
     username: &str,
     server_folder: &str,
 ) -> Result<String, String> {
-    if !valid_remote_name(host) || !valid_remote_name(username) || !valid_remote_name(server_folder)
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
     {
         return Err("Adresse ou dossier du serveur Pi invalide.".into());
     }
@@ -3361,7 +3363,9 @@ fn read_pi_management_state(
     username: &str,
     server_folder: &str,
 ) -> Result<(String, serde_json::Value, String), String> {
-    if !valid_remote_name(host) || !valid_remote_name(username) || !valid_remote_name(server_folder)
+    if !valid_remote_name(host)
+        || !valid_remote_name(username)
+        || !valid_server_folder(server_folder)
     {
         return Err("Adresse ou dossier du serveur Pi invalide.".into());
     }
@@ -7460,7 +7464,8 @@ mod tests {
         parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
         restore_backup, safe_archive_path, safe_version, shell_single_quote, ssh_failure_message,
         start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
-        valid_plugin_filename, valid_sha256, validate_game_settings, validate_pi_server_package,
+        valid_plugin_filename, valid_server_folder, valid_sha256, validate_game_settings,
+        validate_pi_server_package,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, io::Write, path::Path, process::Command};
@@ -7481,6 +7486,18 @@ mod tests {
         assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("plugins/Geyser-Spigot.jar"));
         assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("plugins/Floodgate-Spigot.jar"));
         assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("Fichier requis absent ou vide"));
+    }
+
+    #[test]
+    fn pi_whitelist_accepts_managed_server_folder_and_rejects_paths_outside_it() {
+        assert!(valid_server_folder(
+            "Monde-Ensemble-693799448ac94df8bdffc62de817f362/server"
+        ));
+        assert!(!valid_server_folder("../server"));
+        assert!(!valid_server_folder(
+            "Monde-Ensemble-abc/server/../../other"
+        ));
+        assert!(!valid_server_folder("server"));
     }
 
     #[test]

@@ -1,6 +1,6 @@
 [package]
 name = "monde-ensemble"
-version = "0.18.47"
+version = "0.18.48"
 description = "Un guide sûr pour les serveurs Minecraft multiplateformes"
 authors = ["Daniel Streng"]
 edition = "2024"

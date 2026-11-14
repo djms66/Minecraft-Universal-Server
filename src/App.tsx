@@ -2151,6 +2151,25 @@ function App() {
                             Le Mac ne sert qu’à préparer la carte et piloter
                             l’installation.
                           </p>
+                          <label className="eula-choice">
+                            <input
+                              type="checkbox"
+                              checked={piEulaAccepted}
+                              onChange={(event) =>
+                                setPiEulaAccepted(event.target.checked)
+                              }
+                            />
+                            <span>
+                              J’accepte le contrat de licence Minecraft pour ce
+                              serveur.
+                            </span>
+                          </label>
+                          {!piEulaAccepted && (
+                            <small className="pi-eula-hint">
+                              Coche cette case pour autoriser l’installation du
+                              serveur Minecraft.
+                            </small>
+                          )}
                           <button
                             className="button primary"
                             onClick={finishNewPi}

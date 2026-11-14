@@ -382,7 +382,7 @@ button {
 }
 .button:disabled {
   opacity: 0.5;
-  cursor: wait;
+  cursor: not-allowed;
 }
 .text-button {
   border: 0;
@@ -1641,6 +1641,10 @@ button {
 .pi-flash-success small {
   font-size: 8px;
   opacity: 0.8;
+}
+.pi-flash-success .pi-eula-hint {
+  font-size: 9px;
+  opacity: 1;
 }
 .error-text {
   font-size: 10px;

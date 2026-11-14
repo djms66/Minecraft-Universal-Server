@@ -283,7 +283,7 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
     let mut built_in_card_seen = false;
     let mut built_in_card_mapped = false;
     if let Ok(output) = Command::new("/usr/sbin/system_profiler")
-        .args(["SPCardReaderDataType", "-json"])
+        .args(["-detailLevel", "full", "SPCardReaderDataType", "-json"])
         .output()
     {
         if output.status.success() {

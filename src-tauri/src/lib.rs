@@ -197,6 +197,9 @@ async fn prepare_pi_sd(
             &target_device,
             &image_url,
             &image_sha256,
+            current_recommendation.download_sha256.as_deref().ok_or_else(|| {
+                "Le catalogue Raspberry Pi n’a pas fourni l’empreinte du téléchargement. La carte n’a pas été modifiée.".to_string()
+            })?,
             &wifi_ssid,
             &wifi_password,
             &wifi_country,
@@ -205,6 +208,20 @@ async fn prepare_pi_sd(
                     step: step.to_string(),
                     percent,
                 });
+            },
+            || {
+                let targets = discover_pi_boot_targets()?;
+                if targets.len() != 1
+                    || !targets.iter().any(|target| {
+                        target.id == target_id
+                            && target.name == target_name
+                            && target.size_bytes == target_size_bytes
+                            && target.size_bytes >= required_bytes
+                    })
+                {
+                    return Err("Le support a changé pendant le téléchargement. Aucun support n’a été modifié; relance la détection avant de continuer.".to_string());
+                }
+                Ok(())
             },
         )
     })

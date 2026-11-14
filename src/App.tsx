@@ -352,14 +352,12 @@ function App() {
     channel.onmessage = (message) => {
       const macOsWriteWait =
         system?.os === "macos" &&
-        message.step.startsWith(
-          "Téléchargement, écriture puis vérification de la carte",
-        );
+        message.step.startsWith("Écriture et vérification de la carte");
       setOperationProgress(
         macOsWriteWait
           ? {
               ...message,
-              step: "Téléchargement, écriture et vérification en cours. Ne retire pas la carte.",
+              step: "Image prête. Écriture et vérification en cours. Ne retire pas la carte.",
               indeterminate: true,
             }
           : message,
@@ -721,7 +719,7 @@ function App() {
       setPiWifiPassword("");
     } catch (error) {
       setOperationError(String(error));
-      setPiWifiPassword("");
+      setOperationProgress(null);
     } finally {
       setBusy(false);
       piCardWriteStarted.current = false;

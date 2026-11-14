@@ -8,7 +8,7 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
-    io::{self, Read},
+    io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},
@@ -99,15 +99,42 @@ pub fn flash_pi_os(
     target_device: &str,
     image_url: &str,
     image_sha256: &str,
+    download_sha256: &str,
     wifi_ssid: &str,
     wifi_password: &str,
     wifi_country: &str,
     progress: impl Fn(&str, u8),
+    verify_target: impl Fn() -> Result<(), String>,
 ) -> Result<PiFlashResult, String> {
-    if !image_url.starts_with("https://downloads.raspberrypi.com/") || !valid_sha256(image_sha256) {
+    if !image_url.starts_with("https://downloads.raspberrypi.com/")
+        || !valid_sha256(image_sha256)
+        || !valid_sha256(download_sha256)
+    {
         return Err("Le catalogue Raspberry Pi n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
     }
     validate_wifi(wifi_ssid, wifi_password, wifi_country)?;
+
+    progress("Préparation de l’outil officiel d’écriture…", 8);
+    let tool = ensure_imager(app_data, &progress)?;
+    let version_check = Command::new(&tool.executable)
+        .args(["--cli", "--version"])
+        .output()
+        .map_err(|_| {
+            "L’outil officiel Raspberry Pi Imager ne peut pas démarrer sur cet appareil."
+                .to_string()
+        })?;
+    if !version_check.status.success()
+        || !String::from_utf8_lossy(&version_check.stdout).contains(IMAGER_VERSION)
+            && !String::from_utf8_lossy(&version_check.stderr).contains(IMAGER_VERSION)
+    {
+        return Err("La version de l’outil officiel Raspberry Pi Imager n’est pas celle qui a été vérifiée. Aucun support n’a été modifié.".into());
+    }
+
+    let image_path = download_pi_image(app_data, image_url, download_sha256, &progress)?;
+    // Downloading can take several minutes. Recheck the exact removable disk
+    // after it finishes and immediately before the official writer opens it.
+    verify_target()?;
+
     let ssh_key = ensure_ssh_public_key(app_data)?;
 
     let run_id = uuid::Uuid::new_v4().simple().to_string();
@@ -132,27 +159,11 @@ pub fn flash_pi_os(
         .open(&log_path)
         .map_err(io_error)?;
 
-    progress("Préparation de l’outil officiel d’écriture…", 8);
-    let tool = ensure_imager(app_data, &progress)?;
-    let version_check = Command::new(&tool.executable)
-        .args(["--cli", "--version"])
-        .output()
-        .map_err(|_| {
-            "L’outil officiel Raspberry Pi Imager ne peut pas démarrer sur cet appareil."
-                .to_string()
-        })?;
-    if !version_check.status.success()
-        || !String::from_utf8_lossy(&version_check.stdout).contains(IMAGER_VERSION)
-            && !String::from_utf8_lossy(&version_check.stderr).contains(IMAGER_VERSION)
-    {
-        return Err("La version de l’outil Raspberry Pi Imager n’est pas celle qui a été vérifiée. Aucun support n’a été modifié.".into());
-    }
-
     let args = imager_cli_args(
         image_sha256,
         &user_data_path,
         &network_config_path,
-        image_url,
+        &image_path,
         target_device,
     );
     let redactions = sensitive_log_values(
@@ -161,10 +172,7 @@ pub fn flash_pi_os(
         &user_data_contents,
         &network_config_contents,
     );
-    progress(
-        "Téléchargement, écriture puis vérification de la carte…",
-        18,
-    );
+    progress("Écriture et vérification de la carte…", 38);
     run_imager(&tool, &args, &log_path, &redactions, &progress)?;
 
     // Sensitive cloud-init files are removed by the guard on success or error.
@@ -184,7 +192,7 @@ fn imager_cli_args(
     image_sha256: &str,
     user_data_path: &Path,
     network_config_path: &Path,
-    image_url: &str,
+    image_path: &Path,
     target_device: &str,
 ) -> Vec<String> {
     [
@@ -196,10 +204,120 @@ fn imager_cli_args(
         user_data_path.display().to_string(),
         "--cloudinit-networkconfig".to_string(),
         network_config_path.display().to_string(),
-        image_url.to_string(),
+        image_path.display().to_string(),
         target_device.to_string(),
     ]
     .into()
+}
+
+/// Downloads Raspberry Pi OS before unmounting the card, verifies the
+/// catalogue checksum, and keeps a verified cache so a retry avoids redownloading.
+pub fn download_pi_image(
+    app_data: &Path,
+    image_url: &str,
+    expected_sha256: &str,
+    progress: &impl Fn(&str, u8),
+) -> Result<PathBuf, String> {
+    if !image_url.starts_with("https://downloads.raspberrypi.com/")
+        || !valid_sha256(expected_sha256)
+    {
+        return Err("Le catalogue Raspberry Pi n’a pas fourni un téléchargement vérifiable. Aucun support n’a été modifié.".into());
+    }
+
+    let directory = app_data.join("pi-images");
+    fs::create_dir_all(&directory).map_err(io_error)?;
+    let image_path = directory.join(format!("{expected_sha256}.img.xz"));
+    if image_path.is_file() && sha256_file(&image_path).as_deref() == Some(expected_sha256) {
+        progress("Image Raspberry Pi OS déjà téléchargée et vérifiée.", 38);
+        return Ok(image_path);
+    }
+    if image_path.exists() {
+        fs::remove_file(&image_path).map_err(io_error)?;
+    }
+
+    progress("Téléchargement de l’image Raspberry Pi OS…", 18);
+    let client = reqwest::blocking::Client::builder()
+        .user_agent(concat!("MondeEnsemble/", env!("CARGO_PKG_VERSION")))
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(900))
+        .build()
+        .map_err(|error| format!("Connexion au téléchargement officiel impossible : {error}"))?;
+    let mut response = client
+        .get(image_url)
+        .send()
+        .and_then(reqwest::blocking::Response::error_for_status)
+        .map_err(|error| {
+            format!("Téléchargement de Raspberry Pi OS impossible : {error}. La carte n’a pas été modifiée.")
+        })?;
+    let total_bytes = response.content_length().ok_or_else(|| {
+        "Le serveur Raspberry Pi n’a pas indiqué la taille de l’image. La carte n’a pas été modifiée.".to_string()
+    })?;
+    if total_bytes == 0 {
+        return Err("Le téléchargement officiel est vide. La carte n’a pas été modifiée.".into());
+    }
+    let available_bytes = fs2::available_space(&directory).map_err(io_error)?;
+    let required_bytes = total_bytes.saturating_add(64 * 1024 * 1024);
+    if available_bytes < required_bytes {
+        return Err(format!(
+            "Il n’y a pas assez d’espace libre sur cet ordinateur pour télécharger l’image ({} Mo requis). Libère de l’espace puis réessaie. La carte n’a pas été modifiée.",
+            required_bytes.div_ceil(1_000_000)
+        ));
+    }
+
+    let temporary = directory.join(format!("{}.download", uuid::Uuid::new_v4().simple()));
+    let _temporary_file = RemoveFileOnDrop(temporary.clone());
+    let mut output = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)
+        .map_err(io_error)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 256 * 1024];
+    let mut downloaded_bytes = 0u64;
+    let mut last_percent = 18u8;
+    loop {
+        let count = response.read(&mut buffer).map_err(|error| {
+            format!("Téléchargement interrompu : {error}. La carte n’a pas été modifiée.")
+        })?;
+        if count == 0 {
+            break;
+        }
+        output.write_all(&buffer[..count]).map_err(io_error)?;
+        hasher.update(&buffer[..count]);
+        downloaded_bytes = downloaded_bytes.saturating_add(count as u64);
+        if downloaded_bytes > total_bytes {
+            return Err("Le serveur a transmis une image plus grande que prévu. La carte n’a pas été modifiée.".into());
+        }
+        let percent = 18 + (downloaded_bytes.saturating_mul(20) / total_bytes) as u8;
+        if percent > last_percent {
+            last_percent = percent.min(38);
+            progress("Téléchargement de l’image Raspberry Pi OS…", last_percent);
+        }
+    }
+    if downloaded_bytes != total_bytes {
+        return Err(format!(
+            "Le téléchargement s’est terminé trop tôt ({} sur {} Mo). La carte n’a pas été modifiée.",
+            downloaded_bytes / 1_000_000,
+            total_bytes / 1_000_000
+        ));
+    }
+    output.sync_all().map_err(io_error)?;
+    drop(output);
+    let actual_sha256 = format!("{:x}", hasher.finalize());
+    if actual_sha256 != expected_sha256 {
+        return Err("L’empreinte du téléchargement ne correspond pas au catalogue officiel. La carte n’a pas été modifiée.".into());
+    }
+    fs::rename(&temporary, &image_path).map_err(io_error)?;
+    progress("Image Raspberry Pi OS téléchargée et vérifiée.", 38);
+    Ok(image_path)
+}
+
+struct RemoveFileOnDrop(PathBuf);
+
+impl Drop for RemoveFileOnDrop {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 fn sensitive_log_values(
@@ -1005,7 +1123,7 @@ mod tests {
             &"a".repeat(64),
             Path::new("/private/user-data"),
             Path::new("/private/network-config"),
-            "https://downloads.raspberrypi.com/raspios.img.xz",
+            Path::new("/private/pi-images/verified.img.xz"),
             "/dev/disk4",
         );
 
@@ -1015,6 +1133,7 @@ mod tests {
         assert!(args.contains(&"--cloudinit-networkconfig".to_string()));
         assert!(args.contains(&"--debug".to_string()));
         assert!(!args.contains(&"--disable-verify".to_string()));
+        assert!(args.contains(&"/private/pi-images/verified.img.xz".to_string()));
     }
 
     #[test]

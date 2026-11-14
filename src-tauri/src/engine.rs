@@ -38,6 +38,8 @@ const JAVA_DEFAULT_PORT: u16 = 25565;
 const BEDROCK_DEFAULT_PORT: u16 = 19132;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
+const GEYSER_PLUGIN_JAR: &str = "Geyser-Spigot.jar";
+const FLOODGATE_PLUGIN_JAR: &str = "Floodgate-Spigot.jar";
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 const REMOTE_SERVER_ARTIFACT_CHECK: &str = "for f in paper.jar plugins/Geyser-Spigot.jar plugins/Floodgate-Spigot.jar; do if [ ! -s \"$f\" ]; then printf 'Fichier requis absent ou vide : %s\\n' \"$f\" >&2; exit 42; fi; done;";
 static APP_DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
@@ -1004,7 +1006,6 @@ struct BridgeBuild {
 
 #[derive(Deserialize)]
 struct BridgeDownload {
-    name: String,
     sha256: String,
 }
 
@@ -4320,6 +4321,11 @@ pub fn install_remote_pi(
         .sync_all()
         .map_err(io_error)?;
 
+    // macOS may resolve a lowercase filename as though it were the expected
+    // uppercase name. Inspect the archive's actual member names before sending
+    // it to Linux, where those two paths are different files.
+    validate_pi_server_package(&package_path)?;
+
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -5572,7 +5578,9 @@ fn build_fresh_server(
             checksum: paper_sha.clone(),
         },
         Artifact {
-            name: geyser_download.name.clone(),
+            // Linux is case-sensitive even when the build host's macOS
+            // filesystem is not; keep canonical names in the package.
+            name: GEYSER_PLUGIN_JAR.into(),
             version: geyser.version.clone(),
             url: format!(
                 "https://download.geysermc.org/v2/projects/geyser/versions/latest/builds/latest/downloads/spigot"
@@ -5580,7 +5588,7 @@ fn build_fresh_server(
             checksum: geyser_download.sha256.clone(),
         },
         Artifact {
-            name: floodgate_download.name.clone(),
+            name: FLOODGATE_PLUGIN_JAR.into(),
             version: floodgate.version.clone(),
             url: format!(
                 "https://download.geysermc.org/v2/projects/floodgate/versions/latest/builds/latest/downloads/spigot"
@@ -7280,6 +7288,40 @@ fn record_managed_artifact_hashes(
     Ok(())
 }
 
+fn validate_pi_server_package(path: &Path) -> Result<(), String> {
+    let file = File::open(path).map_err(io_error)?;
+    let decoder = GzDecoder::new(file);
+    let mut archive = Archive::new(decoder);
+    let required = [
+        "server/paper.jar",
+        "server/plugins/Geyser-Spigot.jar",
+        "server/plugins/Floodgate-Spigot.jar",
+    ];
+    let mut found = HashSet::new();
+    for entry in archive.entries().map_err(io_error)? {
+        let entry = entry.map_err(io_error)?;
+        let name = entry
+            .path()
+            .map_err(io_error)?
+            .to_string_lossy()
+            .into_owned();
+        if required.contains(&name.as_str())
+            && entry.header().entry_type().is_file()
+            && entry.header().size().map_err(io_error)? > 0
+        {
+            found.insert(name);
+        }
+    }
+    for name in required {
+        if !found.contains(name) {
+            return Err(format!(
+                "L’archive destinée au Pi ne contient pas le fichier requis exact : {name}. Aucun fichier n’a été envoyé."
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn hash_regular_file(path: &Path) -> Option<String> {
     fs::symlink_metadata(path)
         .ok()
@@ -7414,7 +7456,7 @@ mod tests {
         parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
         restore_backup, safe_archive_path, safe_version, shell_single_quote, ssh_failure_message,
         start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
-        valid_plugin_filename, valid_sha256, validate_game_settings,
+        valid_plugin_filename, valid_sha256, validate_game_settings, validate_pi_server_package,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, io::Write, path::Path, process::Command};
@@ -7435,6 +7477,38 @@ mod tests {
         assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("plugins/Geyser-Spigot.jar"));
         assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("plugins/Floodgate-Spigot.jar"));
         assert!(REMOTE_SERVER_ARTIFACT_CHECK.contains("Fichier requis absent ou vide"));
+    }
+
+    #[test]
+    fn pi_package_requires_case_exact_nonempty_floodgate_filename() {
+        let (directory, _cleanup) = test_directory();
+        let create_archive = |path: &Path, floodgate_name: &str| {
+            let file = File::create(path).unwrap();
+            let encoder = GzEncoder::new(file, Compression::fast());
+            let mut archive = Builder::new(encoder);
+            for name in [
+                "server/paper.jar",
+                "server/plugins/Geyser-Spigot.jar",
+                floodgate_name,
+            ] {
+                let bytes = b"jar";
+                let mut header = Header::new_gnu();
+                header.set_size(bytes.len() as u64);
+                header.set_mode(0o600);
+                header.set_cksum();
+                archive.append_data(&mut header, name, &bytes[..]).unwrap();
+            }
+            archive.into_inner().unwrap().finish().unwrap();
+        };
+
+        let lowercase = directory.join("lowercase.tar.gz");
+        create_archive(&lowercase, "server/plugins/floodgate-spigot.jar");
+        let error = validate_pi_server_package(&lowercase).unwrap_err();
+        assert!(error.contains("server/plugins/Floodgate-Spigot.jar"));
+
+        let canonical = directory.join("canonical.tar.gz");
+        create_archive(&canonical, "server/plugins/Floodgate-Spigot.jar");
+        assert!(validate_pi_server_package(&canonical).is_ok());
     }
 
     #[test]

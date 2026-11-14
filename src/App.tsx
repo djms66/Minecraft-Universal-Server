@@ -672,6 +672,7 @@ function App() {
   };
 
   const findPiBootTargets = async () => {
+    if (busy || piFlashResult || piBootScanState === "scanning") return;
     setPiBootScanState("scanning");
     setPiBootScanError("");
     setPiBootTargets([]);
@@ -1926,33 +1927,59 @@ function App() {
                         className="pi-first-steps"
                         aria-label="Progression de l’installation"
                       >
-                        <li className={piFlashResult ? "complete" : "current"}>
+                        <li
+                          className={
+                            activePiOs && !piOsLoading ? "complete" : "current"
+                          }
+                        >
                           <b>1</b>
                           <span>
-                            <strong>Préparer la carte</strong>
+                            <strong>Vérifier le système et le réseau</strong>
                             <small>
-                              {piFlashResult
-                                ? "Système écrit et vérifié"
-                                : "Sur ce Mac, depuis l’application"}
+                              Système automatique ·{" "}
+                              {piWifiSsid
+                                ? piWifiPassword
+                                  ? "Wi-Fi renseigné"
+                                  : "mot de passe Wi-Fi à saisir"
+                                : "Wi-Fi facultatif"}
                             </small>
                           </span>
                         </li>
                         <li
                           className={
-                            piInstallation
+                            piBootTargets.length > 0
                               ? "complete"
-                              : piFlashResult
+                              : activePiOs
                                 ? "current"
                                 : ""
                           }
                         >
                           <b>2</b>
                           <span>
-                            <strong>Démarrer le Pi</strong>
+                            <strong>Détecter la carte ou le SSD</strong>
                             <small>
-                              {piInstallation
-                                ? "Pi trouvé sur le réseau"
-                                : "Insérer la carte Pi éteint, puis le rallumer"}
+                              {piBootTargets.length > 0
+                                ? `${piBootTargets.length} support${piBootTargets.length > 1 ? "s" : ""} détecté${piBootTargets.length > 1 ? "s" : ""}`
+                                : "Branche le support au Mac, puis lance la détection en bas"}
+                            </small>
+                          </span>
+                        </li>
+                        <li
+                          className={
+                            piFlashResult
+                              ? "complete"
+                              : piBootTargets.length > 0
+                                ? "current"
+                                : ""
+                          }
+                        >
+                          <b>3</b>
+                          <span>
+                            <strong>Écrire et vérifier la carte</strong>
+                            <small>
+                              {piFlashResult
+                                ? "Système écrit et vérifié"
+                                : "L’effacement ne démarre qu’après confirmation"}
                             </small>
                           </span>
                         </li>
@@ -1960,45 +1987,26 @@ function App() {
                           className={
                             piServerStatus?.ready
                               ? "complete"
-                              : piInstallation
+                              : piFlashResult
                                 ? "current"
                                 : ""
                           }
                         >
-                          <b>3</b>
-                          <span>
-                            <strong>Installer et contrôler</strong>
-                            <small>
-                              {piServerStatus?.ready
-                                ? "Java et Bedrock répondent"
-                                : "Serveur, versions et ports"}
-                            </small>
-                          </span>
-                        </li>
-                        <li className={piServerStatus?.ready ? "current" : ""}>
                           <b>4</b>
                           <span>
-                            <strong>Rejoindre le monde</strong>
+                            <strong>
+                              Démarrer le Pi et installer le serveur
+                            </strong>
                             <small>
                               {piServerStatus?.ready
-                                ? "À essayer dans Minecraft avec l’adresse affichée"
-                                : "L’adresse apparaîtra après le contrôle"}
+                                ? "Serveur contrôlé · adresse prête dans Minecraft"
+                                : piFlashResult
+                                  ? "Insère la carte dans le Pi et termine l’installation"
+                                  : "Cette étape vient après l’écriture de la carte"}
                             </small>
                           </span>
                         </li>
                       </ol>
-                      <button
-                        className="button secondary"
-                        onClick={findPiBootTargets}
-                        disabled={piBootScanState === "scanning"}
-                      >
-                        {piBootScanState === "scanning"
-                          ? "Recherche des supports…"
-                          : "Détecter la carte SD ou le SSD"}
-                      </button>
-                      {piBootScanError && (
-                        <p className="pi-error">{piBootScanError}</p>
-                      )}
                       <div className="pi-wireless-fields">
                         <div>
                           <label htmlFor="pi-wifi-ssid">
@@ -2072,18 +2080,6 @@ function App() {
                           </small>
                         )}
                       </div>
-                      {piBootScanState === "done" &&
-                        piBootTargets.length === 0 && (
-                          <p className="pi-help">
-                            Aucune carte SD ni aucun disque amovible n’a été
-                            détecté. Une carte dans le lecteur SD intégré au Mac
-                            peut apparaître comme « interne » dans Utilitaire de
-                            disque : c’est normal, l’application la reconnaît
-                            aussi. Vérifie qu’elle est bien insérée, puis
-                            relance la détection. Son format Mac ne pose pas de
-                            problème. Rien n’a été écrit.
-                          </p>
-                        )}
                       <details
                         className="pi-advanced-storage"
                         onToggle={(event) =>
@@ -2213,6 +2209,67 @@ function App() {
                           </p>
                         )}
                       </details>
+                      {activePiOs && (
+                        <>
+                          <p className="pi-storage-guidance">
+                            Pour commencer, utilise une microSD vide d’au moins
+                            32 Go. L’application vérifie l’espace avant toute
+                            écriture.
+                          </p>
+                          <details className="pi-advanced-storage">
+                            <summary>
+                              Je veux démarrer depuis un SSD USB
+                            </summary>
+                            <p>
+                              Le démarrage USB dépend du modèle du Pi, de son
+                              micrologiciel et de l’alimentation du boîtier. La
+                              détection vérifie l’espace et l’écriture; seul le
+                              premier démarrage confirme que le Pi accepte ce
+                              SSD. Pour une première installation, la microSD
+                              est le choix le plus simple.
+                            </p>
+                          </details>
+                        </>
+                      )}
+                      <div className="pi-detect-support">
+                        <button
+                          className="button secondary"
+                          onClick={findPiBootTargets}
+                          disabled={
+                            busy ||
+                            Boolean(piFlashResult) ||
+                            piBootScanState === "scanning"
+                          }
+                        >
+                          {piBootScanState === "scanning"
+                            ? "Recherche des supports…"
+                            : "Détecter la carte SD ou le SSD"}
+                        </button>
+                        {piBootScanState === "scanning" && (
+                          <p
+                            className="pi-scan-status"
+                            role="status"
+                            aria-live="polite"
+                          >
+                            Recherche des cartes SD et disques externes sur ce
+                            Mac. Cela peut prendre quelques secondes.
+                          </p>
+                        )}
+                        {piBootScanError && (
+                          <p className="pi-error" role="alert">
+                            {piBootScanError}
+                          </p>
+                        )}
+                        {piBootScanState === "done" &&
+                          piBootTargets.length === 0 && (
+                            <p className="pi-help" role="status">
+                              Aucune carte SD ni aucun disque amovible n’a été
+                              détecté. Vérifie qu’elle est bien insérée, puis
+                              relance la détection. Son format Mac ne pose pas
+                              de problème. Rien n’a été écrit.
+                            </p>
+                          )}
+                      </div>
                       {piBootTargets.length > 0 && (
                         <>
                           {piBootTargets.length > 1 && (
@@ -2285,28 +2342,6 @@ function App() {
                               </li>
                             ))}
                           </ul>
-                        </>
-                      )}
-                      {activePiOs && (
-                        <>
-                          <p className="pi-storage-guidance">
-                            Pour commencer, utilise une microSD vide d’au moins
-                            32 Go. L’application vérifie l’espace avant toute
-                            écriture.
-                          </p>
-                          <details className="pi-advanced-storage">
-                            <summary>
-                              Je veux démarrer depuis un SSD USB
-                            </summary>
-                            <p>
-                              Le démarrage USB dépend du modèle du Pi, de son
-                              micrologiciel et de l’alimentation du boîtier. La
-                              détection vérifie l’espace et l’écriture; seul le
-                              premier démarrage confirme que le Pi accepte ce
-                              SSD. Pour une première installation, la microSD
-                              est le choix le plus simple.
-                            </p>
-                          </details>
                         </>
                       )}
                       {(operationProgress || operationError) && (

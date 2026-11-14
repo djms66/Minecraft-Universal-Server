@@ -113,7 +113,13 @@ async fn discover_new_pi(expected_hostname: String) -> Result<Vec<engine::Discov
 /// The actual imaging step must repeat these safety checks immediately before
 /// it writes, and must keep Raspberry Pi Imager's system-drive protection on.
 #[tauri::command]
-fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+async fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+    tauri::async_runtime::spawn_blocking(discover_pi_boot_targets_sync)
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+fn discover_pi_boot_targets_sync() -> Result<Vec<PiBootTarget>, String> {
     match std::env::consts::OS {
         "macos" => discover_macos_boot_targets(),
         "windows" => discover_windows_boot_targets(),
@@ -182,7 +188,7 @@ async fn prepare_pi_sd(
                 return Err("Cette image ne déclare pas la compatibilité avec le modèle choisi. Aucun support n’a été modifié.".into());
             }
         }
-        let targets = discover_pi_boot_targets()?;
+        let targets = discover_pi_boot_targets_sync()?;
         if targets.len() != 1 {
             return Err("Pour éviter d’effacer le mauvais disque, laisse uniquement la carte SD ou le SSD destiné au Raspberry Pi connecté, puis relance la détection. Aucun support n’a été modifié.".into());
         }
@@ -228,7 +234,7 @@ async fn prepare_pi_sd(
                 });
             },
             || {
-                let targets = discover_pi_boot_targets()?;
+                let targets = discover_pi_boot_targets_sync()?;
                 if targets.len() != 1
                     || !targets.iter().any(|target| {
                         target.id == target_id

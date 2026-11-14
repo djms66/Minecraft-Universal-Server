@@ -1468,6 +1468,22 @@ button {
 .pi-first-boot .button {
   margin-top: 10px;
 }
+.pi-detect-support {
+  margin-top: 14px;
+  padding-top: 11px;
+  border-top: 1px solid #e5e9e1;
+}
+.pi-detect-support .button {
+  min-height: 40px;
+}
+.pi-detect-support .pi-scan-status {
+  margin: 8px 0 0;
+  color: #52624f;
+}
+.pi-detect-support .pi-error,
+.pi-detect-support .pi-help {
+  margin-top: 8px;
+}
 .pi-storage-list {
   display: grid;
   gap: 6px;

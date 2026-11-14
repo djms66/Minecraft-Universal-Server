@@ -6985,6 +6985,66 @@ fn safe_archive_path(path: &Path) -> bool {
             .all(|component| matches!(component, Component::Normal(_)))
 }
 
+fn safe_runtime_archive_path(path: &Path, archive_root: &mut Option<std::ffi::OsString>) -> bool {
+    if path.as_os_str().is_empty() || path.to_string_lossy().contains('\\') {
+        return false;
+    }
+    let components: Vec<_> = path
+        .components()
+        .map(|component| match component {
+            Component::Normal(value) => Some(value.to_os_string()),
+            _ => None,
+        })
+        .collect::<Option<_>>()
+        .unwrap_or_default();
+    let Some(root) = components.first() else {
+        return false;
+    };
+    if !root.to_string_lossy().starts_with("jdk-") {
+        return false;
+    }
+    match archive_root {
+        Some(expected) => expected == root,
+        None => {
+            *archive_root = Some(root.clone());
+            true
+        }
+    }
+}
+
+fn safe_runtime_symlink_target(
+    link_path: &Path,
+    link_name: &Path,
+    archive_root: &std::ffi::OsStr,
+) -> Option<PathBuf> {
+    if link_name.is_absolute() || link_name.to_string_lossy().contains('\\') {
+        return None;
+    }
+    let mut resolved = Vec::<std::ffi::OsString>::new();
+    for component in link_path.parent()?.components() {
+        match component {
+            Component::Normal(value) => resolved.push(value.to_os_string()),
+            _ => return None,
+        }
+    }
+    for component in link_name.components() {
+        match component {
+            Component::Normal(value) => resolved.push(value.to_os_string()),
+            Component::CurDir => {}
+            Component::ParentDir if resolved.len() > 1 => {
+                resolved.pop();
+            }
+            Component::ParentDir | Component::RootDir | Component::Prefix(_) => return None,
+        }
+    }
+    if resolved.first().map(std::ffi::OsString::as_os_str) != Some(archive_root) {
+        return None;
+    }
+    let mut target = PathBuf::new();
+    target.extend(resolved);
+    Some(target)
+}
+
 fn folder_size(path: &Path) -> Result<u64, String> {
     let mut total = 0u64;
     for entry in WalkDir::new(path).follow_links(false) {
@@ -7026,20 +7086,67 @@ fn unpack_runtime(archive_path: &Path, destination: PathBuf) -> Result<(), Strin
     } else {
         let decoder = GzDecoder::new(File::open(archive_path).map_err(io_error)?);
         let mut archive = Archive::new(decoder);
+        let mut archive_root = None;
+        let mut paths = HashSet::new();
+        let mut regular_files = HashSet::new();
+        let mut symlinks = Vec::new();
         for item in archive.entries().map_err(io_error)? {
             let mut item = item.map_err(io_error)?;
             let path = item.path().map_err(io_error)?.into_owned();
-            if !safe_archive_path(&path)
-                || item.header().entry_type().is_symlink()
-                || item.header().entry_type().is_hard_link()
-            {
+            if !safe_runtime_archive_path(&path, &mut archive_root) || !paths.insert(path.clone()) {
                 return Err("Archive Java contient un chemin ou un lien invalide.".into());
+            }
+            let entry_type = item.header().entry_type();
+            if entry_type.is_hard_link()
+                || !(entry_type.is_file() || entry_type.is_dir() || entry_type.is_symlink())
+            {
+                return Err("Archive Java contient un type d’élément non autorisé.".into());
+            }
+            if entry_type.is_symlink() {
+                let link_name = item
+                    .link_name()
+                    .map_err(io_error)?
+                    .ok_or_else(|| "Lien Java sans cible.".to_string())?
+                    .into_owned();
+                let root = archive_root
+                    .as_deref()
+                    .ok_or_else(|| "Dossier racine Java introuvable.".to_string())?;
+                let resolved_target = safe_runtime_symlink_target(&path, &link_name, root)
+                    .ok_or_else(|| {
+                        "Archive Java contient un lien hors de son dossier.".to_string()
+                    })?;
+                symlinks.push((path, link_name, resolved_target));
+                io::copy(&mut item, &mut io::sink()).map_err(io_error)?;
+                continue;
+            }
+            if entry_type.is_file() {
+                regular_files.insert(path.clone());
             }
             let destination_path = destination.join(path);
             if !destination_path.starts_with(&destination) {
                 return Err("Chemin Java hors du dossier prévu.".into());
             }
-            item.unpack(destination_path).map_err(io_error)?;
+            if !item.unpack_in(&destination).map_err(io_error)? {
+                return Err("Archive Java contient un chemin hors du dossier prévu.".into());
+            }
+        }
+        for (path, link_name, resolved_target) in symlinks {
+            if !regular_files.contains(&resolved_target) {
+                return Err("Un lien Java doit viser un fichier régulier de l’archive.".into());
+            }
+            let destination_path = destination.join(path);
+            let target_path = destination.join(resolved_target);
+            if !destination_path.starts_with(&destination) || !target_path.starts_with(&destination)
+            {
+                return Err("Lien Java hors du dossier prévu.".into());
+            }
+            if let Some(parent) = destination_path.parent() {
+                fs::create_dir_all(parent).map_err(io_error)?;
+            }
+            #[cfg(unix)]
+            std::os::unix::fs::symlink(link_name, destination_path).map_err(io_error)?;
+            #[cfg(windows)]
+            fs::copy(target_path, destination_path).map_err(io_error)?;
         }
     }
     let _java = WalkDir::new(&destination)
@@ -7286,12 +7393,12 @@ mod tests {
         inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
         parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
         restore_backup, safe_archive_path, safe_version, shell_single_quote,
-        start_updated_local_copy_with_fallback, valid_bedrock_pack_filename, valid_plugin_filename,
-        valid_sha256, validate_game_settings,
+        start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
+        valid_plugin_filename, valid_sha256, validate_game_settings,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, io::Write, path::Path, process::Command};
-    use tar::{Builder, Header};
+    use tar::{Builder, EntryType, Header};
 
     fn test_directory() -> (std::path::PathBuf, RemoveDirOnDrop) {
         let path = std::env::temp_dir().join(format!(
@@ -7318,6 +7425,56 @@ mod tests {
         archive.append(&header, contents).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    fn write_runtime_tar(path: &Path, symlink_target: &str) {
+        let file = File::create(path).unwrap();
+        let encoder = GzEncoder::new(file, Compression::default());
+        let mut archive = Builder::new(encoder);
+        let mut root_header = Header::new_gnu();
+        root_header.set_entry_type(EntryType::Directory);
+        root_header.set_size(0);
+        root_header.set_mode(0o755);
+        root_header.set_cksum();
+        archive
+            .append_data(&mut root_header, "jdk-25.0.5+8-jre", &b""[..])
+            .unwrap();
+        archive
+            .append_data(
+                &mut runtime_file_header(b"java runtime"),
+                "jdk-25.0.5+8-jre/bin/java",
+                &b"java runtime"[..],
+            )
+            .unwrap();
+        archive
+            .append_data(
+                &mut runtime_file_header(b"license text"),
+                "jdk-25.0.5+8-jre/legal/java.base/LICENSE",
+                &b"license text"[..],
+            )
+            .unwrap();
+        let mut link_header = Header::new_gnu();
+        link_header.set_entry_type(EntryType::Symlink);
+        link_header.set_size(0);
+        link_header.set_mode(0o777);
+        link_header.set_cksum();
+        archive
+            .append_link(
+                &mut link_header,
+                "jdk-25.0.5+8-jre/legal/jdk.unsupported/LICENSE",
+                symlink_target,
+            )
+            .unwrap();
+        archive.finish().unwrap();
+        archive.into_inner().unwrap().finish().unwrap();
+    }
+
+    fn runtime_file_header(contents: &[u8]) -> Header {
+        let mut header = Header::new_gnu();
+        header.set_size(contents.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        header
     }
 
     fn write_pack_zip(path: &Path, manifest: &str) {
@@ -7765,6 +7922,37 @@ mod tests {
 
         assert!(result.is_err());
         assert!(!destination.exists());
+        assert!(!outside.exists());
+    }
+
+    #[test]
+    fn runtime_extractor_accepts_jdk_root_and_safe_relative_symlinks() {
+        let (root, _cleanup) = test_directory();
+        let archive_path = root.join("runtime.tar.gz");
+        let destination = root.join("runtime");
+        write_runtime_tar(&archive_path, "../java.base/LICENSE");
+
+        unpack_runtime(&archive_path, destination.clone()).unwrap();
+
+        assert_eq!(
+            fs::read(destination.join("jdk-25.0.5+8-jre/bin/java")).unwrap(),
+            b"java runtime"
+        );
+        assert_eq!(
+            fs::read(destination.join("jdk-25.0.5+8-jre/legal/jdk.unsupported/LICENSE")).unwrap(),
+            b"license text"
+        );
+    }
+
+    #[test]
+    fn runtime_extractor_rejects_symlink_escape() {
+        let (root, _cleanup) = test_directory();
+        let archive_path = root.join("runtime-escape.tar.gz");
+        let destination = root.join("runtime");
+        let outside = root.join("outside");
+        write_runtime_tar(&archive_path, "../../../../outside");
+
+        assert!(unpack_runtime(&archive_path, destination).is_err());
         assert!(!outside.exists());
     }
 

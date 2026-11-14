@@ -142,6 +142,7 @@ async fn prepare_pi_sd(
     target_id: String,
     target_name: String,
     target_size_bytes: u64,
+    target_model: String,
     image_url: String,
     image_sha256: String,
     wifi_ssid: String,
@@ -157,11 +158,29 @@ async fn prepare_pi_sd(
         format!("Le dossier sécurisé de l’application est inaccessible : {error}")
     })?;
     tauri::async_runtime::spawn_blocking(move || {
-        let current_recommendation = engine::pi_os_recommendation()?;
-        if image_url != current_recommendation.image_url
-            || image_sha256 != current_recommendation.image_sha256
-        {
-            return Err("Le catalogue Raspberry Pi a changé depuis l’affichage. Actualise la recommandation avant d’écrire la carte.".into());
+        let catalog = engine::pi_os_catalog()?;
+        let selected_image = catalog
+            .options
+            .iter()
+            .find(|option| option.image_url == image_url && option.image_sha256 == image_sha256)
+            .ok_or_else(|| "Le système choisi n’est plus une image vérifiée du catalogue. Actualise les choix avant d’écrire la carte.".to_string())?;
+        let image_name = selected_image.name.clone();
+        if target_model.is_empty() {
+            if image_url != catalog.recommended.image_url {
+                return Err("Le mode automatique doit utiliser le système recommandé. Aucun support n’a été modifié.".into());
+            }
+        } else {
+            let generation = match target_model.as_str() {
+                "pi3" => 3,
+                "pi4" => 4,
+                "pi5" => 5,
+                _ => return Err("Le modèle choisi n’est pas pris en charge par le mode expert. Aucun support n’a été modifié.".into()),
+            };
+            if !selected_image.devices.iter().any(|device| {
+                engine::pi_os_device_generation(device) == Some(generation)
+            }) {
+                return Err("Cette image ne déclare pas la compatibilité avec le modèle choisi. Aucun support n’a été modifié.".into());
+            }
         }
         let targets = discover_pi_boot_targets()?;
         if targets.len() != 1 {
@@ -175,8 +194,8 @@ async fn prepare_pi_sd(
                     && target.size_bytes == target_size_bytes
             })
             .ok_or_else(|| "Le support a changé ou n’est plus détecté. Relance la détection avant de continuer.".to_string())?;
-        let required_bytes = ((current_recommendation.image_size_gb
-            + current_recommendation.initial_server_storage_gb)
+        let required_bytes = ((selected_image.image_size_gb
+            + selected_image.initial_server_storage_gb)
             .ceil()
             * 1_000_000_000.0) as u64;
         if target.size_bytes < required_bytes {
@@ -195,9 +214,10 @@ async fn prepare_pi_sd(
         pi_imager::flash_pi_os(
             &app_data,
             &target_device,
+            &image_name,
             &image_url,
             &image_sha256,
-            current_recommendation.download_sha256.as_deref(),
+            selected_image.download_sha256.as_deref(),
             &wifi_ssid,
             &wifi_password,
             &wifi_country,
@@ -732,8 +752,8 @@ async fn install_pi_bedrock_pack(
 }
 
 #[tauri::command]
-async fn get_pi_os_recommendation() -> Result<engine::PiOsRecommendation, String> {
-    tauri::async_runtime::spawn_blocking(engine::pi_os_recommendation)
+async fn get_pi_os_catalog() -> Result<engine::PiOsCatalog, String> {
+    tauri::async_runtime::spawn_blocking(engine::pi_os_catalog)
         .await
         .map_err(|error| error.to_string())?
 }
@@ -1186,7 +1206,7 @@ pub fn run() {
             install_pi_paper_plugin_copy,
             install_local_bedrock_pack,
             install_pi_bedrock_pack,
-            get_pi_os_recommendation,
+            get_pi_os_catalog,
             create_server,
             inspect_local_server,
             check_local_update,

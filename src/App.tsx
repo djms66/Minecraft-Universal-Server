@@ -86,6 +86,10 @@ type PiOsRecommendation = {
   initial_server_storage_gb: number;
   checked_at: string;
 };
+type PiOsCatalog = {
+  recommended: PiOsRecommendation;
+  options: PiOsRecommendation[];
+};
 type PiFlashResult = {
   detail: string;
   log_path: string;
@@ -230,8 +234,27 @@ function App() {
   );
   const [piOsRecommendation, setPiOsRecommendation] =
     useState<PiOsRecommendation | null>(null);
+  const [piOsOptions, setPiOsOptions] = useState<PiOsRecommendation[]>([]);
+  const [piExpertMode, setPiExpertMode] = useState(false);
+  const [piExpertModel, setPiExpertModel] = useState("");
+  const [piExpertMemory, setPiExpertMemory] = useState("");
+  const [piExpertImageUrl, setPiExpertImageUrl] = useState("");
+  const [piFlashExpectedModel, setPiFlashExpectedModel] = useState("");
+  const [piFlashExpectedDevices, setPiFlashExpectedDevices] = useState<
+    string[]
+  >([]);
   const [piOsLoading, setPiOsLoading] = useState(false);
   const [piOsError, setPiOsError] = useState("");
+  const piExpertOptions = piOsOptions.filter(
+    (option) =>
+      piOsMatchesGeneration(option.devices, piExpertModel) &&
+      Number(piExpertMemory) >= option.minimum_server_memory_gb,
+  );
+  const activePiOs = piExpertMode
+    ? (piExpertOptions.find(
+        (option) => option.image_url === piExpertImageUrl,
+      ) ?? null)
+    : piOsRecommendation;
   const [piInstallation, setPiInstallation] = useState<PiInstallation | null>(
     readSavedPiInstallation,
   );
@@ -332,9 +355,12 @@ function App() {
     let active = true;
     setPiOsLoading(true);
     setPiOsError("");
-    invoke<PiOsRecommendation>("get_pi_os_recommendation")
-      .then((recommendation) => {
-        if (active) setPiOsRecommendation(recommendation);
+    invoke<PiOsCatalog>("get_pi_os_catalog")
+      .then((catalog) => {
+        if (active) {
+          setPiOsRecommendation(catalog.recommended);
+          setPiOsOptions(catalog.options);
+        }
       })
       .catch((error) => {
         if (active) setPiOsError(String(error));
@@ -661,10 +687,9 @@ function App() {
   };
 
   const flashPiOs = async (device: PiBootTarget) => {
-    if (busy || !piOsRecommendation) return;
+    if (busy || !activePiOs) return;
     const minimumGb = Math.ceil(
-      piOsRecommendation.image_size_gb +
-        piOsRecommendation.initial_server_storage_gb,
+      activePiOs.image_size_gb + activePiOs.initial_server_storage_gb,
     );
     if (device.size_bytes < minimumGb * 1_000_000_000) {
       setOperationError(
@@ -695,8 +720,7 @@ function App() {
 
   const confirmFlashPiOs = async () => {
     const device = pendingPiTarget;
-    if (busy || piCardWriteStarted.current || !device || !piOsRecommendation)
-      return;
+    if (busy || piCardWriteStarted.current || !device || !activePiOs) return;
     piCardWriteStarted.current = true;
     setPendingPiTarget(null);
     resetOperation();
@@ -707,8 +731,9 @@ function App() {
         targetId: device.id,
         targetName: device.name,
         targetSizeBytes: device.size_bytes,
-        imageUrl: piOsRecommendation.image_url,
-        imageSha256: piOsRecommendation.image_sha256,
+        targetModel: piExpertMode ? piExpertModel : "",
+        imageUrl: activePiOs.image_url,
+        imageSha256: activePiOs.image_sha256,
         wifiSsid: piWifiSsid,
         wifiPassword: piWifiPassword,
         wifiCountry: piWifiCountry,
@@ -716,6 +741,8 @@ function App() {
         progress: progressChannel(),
       });
       setPiFlashResult(result);
+      setPiFlashExpectedModel(piExpertMode ? piExpertModel : "");
+      setPiFlashExpectedDevices(activePiOs.devices);
       setPiWifiPassword("");
     } catch (error) {
       setOperationError(String(error));
@@ -824,6 +851,24 @@ function App() {
       if (!device) {
         throw new Error(
           `Le Pi n’a pas encore rejoint le réseau. Vérifie qu’il est allumé et relié au même routeur, puis réessaie. ${lastError}`,
+        );
+      }
+      const actualGeneration = device.model.match(
+        /Raspberry Pi\s+([3-5])\b/i,
+      )?.[1];
+      const expectedGeneration = piFlashExpectedModel.match(/^pi([3-5])$/)?.[1];
+      const selectedSystemSupportsPi = piFlashExpectedDevices.some(
+        (entry) =>
+          entry.toLowerCase().startsWith(`pi${actualGeneration}-`) &&
+          entry.toLowerCase().includes("64bit"),
+      );
+      if (
+        !actualGeneration ||
+        (expectedGeneration && actualGeneration !== expectedGeneration) ||
+        !selectedSystemSupportsPi
+      ) {
+        throw new Error(
+          `Le Pi détecté (${device.model}) ne correspond pas au modèle prévu pour ce système. Aucun serveur n’a été installé. Vérifie le modèle et choisis un système compatible avant de recommencer.`,
         );
       }
       setPiHost(device.host);
@@ -2039,6 +2084,135 @@ function App() {
                             problème. Rien n’a été écrit.
                           </p>
                         )}
+                      <details
+                        className="pi-advanced-storage"
+                        onToggle={(event) =>
+                          setPiExpertMode(event.currentTarget.open)
+                        }
+                      >
+                        <summary>
+                          Je connais mon matériel · choix avancé du système
+                        </summary>
+                        <p>
+                          Le choix automatique reste recommandé. Les systèmes
+                          proposés viennent du catalogue officiel et sont
+                          filtrés selon le modèle et la mémoire choisis.
+                          L’application vérifiera le vrai modèle du Pi avant
+                          d’installer le serveur.
+                        </p>
+                        <div className="pi-wireless-fields">
+                          <div>
+                            <label htmlFor="pi-expert-model">
+                              Modèle du Raspberry Pi
+                            </label>
+                            <select
+                              id="pi-expert-model"
+                              value={piExpertModel}
+                              onChange={(event) => {
+                                setPiExpertModel(event.target.value);
+                                setPiExpertMemory("");
+                                setPiExpertImageUrl("");
+                              }}
+                              disabled={busy || Boolean(piFlashResult)}
+                            >
+                              <option value="">Choisir le modèle…</option>
+                              <option value="pi3">Pi 3 / 3B / 3B+</option>
+                              <option value="pi4">Pi 4</option>
+                              <option value="pi5">Pi 5</option>
+                            </select>
+                          </div>
+                          {piExpertModel && (
+                            <div>
+                              <label htmlFor="pi-expert-memory">
+                                Mémoire de ce Pi
+                              </label>
+                              <select
+                                id="pi-expert-memory"
+                                value={piExpertMemory}
+                                onChange={(event) => {
+                                  setPiExpertMemory(event.target.value);
+                                  setPiExpertImageUrl("");
+                                }}
+                                disabled={busy || Boolean(piFlashResult)}
+                              >
+                                <option value="">Choisir la mémoire…</option>
+                                {(piExpertModel === "pi3"
+                                  ? [1]
+                                  : piExpertModel === "pi4"
+                                    ? [1, 2, 4, 8]
+                                    : [2, 4, 8, 16]
+                                ).map((memory) => (
+                                  <option key={memory} value={memory}>
+                                    {memory} Go
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
+                          {piExpertMemory && (
+                            <div>
+                              <label htmlFor="pi-expert-os">
+                                Système à installer
+                              </label>
+                              <select
+                                id="pi-expert-os"
+                                value={piExpertImageUrl}
+                                onChange={(event) =>
+                                  setPiExpertImageUrl(event.target.value)
+                                }
+                                disabled={
+                                  busy || Boolean(piFlashResult || piOsLoading)
+                                }
+                              >
+                                <option value="">
+                                  Choisir un système compatible…
+                                </option>
+                                {piExpertOptions.map((option) => (
+                                  <option
+                                    key={option.image_url}
+                                    value={option.image_url}
+                                  >
+                                    {option.name} ·{" "}
+                                    {new Date(
+                                      `${option.release_date}T12:00:00`,
+                                    ).toLocaleDateString("fr-FR")}
+                                  </option>
+                                ))}
+                              </select>
+                              {piExpertOptions.length === 0 && (
+                                <small>
+                                  Aucun système vérifié du catalogue ne
+                                  correspond. Referme cette section pour garder
+                                  le choix automatique.
+                                </small>
+                              )}
+                              {piExpertOptions.length === 1 &&
+                                piOsRecommendation?.image_url ===
+                                  piExpertOptions[0].image_url && (
+                                  <small>
+                                    Pour cette combinaison de modèle et de
+                                    mémoire, le catalogue ne propose qu’un seul
+                                    système vérifié avec installation
+                                    automatisée. Le choix automatique reste
+                                    identique.
+                                  </small>
+                                )}
+                            </div>
+                          )}
+                        </div>
+                        {activePiOs && piExpertMode && (
+                          <p className="pi-help">
+                            Sélection : <strong>{activePiOs.name}</strong> ·{" "}
+                            {activePiOs.image_size_gb} Go écrits · stockage
+                            requis estimé :{" "}
+                            {Math.ceil(
+                              activePiOs.image_size_gb +
+                                activePiOs.initial_server_storage_gb,
+                            )}{" "}
+                            Go.
+                          </p>
+                        )}
+                      </details>
                       {piBootTargets.length > 0 && (
                         <>
                           {piBootTargets.length > 1 && (
@@ -2059,14 +2233,14 @@ function App() {
                                   </span>
                                 </div>
                                 {piBootTargets.length === 1 &&
-                                  piOsRecommendation &&
+                                  activePiOs &&
                                   device.size_bytes > 0 && (
                                     <em
                                       className={
                                         device.size_bytes >=
                                         Math.ceil(
-                                          piOsRecommendation.image_size_gb +
-                                            piOsRecommendation.initial_server_storage_gb,
+                                          activePiOs.image_size_gb +
+                                            activePiOs.initial_server_storage_gb,
                                         ) *
                                           1_000_000_000
                                           ? "storage-ready"
@@ -2075,20 +2249,20 @@ function App() {
                                     >
                                       {device.size_bytes >=
                                       Math.ceil(
-                                        piOsRecommendation.image_size_gb +
-                                          piOsRecommendation.initial_server_storage_gb,
+                                        activePiOs.image_size_gb +
+                                          activePiOs.initial_server_storage_gb,
                                       ) *
                                         1_000_000_000
                                         ? "Assez de place pour l’OS et le serveur"
-                                        : `Trop petit · prévois au moins ${Math.ceil(piOsRecommendation.image_size_gb + piOsRecommendation.initial_server_storage_gb)} Go`}
+                                        : `Trop petit · prévois au moins ${Math.ceil(activePiOs.image_size_gb + activePiOs.initial_server_storage_gb)} Go`}
                                     </em>
                                   )}
                                 {piBootTargets.length === 1 &&
-                                  piOsRecommendation &&
+                                  activePiOs &&
                                   device.size_bytes >=
                                     Math.ceil(
-                                      piOsRecommendation.image_size_gb +
-                                        piOsRecommendation.initial_server_storage_gb,
+                                      activePiOs.image_size_gb +
+                                        activePiOs.initial_server_storage_gb,
                                     ) *
                                       1_000_000_000 && (
                                     <button
@@ -2097,7 +2271,10 @@ function App() {
                                       disabled={
                                         busy ||
                                         Boolean(piFlashResult) ||
-                                        !piOsRecommendation.image_sha256
+                                        !activePiOs.image_sha256 ||
+                                        (piExpertMode && !piExpertModel) ||
+                                        (piExpertMode && !piExpertMemory) ||
+                                        (piExpertMode && !piExpertImageUrl)
                                       }
                                     >
                                       {busy
@@ -2110,7 +2287,7 @@ function App() {
                           </ul>
                         </>
                       )}
-                      {piOsRecommendation && (
+                      {activePiOs && (
                         <>
                           <p className="pi-storage-guidance">
                             Pour commencer, utilise une microSD vide d’au moins
@@ -2151,9 +2328,9 @@ function App() {
                               il se connectera au démarrage.
                             </li>
                             <li>
-                              Rallume le Pi et laisse-le allumé. Après quelques
-                              minutes, l’application le détectera sur le réseau
-                              et installera le serveur.
+                              Rallume le Pi et laisse-le allumé. Pour son
+                              premier démarrage, attends environ 2 minutes, puis
+                              clique sur le bouton ci-dessous.
                             </li>
                           </ol>
                           <label className="eula-choice">
@@ -2181,9 +2358,14 @@ function App() {
                             disabled={busy || !piEulaAccepted}
                           >
                             {busy
-                              ? "Recherche automatique du Pi…"
+                              ? "Recherche du Pi (jusqu’à 1 min)…"
                               : "Le Pi a redémarré · terminer l’installation"}
                           </button>
+                          <small className="pi-eula-hint">
+                            La recherche prend jusqu’à environ 1 minute. Si le
+                            Pi n’est pas trouvé, laisse-le allumé, vérifie qu’il
+                            est relié au même routeur, puis clique de nouveau.
+                          </small>
                           <small>
                             Outil officiel Raspberry Pi Imager{" "}
                             {piFlashResult.imager_version} · journal :{" "}
@@ -2402,6 +2584,18 @@ function App() {
         </footer>
       </main>
     </div>
+  );
+}
+
+function piOsMatchesGeneration(devices: string[], model: string) {
+  const generation = model.match(/^pi([3-5])$/)?.[1];
+  return Boolean(
+    generation &&
+    devices.some(
+      (device) =>
+        device.toLowerCase().startsWith(`pi${generation}-`) &&
+        device.toLowerCase().includes("64bit"),
+    ),
   );
 }
 

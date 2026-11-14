@@ -97,6 +97,7 @@ impl Drop for MountedImager {
 pub fn flash_pi_os(
     app_data: &Path,
     target_device: &str,
+    image_name: &str,
     image_url: &str,
     image_sha256: &str,
     download_sha256: Option<&str>,
@@ -106,11 +107,13 @@ pub fn flash_pi_os(
     progress: impl Fn(&str, u8),
     verify_target: impl Fn() -> Result<(), String>,
 ) -> Result<PiFlashResult, String> {
-    if !image_url.starts_with("https://downloads.raspberrypi.com/")
+    // The caller first validates this exact URL against the official Imager
+    // catalog; keep HTTPS and SHA-256 checks here as defense in depth.
+    if !image_url.starts_with("https://")
         || !valid_sha256(image_sha256)
         || download_sha256.is_some_and(|hash| !valid_sha256(hash))
     {
-        return Err("Le catalogue Raspberry Pi n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
+        return Err("Le catalogue officiel n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
     }
     validate_wifi(wifi_ssid, wifi_password, wifi_country)?;
 
@@ -184,7 +187,7 @@ pub fn flash_pi_os(
     // Sensitive cloud-init files are removed by the guard on success or error.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
     Ok(PiFlashResult {
-        detail: format!("Raspberry Pi OS Lite 64 bits écrit et vérifié sur {target_device}."),
+        detail: format!("{image_name} écrit et vérifié sur {target_device}."),
         log_path: log_path.display().to_string(),
         imager_version: IMAGER_VERSION.into(),
         hostname,
@@ -227,7 +230,7 @@ pub fn download_pi_image(
         || !valid_sha256(image_sha256)
         || download_sha256.is_some_and(|hash| !valid_sha256(hash))
     {
-        return Err("Le catalogue Raspberry Pi n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
+        return Err("Le catalogue officiel n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
     }
 
     let directory = app_data.join("pi-images");
@@ -236,7 +239,7 @@ pub fn download_pi_image(
     let image_path = directory.join(format!("{cache_key}.img.xz"));
     if let Some(expected_sha256) = download_sha256 {
         if image_path.is_file() && sha256_file(&image_path).as_deref() == Some(expected_sha256) {
-            progress("Image Raspberry Pi OS déjà téléchargée et vérifiée.", 38);
+            progress("Image du système déjà téléchargée et vérifiée.", 38);
             return Ok(image_path);
         }
     }

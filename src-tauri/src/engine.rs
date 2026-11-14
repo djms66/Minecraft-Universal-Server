@@ -173,7 +173,7 @@ pub struct DiscoveredPi {
     pub model: String,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct PiOsRecommendation {
     pub name: String,
     pub release_date: String,
@@ -187,6 +187,12 @@ pub struct PiOsRecommendation {
     pub minimum_server_memory_gb: f64,
     pub initial_server_storage_gb: f64,
     pub checked_at: String,
+}
+
+#[derive(Serialize)]
+pub struct PiOsCatalog {
+    pub recommended: PiOsRecommendation,
+    pub options: Vec<PiOsRecommendation>,
 }
 
 #[derive(Serialize)]
@@ -1103,32 +1109,77 @@ pub fn compatibility() -> Result<CompatibilityReport, String> {
     })
 }
 
-/// Selects the current official Raspberry Pi OS Lite 64-bit image suitable
-/// for first-boot customization. No image is downloaded or written here.
-pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
+/// Reads official, verifiable 64-bit images that support unattended first boot.
+/// The default remains the newest Raspberry Pi OS Lite recommendation; expert
+/// options are limited to catalog entries compatible with Pi 3, 4, or 5.
+pub fn pi_os_catalog() -> Result<PiOsCatalog, String> {
     const MANIFEST_URL: &str = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json";
     let client = client()?;
     let manifest: RaspberryPiOsManifest = get_json(&client, MANIFEST_URL)?;
-    let image = latest_supported_pi_image(manifest.os_list).ok_or_else(|| {
+    let mut entries = Vec::new();
+    flatten_pi_os_entries(manifest.os_list, &mut entries);
+    let mut options: Vec<_> = entries
+        .into_iter()
+        .filter_map(pi_os_entry_to_option)
+        .collect();
+    options.sort_by(|left, right| {
+        right
+            .release_date
+            .cmp(&left.release_date)
+            .then_with(|| left.name.cmp(&right.name))
+    });
+    let recommended = options
+        .iter()
+        .find(|option| {
+            option
+                .name
+                .to_ascii_lowercase()
+                .starts_with("raspberry pi os lite (64-bit)")
+                && [3, 4, 5].into_iter().all(|generation| {
+                    option.devices.iter().any(|device| {
+                        pi_os_device_generation(device) == Some(generation)
+                    })
+                })
+        })
+        .cloned()
+        .ok_or_else(|| {
         "Le catalogue officiel ne fournit pas d’image Raspberry Pi OS Lite 64 bits avec configuration de premier démarrage vérifiable. Préparation bloquée.".to_string()
     })?;
-    let image_url = image
-        .url
-        .ok_or_else(|| "Le catalogue officiel ne fournit pas d’adresse d’image.".to_string())?;
-    let image_sha256 = image.extract_sha256.ok_or_else(|| {
-        "Le catalogue officiel ne fournit pas l’empreinte de l’image.".to_string()
-    })?;
-    let download_size = image.image_download_size.ok_or_else(|| {
-        "Le catalogue officiel ne fournit pas la taille du téléchargement.".to_string()
-    })?;
-    let image_size = image.extract_size.ok_or_else(|| {
-        "Le catalogue officiel ne fournit pas la taille de l’image écrite.".to_string()
-    })?;
-    let release_date = image.release_date.ok_or_else(|| {
-        "Le catalogue officiel ne fournit pas la date de publication.".to_string()
-    })?;
-    Ok(PiOsRecommendation {
-        name: image.name,
+    Ok(PiOsCatalog {
+        recommended,
+        options: std::mem::take(&mut options),
+    })
+}
+
+fn pi_os_entry_to_option(image: RaspberryPiOsEntry) -> Option<PiOsRecommendation> {
+    let name = image.name;
+    let url = image.url?;
+    if !url.starts_with("https://downloads.raspberrypi.com/") {
+        return None;
+    }
+    let image_url = url;
+    let image_sha256 = image.extract_sha256.filter(|hash| valid_sha256(hash))?;
+    let download_size = image.image_download_size.filter(|size| *size > 0)?;
+    let image_size = image.extract_size.filter(|size| *size > 0)?;
+    let release_date = image
+        .release_date
+        .filter(|date| chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok())?;
+    let devices = image.devices?;
+    let supported_devices: Vec<_> = devices
+        .into_iter()
+        .filter(|device| pi_os_device_generation(device).is_some())
+        .collect();
+    if supported_devices.is_empty() || image.init_format.as_deref() != Some("cloudinit-rpi") {
+        return None;
+    }
+    let lower_name = name.to_ascii_lowercase();
+    let minimum_server_memory_gb = if lower_name.contains("lite") || lower_name.contains("server") {
+        1.0
+    } else {
+        4.0
+    };
+    Some(PiOsRecommendation {
+        name,
         release_date,
         image_url,
         image_sha256,
@@ -1137,11 +1188,22 @@ pub fn pi_os_recommendation() -> Result<PiOsRecommendation, String> {
             .filter(|hash| valid_sha256(hash)),
         download_size_gb: (download_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
         image_size_gb: (image_size as f64 / 1_000_000_000.0 * 10.0).round() / 10.0,
-        devices: image.devices.unwrap_or_default(),
+        devices: supported_devices,
         init_format: image.init_format.unwrap_or_default(),
-        minimum_server_memory_gb: 1.0,
+        minimum_server_memory_gb,
         initial_server_storage_gb: INITIAL_SERVER_STORAGE_GB,
         checked_at: Utc::now().to_rfc3339(),
+    })
+}
+
+pub fn pi_os_device_generation(device: &str) -> Option<u8> {
+    if !device.to_ascii_lowercase().contains("64bit") {
+        return None;
+    }
+    [3, 4, 5].into_iter().find(|generation| {
+        device
+            .to_ascii_lowercase()
+            .starts_with(&format!("pi{generation}"))
     })
 }
 
@@ -2109,6 +2171,7 @@ fn flatten_pi_os_entries(
     }
 }
 
+#[cfg(test)]
 fn latest_supported_pi_image(os_list: Vec<RaspberryPiOsEntry>) -> Option<RaspberryPiOsEntry> {
     let mut entries = Vec::new();
     flatten_pi_os_entries(os_list, &mut entries);
@@ -5533,7 +5596,7 @@ fn build_fresh_server(
 
     progress("Préparation du Java adapté à cet ordinateur…", 66);
     let java_major = java_major_for(&supported.java)?;
-    let runtime = runtime_package(&client, java_major, remote_linux)?;
+    let runtime = runtime_package(java_major, remote_linux, progress, 66)?;
     let runtime_archive = stage.join(&runtime.name);
     download_url_verified(&client, &runtime.link, &runtime.checksum, &runtime_archive)?;
     progress("Installation du runtime Java inclus…", 78);
@@ -5584,21 +5647,63 @@ fn java_major_for(game_version: &str) -> Result<u8, String> {
 }
 
 fn runtime_package(
-    client: &Client,
     major: u8,
     remote_linux: bool,
+    progress: &impl Fn(&str, u8),
+    progress_percent: u8,
 ) -> Result<RuntimePackage, String> {
     let (os, arch) = runtime_target(remote_linux)?;
     let url = format!(
         "https://api.adoptium.net/v3/assets/latest/{major}/hotspot?architecture={arch}&image_type=jre&os={os}&vendor=eclipse"
     );
-    let assets: Vec<RuntimeAsset> = get_json(client, &url)?;
-    assets
-        .into_iter()
-        .flat_map(|asset| asset.binaries)
-        .map(|binary| binary.package)
-        .find(|package| !package.checksum.is_empty() && package.link.starts_with("https://"))
-        .ok_or_else(|| format!("Aucun Java {major} officiel ne correspond à cet appareil."))
+    let mut last_error = String::new();
+    for attempt in 1..=3 {
+        progress(
+            &format!("Lecture du catalogue Java… tentative {attempt}/3"),
+            progress_percent,
+        );
+        let runtime_client = Client::builder()
+            .user_agent(concat!("MondeEnsemble/", env!("CARGO_PKG_VERSION")))
+            .timeout(Duration::from_secs(25))
+            .connect_timeout(Duration::from_secs(10))
+            .build()
+            .map_err(|error| error.to_string())?;
+        let assets = runtime_client
+            .get(&url)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::ACCEPT_ENCODING, "identity")
+            .send()
+            .map_err(network_error)
+            .and_then(|response| response.error_for_status().map_err(network_error))
+            .and_then(|response| {
+                response
+                    .json::<Vec<RuntimeAsset>>()
+                    .map_err(|error| format!("Réponse catalogue Java illisible : {error}"))
+            });
+        match assets {
+            Ok(assets) => {
+                return assets
+                    .into_iter()
+                    .flat_map(|asset| asset.binaries)
+                    .map(|binary| binary.package)
+                    .find(|package| {
+                        !package.checksum.is_empty() && package.link.starts_with("https://")
+                    })
+                    .ok_or_else(|| {
+                        format!("Aucun Java {major} officiel ne correspond à cet appareil.")
+                    });
+            }
+            Err(error) => {
+                last_error = error;
+                if attempt < 3 {
+                    std::thread::sleep(Duration::from_secs(attempt as u64));
+                }
+            }
+        }
+    }
+    Err(format!(
+        "Impossible de lire le catalogue Java après 3 tentatives : {last_error}. Vérifie ta connexion, puis relance l’installation. Le serveur déjà présent reste intact."
+    ))
 }
 
 fn runtime_target(remote_linux: bool) -> Result<(&'static str, &'static str), String> {
@@ -6354,7 +6459,7 @@ pub fn restore_backup(
                 .filter(|value| *value > 0)
                 .unwrap_or(BEDROCK_DEFAULT_PORT);
             let client = client()?;
-            let runtime = runtime_package(&client, java_major, false)?;
+            let runtime = runtime_package(java_major, false, &progress, 88)?;
             let runtime_archive = staging.join(&runtime.name);
             download_url_verified(&client, &runtime.link, &runtime.checksum, &runtime_archive)
                 .map_err(|error| format!("Téléchargement du Java adapté impossible; aucune restauration n’a été publiée. {error}"))?;
@@ -6557,7 +6662,7 @@ pub fn restore_pi_backup(
         65,
     );
     let client = client()?;
-    let runtime = runtime_package(&client, java_major, true)?;
+    let runtime = runtime_package(java_major, true, &progress, 65)?;
     let runtime_archive = staging.join(&runtime.name);
     download_url_verified(&client, &runtime.link, &runtime.checksum, &runtime_archive)?;
     let portable_runtime = staging.join("runtime-pi");
@@ -7210,6 +7315,32 @@ mod tests {
             ..pi_os_entry("2026-10-01")
         };
         assert!(latest_supported_pi_image(vec![only_unverified]).is_none());
+    }
+
+    #[test]
+    fn expert_pi_os_options_require_supported_64_bit_hardware_and_first_boot_setup() {
+        let mut supported = pi_os_entry("2026-10-01");
+        supported.name = "Raspberry Pi OS (64-bit) with desktop".into();
+        supported.devices = Some(vec!["pi4-64bit".into()]);
+        let option = super::pi_os_entry_to_option(supported).unwrap();
+        assert_eq!(option.minimum_server_memory_gb, 4.0);
+        assert_eq!(option.devices, vec!["pi4-64bit"]);
+
+        assert_eq!(super::pi_os_device_generation("pi3-64bit"), Some(3));
+        assert_eq!(super::pi_os_device_generation("pi5-64bit"), Some(5));
+        assert_eq!(super::pi_os_device_generation("pi3-32bit"), None);
+
+        let no_first_boot = RaspberryPiOsEntry {
+            init_format: None,
+            ..pi_os_entry("2026-10-01")
+        };
+        assert!(super::pi_os_entry_to_option(no_first_boot).is_none());
+
+        let untrusted_image_host = RaspberryPiOsEntry {
+            url: Some("https://example.com/os.img.xz".into()),
+            ..pi_os_entry("2026-10-01")
+        };
+        assert!(super::pi_os_entry_to_option(untrusted_image_host).is_none());
     }
 
     #[test]

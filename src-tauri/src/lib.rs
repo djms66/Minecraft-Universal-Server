@@ -278,8 +278,10 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
 
     // macOS reports an SD card in the MacBook's built-in reader as
     // "internal, physical", so `diskutil list external physical` omits it.
-    // Only add disks that System Profiler explicitly identifies as removable
-    // media inside a card reader; never broaden this to all internal disks.
+    // Match the card to its exact physical-media name when newer System
+    // Profiler schemas omit the BSD identifier; never admit all internal disks.
+    let mut built_in_card_seen = false;
+    let mut built_in_card_mapped = false;
     if let Ok(output) = Command::new("/usr/sbin/system_profiler")
         .args(["SPCardReaderDataType", "-json"])
         .output()
@@ -287,31 +289,112 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         if output.status.success() {
             if let Ok(profile) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
                 if let Some(readers) = profile["SPCardReaderDataType"].as_array() {
+                    let mut cards_without_device_id = Vec::new();
                     for card in readers
                         .iter()
                         .filter_map(|reader| reader["_items"].as_array())
                         .flatten()
-                        .filter(|card| card["removable_media"].as_str() == Some("yes"))
                     {
-                        let Some(disk) = card["bsd_name"].as_str().filter(|disk| {
-                            disk.strip_prefix("disk").is_some_and(|suffix| {
-                                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
-                            })
-                        }) else {
+                        let explicitly_removable = card["removable_media"].as_str() == Some("yes");
+                        let product = card["spcardreader_card_productname"]
+                            .as_str()
+                            .filter(|product| !product.trim().is_empty());
+                        if !explicitly_removable && product.is_none() {
                             continue;
-                        };
+                        }
+                        built_in_card_seen = true;
                         let name = card["_name"]
                             .as_str()
                             .unwrap_or("Carte SD amovible")
                             .to_string();
                         let size_bytes = card["size_in_bytes"].as_u64().unwrap_or_default();
-                        disks
-                            .entry(disk.to_string())
-                            .or_insert(Some((name, size_bytes)));
+                        if let Some(disk) = card["bsd_name"].as_str().filter(|disk| {
+                            disk.strip_prefix("disk").is_some_and(|suffix| {
+                                !suffix.is_empty() && suffix.bytes().all(|b| b.is_ascii_digit())
+                            })
+                        }) {
+                            disks
+                                .entry(disk.to_string())
+                                .or_insert(Some((name, size_bytes)));
+                            if product.is_some() {
+                                built_in_card_mapped = true;
+                            }
+                        } else {
+                            // Newer macOS versions no longer return bsd_name or
+                            // removable_media for built-in SD readers. Correlate
+                            // their inserted-card identity with diskutil's exact
+                            // physical-media name instead of admitting every
+                            // internal disk as a possible erase target.
+                            cards_without_device_id
+                                .push((name, product.unwrap_or_default().to_string()));
+                        }
+                    }
+
+                    if !cards_without_device_id.is_empty() {
+                        if let Ok(output) = Command::new("/usr/sbin/diskutil").arg("list").output()
+                        {
+                            if output.status.success() {
+                                for line in String::from_utf8_lossy(&output.stdout).lines() {
+                                    let Some(rest) = line.strip_prefix("/dev/") else {
+                                        continue;
+                                    };
+                                    let Some((disk, flags)) = rest.split_once(' ') else {
+                                        continue;
+                                    };
+                                    if !flags.contains("physical")
+                                        || !disk.starts_with("disk")
+                                        || disks.contains_key(disk)
+                                    {
+                                        continue;
+                                    }
+                                    let Ok(info) = Command::new("/usr/sbin/diskutil")
+                                        .args(["info", &format!("/dev/{disk}")])
+                                        .output()
+                                    else {
+                                        continue;
+                                    };
+                                    if !info.status.success() {
+                                        continue;
+                                    }
+                                    let info = String::from_utf8_lossy(&info.stdout);
+                                    let media_name = info.lines().find_map(|row| {
+                                        let (key, value) = row.split_once(':')?;
+                                        matches!(key.trim(), "Media Name" | "Device / Media Name")
+                                            .then_some(value.trim())
+                                    });
+                                    let Some(media_name) = media_name else {
+                                        continue;
+                                    };
+                                    let Some((card_name, _)) =
+                                        cards_without_device_id.iter().find(|(name, product)| {
+                                            sd_media_name_matches(media_name, name, product)
+                                        })
+                                    else {
+                                        continue;
+                                    };
+                                    let disk_size = info.lines().find_map(|row| {
+                                        let (key, value) = row.split_once(':')?;
+                                        (key.trim() == "Disk Size").then_some(value.trim())
+                                    });
+                                    let size_bytes = disk_size
+                                        .and_then(parse_disk_size_bytes)
+                                        .unwrap_or_default();
+                                    disks.insert(
+                                        disk.to_string(),
+                                        Some((card_name.clone(), size_bytes)),
+                                    );
+                                    built_in_card_mapped = true;
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
+    }
+
+    if built_in_card_seen && !built_in_card_mapped {
+        return Err("Le lecteur SD du Mac voit la carte, mais macOS ne la fournit pas comme disque inscriptible. Retire-la, réinsère-la complètement, puis relance la détection. Aucun disque n’a été modifié.".into());
     }
 
     let mut devices = Vec::new();
@@ -357,6 +440,39 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         });
     }
     Ok(devices)
+}
+
+fn sd_media_name_matches(media_name: &str, card_name: &str, card_product: &str) -> bool {
+    let media_name = media_name.trim();
+    !media_name.is_empty()
+        && ((!card_name.trim().is_empty() && media_name.eq_ignore_ascii_case(card_name.trim()))
+            || (!card_product.trim().is_empty()
+                && media_name.eq_ignore_ascii_case(card_product.trim())))
+}
+
+#[cfg(test)]
+mod boot_target_tests {
+    use super::sd_media_name_matches;
+
+    #[test]
+    fn matches_only_the_exact_media_name_reported_for_the_sd_card() {
+        assert!(sd_media_name_matches(
+            "SDHC Card (Class 10)",
+            "SDHC Card (Class 10)",
+            "SDSC32G"
+        ));
+        assert!(sd_media_name_matches(
+            "SDSC32G",
+            "SDHC Card (Class 10)",
+            "SDSC32G"
+        ));
+        assert!(!sd_media_name_matches(
+            "SDHC Card (Class 10) - other device",
+            "SDHC Card (Class 10)",
+            "SDSC32G"
+        ));
+        assert!(!sd_media_name_matches("Macintosh HD", "", "SDSC32G"));
+    }
 }
 
 fn discover_windows_boot_targets() -> Result<Vec<PiBootTarget>, String> {

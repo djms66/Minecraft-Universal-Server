@@ -101,6 +101,8 @@ type PiFlashResult = {
   target_model: string;
   expected_devices: string[];
 };
+
+const PI_FIRST_BOOT_WAIT_MS = 150_000;
 type PiInstallation = {
   host: string;
   username: string;
@@ -237,6 +239,12 @@ function App() {
   // A card-preparation result is deliberately session-only: every launch starts
   // at step 1 and requires fresh device detection and erase confirmation.
   const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
+  const [piBootWaitStartedAt, setPiBootWaitStartedAt] = useState<number | null>(
+    null,
+  );
+  const [piBootWaitElapsedMs, setPiBootWaitElapsedMs] = useState(0);
+  const finishNewPiAutoStart = useRef(false);
+  const finishNewPiRef = useRef<() => Promise<void>>(async () => {});
   const [piOsRecommendation, setPiOsRecommendation] =
     useState<PiOsRecommendation | null>(null);
   const [piOsOptions, setPiOsOptions] = useState<PiOsRecommendation[]>([]);
@@ -918,6 +926,47 @@ function App() {
       setBusy(false);
     }
   };
+
+  finishNewPiRef.current = finishNewPi;
+
+  useEffect(() => {
+    if (!piFlashResult || !piEulaAccepted || piBootWaitStartedAt === null) {
+      setPiBootWaitElapsedMs(0);
+      return;
+    }
+
+    const updateElapsedTime = () => {
+      setPiBootWaitElapsedMs(
+        Math.min(Date.now() - piBootWaitStartedAt, PI_FIRST_BOOT_WAIT_MS),
+      );
+    };
+    updateElapsedTime();
+    const interval = window.setInterval(updateElapsedTime, 250);
+    return () => window.clearInterval(interval);
+  }, [piFlashResult?.hostname, piEulaAccepted, piBootWaitStartedAt]);
+
+  const piBootWaitComplete = piBootWaitElapsedMs >= PI_FIRST_BOOT_WAIT_MS;
+  const piBootWaitProgress = Math.min(
+    100,
+    (piBootWaitElapsedMs / PI_FIRST_BOOT_WAIT_MS) * 100,
+  );
+  const piBootWaitRemainingSeconds = Math.ceil(
+    (PI_FIRST_BOOT_WAIT_MS - piBootWaitElapsedMs) / 1000,
+  );
+
+  useEffect(() => {
+    if (
+      !piBootWaitComplete ||
+      !piEulaAccepted ||
+      !piFlashResult ||
+      busy ||
+      finishNewPiAutoStart.current
+    ) {
+      return;
+    }
+    finishNewPiAutoStart.current = true;
+    void finishNewPiRef.current();
+  }, [piBootWaitComplete, piEulaAccepted, piFlashResult, busy]);
 
   const refreshPiStatus = async (includeLogs = false) => {
     if (!piInstallation) return;
@@ -2399,17 +2448,48 @@ function App() {
                             </li>
                             <li>
                               Rallume le Pi et laisse-le allumé. Pour son
-                              premier démarrage, attends environ 2 minutes, puis
-                              clique sur le bouton ci-dessous.
+                              premier démarrage, l’application attendra 2 min
+                              30 s après l’acceptation du contrat, puis cherchera
+                              le Pi et lancera l’installation automatiquement.
                             </li>
                           </ol>
+                          <div className="pi-first-boot-timer">
+                            <small>
+                              {!piEulaAccepted
+                                ? "Délai de démarrage : 2 min 30 s"
+                                : piBootWaitComplete
+                                  ? "Délai terminé · recherche automatique du Pi…"
+                                  : `Démarrage du Pi · ${Math.floor(piBootWaitRemainingSeconds / 60)} min ${String(piBootWaitRemainingSeconds % 60).padStart(2, "0")} s restantes`}
+                            </small>
+                            <div
+                              className="pi-first-boot-timer-track"
+                              role="progressbar"
+                              aria-label="Délai de démarrage du Raspberry Pi"
+                              aria-valuemin={0}
+                              aria-valuemax={150}
+                              aria-valuenow={Math.floor(
+                                piBootWaitElapsedMs / 1000,
+                              )}
+                            >
+                              <span
+                                style={{ width: `${piBootWaitProgress}%` }}
+                              />
+                            </div>
+                          </div>
                           <label className="eula-choice">
                             <input
                               type="checkbox"
                               checked={piEulaAccepted}
-                              onChange={(event) =>
-                                setPiEulaAccepted(event.target.checked)
-                              }
+                              disabled={busy}
+                              onChange={(event) => {
+                                const accepted = event.target.checked;
+                                setPiEulaAccepted(accepted);
+                                setPiBootWaitElapsedMs(0);
+                                setPiBootWaitStartedAt(
+                                  accepted ? Date.now() : null,
+                                );
+                                finishNewPiAutoStart.current = false;
+                              }}
                             />
                             <span>
                               J’accepte le contrat de licence Minecraft pour ce
@@ -2424,17 +2504,21 @@ function App() {
                           )}
                           <button
                             className="button primary"
-                            onClick={finishNewPi}
-                            disabled={busy || !piEulaAccepted}
+                            onClick={() => void finishNewPi()}
+                            disabled={
+                              busy || !piEulaAccepted || !piBootWaitComplete
+                            }
                           >
                             {busy
                               ? "Recherche du Pi (jusqu’à 1 min)…"
-                              : "Le Pi a redémarré · terminer l’installation"}
+                              : piBootWaitComplete
+                                ? "Réessayer la détection du Pi"
+                                : "Attendre le démarrage du Pi"}
                           </button>
                           <small className="pi-eula-hint">
-                            La recherche prend jusqu’à environ 1 minute. Si le
-                            Pi n’est pas trouvé, laisse-le allumé, vérifie qu’il
-                            est relié au même routeur, puis clique de nouveau.
+                            Si le Pi n’est pas trouvé, laisse-le allumé, vérifie
+                            qu’il est relié au même routeur, puis relance la
+                            détection avec le bouton.
                           </small>
                           <small>
                             Outil officiel Raspberry Pi Imager{" "}

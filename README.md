@@ -1,10 +1,10 @@
-# Monde Ensemble 0.18.64
+# Monde Ensemble 0.18.65
 
 Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
 ## Ce que fait cette version
 
-- démarre les nouveaux utilisateurs dans un guide « installer mon serveur » plutôt que dans un tableau de bord vide ; chaque lancement recommence la préparation du Pi à l’étape 1 et exige une nouvelle détection puis une confirmation explicite avant d’effacer le support ; pour un Pi neuf, montre d’abord le matériel nécessaire et la préparation depuis la carte, puis présente uniquement l’adresse et les versions après installation ; les outils de réglage apparaissent ensuite dans le tableau de bord ;
+- démarre les nouveaux utilisateurs dans un guide « installer mon serveur » plutôt que dans un tableau de bord vide ; chaque lancement recommence la préparation du Pi à l’étape 1 et exige une nouvelle détection puis une confirmation explicite avant d’effacer le support ; pour un Pi neuf, montre d’abord le matériel nécessaire et la préparation depuis la carte ; après acceptation de la licence, une barre de 150 secondes suit le premier démarrage puis l’application recherche automatiquement le Pi et lance l’installation ; les outils de réglage apparaissent ensuite dans le tableau de bord ;
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - lit le format actuel du catalogue Java Adoptium ; après deux lectures HTTP/1, utilise `curl` sécurisé comme secours pour éviter qu’un corps HTTP mal décodé bloque l’installation ; le JRE ne passe à l’installation qu’après validation de son SHA-256 ;

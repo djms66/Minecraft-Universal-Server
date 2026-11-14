@@ -2029,6 +2029,23 @@ button {
   background: #619052;
   transition: width 0.25s ease;
 }
+.progress-track.indeterminate i {
+  width: 32%;
+  animation: progress-indeterminate 1.4s ease-in-out infinite;
+}
+@keyframes progress-indeterminate {
+  from {
+    transform: translateX(-110%);
+  }
+  to {
+    transform: translateX(330%);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .progress-track.indeterminate i {
+    animation-duration: 3s;
+  }
+}
 .inline-error {
   border: 1px solid #ead5cc;
   background: #fbf0eb;

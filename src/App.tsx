@@ -41,7 +41,11 @@ type PiUpdateCheck = {
   reasons: string[];
   checked_at: string;
 };
-type ProgressMessage = { step: string; percent: number };
+type ProgressMessage = {
+  step: string;
+  percent: number;
+  indeterminate?: boolean;
+};
 type OperationResult = { path: string; detail: string; sha256: string | null };
 type PaperPluginSuggestion = {
   project_id: string;
@@ -211,8 +215,9 @@ function App() {
   const [piDiscovering, setPiDiscovering] = useState(false);
   const [piCandidates, setPiCandidates] = useState<DiscoveredPi[]>([]);
   const [piBootTargets, setPiBootTargets] = useState<PiBootTarget[]>([]);
-  const [pendingPiTarget, setPendingPiTarget] =
-    useState<PiBootTarget | null>(null);
+  const [pendingPiTarget, setPendingPiTarget] = useState<PiBootTarget | null>(
+    null,
+  );
   const [piBootScanState, setPiBootScanState] = useState<
     "idle" | "scanning" | "done"
   >("idle");
@@ -344,7 +349,22 @@ function App() {
 
   const progressChannel = () => {
     const channel = new Channel<ProgressMessage>();
-    channel.onmessage = setOperationProgress;
+    channel.onmessage = (message) => {
+      const macOsWriteWait =
+        system?.os === "macos" &&
+        message.step.startsWith(
+          "Téléchargement, écriture puis vérification de la carte",
+        );
+      setOperationProgress(
+        macOsWriteWait
+          ? {
+              ...message,
+              step: "Téléchargement, écriture et vérification en cours. Ne retire pas la carte.",
+              indeterminate: true,
+            }
+          : message,
+      );
+    };
     return channel;
   };
 
@@ -2309,7 +2329,9 @@ function App() {
               >
                 <div className="eyebrow">CONFIRMATION REQUISE</div>
                 <h2 id="erase-confirm-title">Effacer cette carte SD ?</h2>
-                <p>Vérifie que le support détecté est bien celui du Raspberry Pi.</p>
+                <p>
+                  Vérifie que le support détecté est bien celui du Raspberry Pi.
+                </p>
                 <dl className="erase-confirm-device">
                   <div>
                     <dt>Carte détectée</dt>
@@ -2343,7 +2365,9 @@ function App() {
                     onClick={confirmFlashPiOs}
                     disabled={busy}
                   >
-                    {busy ? "Préparation en cours…" : "Effacer la carte et continuer"}
+                    {busy
+                      ? "Préparation en cours…"
+                      : "Effacer la carte et continuer"}
                   </button>
                 </div>
               </section>
@@ -4293,16 +4317,32 @@ function OperationStatus({
   result: OperationResult | null;
   error: string;
 }) {
+  const indeterminate = Boolean(progress?.indeterminate);
   return (
     <div className={error ? "inline-error" : "operation-success"}>
       {progress && (
         <>
           <div className="progress-head">
             <span>{progress.step}</span>
-            <b>{progress.percent}%</b>
+            <b>{indeterminate ? "EN COURS" : `${progress.percent}%`}</b>
           </div>
-          <div className="progress-track">
-            <i style={{ width: `${progress.percent}%` }} />
+          <div
+            className={`progress-track${indeterminate ? " indeterminate" : ""}`}
+            role="progressbar"
+            aria-valuemin={indeterminate ? undefined : 0}
+            aria-valuemax={indeterminate ? undefined : 100}
+            aria-valuenow={indeterminate ? undefined : progress.percent}
+            aria-valuetext={
+              indeterminate
+                ? "Opération en cours, progression non disponible"
+                : undefined
+            }
+          >
+            <i
+              style={
+                indeterminate ? undefined : { width: `${progress.percent}%` }
+              }
+            />
           </div>
         </>
       )}

@@ -509,6 +509,14 @@ fn run_imager(
     redactions: &[Vec<u8>],
     progress: &impl Fn(&str, u8),
 ) -> Result<(), String> {
+    if std::env::consts::OS == "macos" {
+        let target_device = args.last().ok_or_else(|| {
+            "Le support cible n’est pas indiqué. Aucun support n’a été modifié.".to_string()
+        })?;
+        if macos_imager_targets_device(target_device)? {
+            return Err("Une autre écriture Raspberry Pi Imager utilise déjà cette carte. Attends qu’elle se termine avant de réessayer. Aucun nouveau processus d’écriture n’a été lancé.".into());
+        }
+    }
     let mut child = match std::env::consts::OS {
         "macos" => spawn_macos_elevated(tool, args)?,
         "windows" => spawn_windows_elevated(tool, args)?,
@@ -571,6 +579,26 @@ fn run_imager(
             None => thread::sleep(Duration::from_millis(500)),
         }
     }
+}
+
+fn macos_imager_targets_device(target_device: &str) -> Result<bool, String> {
+    let output = Command::new("ps")
+        .args(["-axo", "command="])
+        .output()
+        .map_err(|_| "macOS n’a pas pu vérifier si une écriture utilise déjà cette carte. Aucun support n’a été modifié.".to_string())?;
+    if !output.status.success() {
+        return Err("macOS n’a pas pu vérifier si une écriture utilise déjà cette carte. Aucun support n’a été modifié.".into());
+    }
+    let processes = String::from_utf8_lossy(&output.stdout);
+    Ok(processes
+        .lines()
+        .any(|line| process_targets_imager_device(line, target_device)))
+}
+
+fn process_targets_imager_device(command_line: &str, target_device: &str) -> bool {
+    let command_line = command_line.trim();
+    let is_imager = command_line.contains("/rpi-imager ") || command_line.ends_with("/rpi-imager");
+    is_imager && command_line.split_whitespace().last() == Some(target_device)
 }
 
 fn copy_pipe_to_log(
@@ -925,8 +953,8 @@ fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
 mod tests {
     use super::{
         copy_pipe_to_log, first_boot_network_instructions, imager_cli_args, network_config,
-        powershell_quote, redacted_prefix_len, restrict_file_permissions, sensitive_log_values,
-        user_data, windows_quote,
+        powershell_quote, process_targets_imager_device, redacted_prefix_len,
+        restrict_file_permissions, sensitive_log_values, user_data, windows_quote,
     };
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -987,6 +1015,22 @@ mod tests {
         assert!(args.contains(&"--cloudinit-networkconfig".to_string()));
         assert!(args.contains(&"--debug".to_string()));
         assert!(!args.contains(&"--disable-verify".to_string()));
+    }
+
+    #[test]
+    fn existing_imager_is_matched_only_to_the_same_device() {
+        assert!(process_targets_imager_device(
+            "/Volumes/Raspberry Pi Imager.app/Contents/MacOS/rpi-imager --cli /dev/disk16",
+            "/dev/disk16"
+        ));
+        assert!(!process_targets_imager_device(
+            "/Volumes/Raspberry Pi Imager.app/Contents/MacOS/rpi-imager --cli /dev/disk15",
+            "/dev/disk16"
+        ));
+        assert!(!process_targets_imager_device(
+            "/usr/bin/other-tool /dev/disk16",
+            "/dev/disk16"
+        ));
     }
 
     #[test]

@@ -1982,7 +1982,7 @@ dependencies = [
 
 [[package]]
 name = "monde-ensemble"
-version = "0.18.45"
+version = "0.18.46"
 dependencies = [
  "chrono",
  "flate2",

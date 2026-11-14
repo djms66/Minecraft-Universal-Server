@@ -197,9 +197,7 @@ async fn prepare_pi_sd(
             &target_device,
             &image_url,
             &image_sha256,
-            current_recommendation.download_sha256.as_deref().ok_or_else(|| {
-                "Le catalogue Raspberry Pi n’a pas fourni l’empreinte du téléchargement. La carte n’a pas été modifiée.".to_string()
-            })?,
+            current_recommendation.download_sha256.as_deref(),
             &wifi_ssid,
             &wifi_password,
             &wifi_country,

@@ -99,7 +99,7 @@ pub fn flash_pi_os(
     target_device: &str,
     image_url: &str,
     image_sha256: &str,
-    download_sha256: &str,
+    download_sha256: Option<&str>,
     wifi_ssid: &str,
     wifi_password: &str,
     wifi_country: &str,
@@ -108,7 +108,7 @@ pub fn flash_pi_os(
 ) -> Result<PiFlashResult, String> {
     if !image_url.starts_with("https://downloads.raspberrypi.com/")
         || !valid_sha256(image_sha256)
-        || !valid_sha256(download_sha256)
+        || download_sha256.is_some_and(|hash| !valid_sha256(hash))
     {
         return Err("Le catalogue Raspberry Pi n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
     }
@@ -130,7 +130,13 @@ pub fn flash_pi_os(
         return Err("La version de l’outil officiel Raspberry Pi Imager n’est pas celle qui a été vérifiée. Aucun support n’a été modifié.".into());
     }
 
-    let image_path = download_pi_image(app_data, image_url, download_sha256, &progress)?;
+    let image_path = download_pi_image(
+        app_data,
+        image_url,
+        download_sha256,
+        image_sha256,
+        &progress,
+    )?;
     // Downloading can take several minutes. Recheck the exact removable disk
     // after it finishes and immediately before the official writer opens it.
     verify_target()?;
@@ -210,26 +216,32 @@ fn imager_cli_args(
     .into()
 }
 
-/// Downloads Raspberry Pi OS before unmounting the card, verifies the
-/// catalogue checksum, and keeps a verified cache so a retry avoids redownloading.
+/// Downloads Raspberry Pi OS before unmounting the card. When the manifest
+/// includes a compressed-file hash, it is checked here. Otherwise Imager
+/// verifies the extracted image against `image_sha256` while writing it.
 pub fn download_pi_image(
     app_data: &Path,
     image_url: &str,
-    expected_sha256: &str,
+    download_sha256: Option<&str>,
+    image_sha256: &str,
     progress: &impl Fn(&str, u8),
 ) -> Result<PathBuf, String> {
     if !image_url.starts_with("https://downloads.raspberrypi.com/")
-        || !valid_sha256(expected_sha256)
+        || !valid_sha256(image_sha256)
+        || download_sha256.is_some_and(|hash| !valid_sha256(hash))
     {
-        return Err("Le catalogue Raspberry Pi n’a pas fourni un téléchargement vérifiable. Aucun support n’a été modifié.".into());
+        return Err("Le catalogue Raspberry Pi n’a pas fourni une image vérifiable. Aucun support n’a été modifié.".into());
     }
 
     let directory = app_data.join("pi-images");
     fs::create_dir_all(&directory).map_err(io_error)?;
-    let image_path = directory.join(format!("{expected_sha256}.img.xz"));
-    if image_path.is_file() && sha256_file(&image_path).as_deref() == Some(expected_sha256) {
-        progress("Image Raspberry Pi OS déjà téléchargée et vérifiée.", 38);
-        return Ok(image_path);
+    let cache_key = download_sha256.unwrap_or(image_sha256);
+    let image_path = directory.join(format!("{cache_key}.img.xz"));
+    if let Some(expected_sha256) = download_sha256 {
+        if image_path.is_file() && sha256_file(&image_path).as_deref() == Some(expected_sha256) {
+            progress("Image Raspberry Pi OS déjà téléchargée et vérifiée.", 38);
+            return Ok(image_path);
+        }
     }
     if image_path.exists() {
         fs::remove_file(&image_path).map_err(io_error)?;
@@ -303,12 +315,21 @@ pub fn download_pi_image(
     }
     output.sync_all().map_err(io_error)?;
     drop(output);
-    let actual_sha256 = format!("{:x}", hasher.finalize());
-    if actual_sha256 != expected_sha256 {
-        return Err("L’empreinte du téléchargement ne correspond pas au catalogue officiel. La carte n’a pas été modifiée.".into());
+    if let Some(expected_sha256) = download_sha256 {
+        let actual_sha256 = format!("{:x}", hasher.finalize());
+        if actual_sha256 != expected_sha256 {
+            return Err("L’empreinte du téléchargement ne correspond pas au catalogue officiel. La carte n’a pas été modifiée.".into());
+        }
     }
     fs::rename(&temporary, &image_path).map_err(io_error)?;
-    progress("Image Raspberry Pi OS téléchargée et vérifiée.", 38);
+    progress(
+        if download_sha256.is_some() {
+            "Image Raspberry Pi OS téléchargée et vérifiée."
+        } else {
+            "Téléchargement terminé. L’image sera vérifiée par Raspberry Pi Imager."
+        },
+        38,
+    );
     Ok(image_path)
 }
 

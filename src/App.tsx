@@ -2044,11 +2044,13 @@ function App() {
                             <strong>Vérifier le système et le réseau</strong>
                             <small>
                               Système automatique ·{" "}
-                              {piWifiSsid
-                                ? piWifiPassword
-                                  ? "Wi-Fi renseigné"
-                                  : "mot de passe Wi-Fi à saisir"
-                                : "Wi-Fi facultatif"}
+                              {piFlashResult
+                                ? "Configuration de démarrage écrite sur la carte"
+                                : piWifiSsid
+                                  ? piWifiPassword
+                                    ? "Wi-Fi renseigné"
+                                    : "mot de passe Wi-Fi à saisir"
+                                  : "Wi-Fi facultatif"}
                             </small>
                           </span>
                         </li>

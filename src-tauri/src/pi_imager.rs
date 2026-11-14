@@ -988,14 +988,28 @@ fn update_write_progress(log_path: &Path, last_percent: &mut u8, progress: &impl
     else {
         return;
     };
-    if let Some(captures) = pattern.captures_iter(&log).last() {
+    let mut target_write_complete = false;
+    let mut latest_target_progress = None;
+    for captures in pattern.captures_iter(&log) {
         let phase = captures.get(1).map(|m| m.as_str()).unwrap_or_default();
         let value = captures
             .get(2)
             .and_then(|m| m.as_str().parse::<u8>().ok())
             .unwrap_or_default()
             .min(100);
-        let mapped = if phase.eq_ignore_ascii_case("verifying") {
+        if phase.eq_ignore_ascii_case("writing") {
+            target_write_complete = value == 100;
+            latest_target_progress = Some((false, value));
+        } else if target_write_complete {
+            // Raspberry Pi Imager also logs a "Verifying" phase while it
+            // checks the downloaded image cache. Do not count that as SD
+            // verification; only accept this phase after the card write hits
+            // 100 percent.
+            latest_target_progress = Some((true, value));
+        }
+    }
+    if let Some((is_verifying_card, value)) = latest_target_progress {
+        let mapped = if is_verifying_card {
             78 + value.saturating_mul(20) / 100
         } else {
             18 + value.saturating_mul(58) / 100
@@ -1003,7 +1017,7 @@ fn update_write_progress(log_path: &Path, last_percent: &mut u8, progress: &impl
         if mapped > *last_percent {
             *last_percent = mapped;
             progress(
-                if phase.eq_ignore_ascii_case("verifying") {
+                if is_verifying_card {
                     "Vérification de la carte écrite…"
                 } else {
                     "Écriture de Raspberry Pi OS sur la carte…"

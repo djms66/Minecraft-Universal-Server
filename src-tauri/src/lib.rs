@@ -296,6 +296,20 @@ async fn prepare_pi_sd(
 }
 
 fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
+    match discover_macos_boot_targets_once() {
+        Err(error) if error.contains("lecteur SD du Mac voit la carte") => {
+            // The built-in reader can report the card to System Profiler a
+            // moment before Disk Arbitration exposes its writable device.
+            // Retry this read-only probe once instead of asking the user to
+            // remove and reinsert a card that is already seated correctly.
+            thread::sleep(Duration::from_millis(900));
+            discover_macos_boot_targets_once()
+        }
+        result => result,
+    }
+}
+
+fn discover_macos_boot_targets_once() -> Result<Vec<PiBootTarget>, String> {
     let output = command_output_timeout(
         Command::new("/usr/sbin/diskutil").args(["list", "external", "physical"]),
         Duration::from_secs(10),

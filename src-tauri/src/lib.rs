@@ -122,39 +122,6 @@ async fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         .map_err(|error| error.to_string())?
 }
 
-#[tauri::command]
-async fn recover_pi_flash_result(
-    app: tauri::AppHandle,
-    target_id: String,
-    target_name: String,
-    target_size_bytes: u64,
-    image_name: String,
-    image_url: String,
-    image_sha256: String,
-    download_sha256: Option<String>,
-    expected_devices: Vec<String>,
-) -> Result<Option<pi_imager::PiFlashResult>, String> {
-    let app_data = app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Le dossier de l’application est inaccessible : {error}"))?;
-    tauri::async_runtime::spawn_blocking(move || {
-        pi_imager::recover_completed_flash(
-            &app_data,
-            &target_id,
-            &target_name,
-            target_size_bytes,
-            &image_name,
-            &image_url,
-            &image_sha256,
-            download_sha256.as_deref(),
-            &expected_devices,
-        )
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
 fn discover_pi_boot_targets_sync() -> Result<Vec<PiBootTarget>, String> {
     match std::env::consts::OS {
         "macos" => discover_macos_boot_targets(),
@@ -1435,7 +1402,6 @@ pub fn run() {
             discover_pi,
             discover_new_pi,
             discover_pi_boot_targets,
-            recover_pi_flash_result,
             check_macos_pi_writer,
             prepare_pi_sd,
             get_compatibility,

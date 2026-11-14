@@ -192,36 +192,6 @@ function readSavedPiInstallation(): PiInstallation | null {
   }
 }
 
-const PI_FLASH_SESSION_KEY = "monde-ensemble.pi-flash-session";
-const PI_FORCE_FRESH_KEY = "monde-ensemble.pi-force-fresh";
-
-function readSavedPiForceFresh(): boolean {
-  try {
-    return localStorage.getItem(PI_FORCE_FRESH_KEY) === "true";
-  } catch {
-    return false;
-  }
-}
-
-function readSavedPiFlashResult(): PiFlashResult | null {
-  try {
-    const value = JSON.parse(
-      localStorage.getItem(PI_FLASH_SESSION_KEY) || "null",
-    ) as Partial<PiFlashResult> | null;
-    return value &&
-      typeof value.hostname === "string" &&
-      /^monde-ensemble-[a-f0-9]{32}$/.test(value.hostname) &&
-      typeof value.log_path === "string" &&
-      typeof value.target_id === "string" &&
-      typeof value.target_size_bytes === "number" &&
-      Array.isArray(value.expected_devices)
-      ? (value as PiFlashResult)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
 function readSavedLocalInstallation(): LocalInstallation | null {
   try {
     const value = JSON.parse(
@@ -264,11 +234,9 @@ function App() {
   const [piWifiSsid, setPiWifiSsid] = useState("");
   const [piWifiPassword, setPiWifiPassword] = useState("");
   const [piWifiCountry, setPiWifiCountry] = useState("FR");
-  const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(
-    readSavedPiFlashResult,
-  );
-  const [forceFreshPiSetup, setForceFreshPiSetup] =
-    useState(readSavedPiForceFresh);
+  // A card-preparation result is deliberately session-only: every launch starts
+  // at step 1 and requires fresh device detection and erase confirmation.
+  const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
   const [piOsRecommendation, setPiOsRecommendation] =
     useState<PiOsRecommendation | null>(null);
   const [piOsOptions, setPiOsOptions] = useState<PiOsRecommendation[]>([]);
@@ -276,12 +244,10 @@ function App() {
   const [piExpertModel, setPiExpertModel] = useState("");
   const [piExpertMemory, setPiExpertMemory] = useState("");
   const [piExpertImageUrl, setPiExpertImageUrl] = useState("");
-  const [piFlashExpectedModel, setPiFlashExpectedModel] = useState(
-    () => readSavedPiFlashResult()?.target_model ?? "",
-  );
+  const [piFlashExpectedModel, setPiFlashExpectedModel] = useState("");
   const [piFlashExpectedDevices, setPiFlashExpectedDevices] = useState<
     string[]
-  >(() => readSavedPiFlashResult()?.expected_devices ?? []);
+  >([]);
   const [piOsLoading, setPiOsLoading] = useState(false);
   const [piOsError, setPiOsError] = useState("");
   const piExpertOptions = piOsOptions.filter(
@@ -373,20 +339,11 @@ function App() {
   }, [piInstallation]);
 
   useEffect(() => {
-    if (piFlashResult) {
-      localStorage.setItem(PI_FLASH_SESSION_KEY, JSON.stringify(piFlashResult));
-    } else {
-      localStorage.removeItem(PI_FLASH_SESSION_KEY);
-    }
-  }, [piFlashResult]);
-
-  useEffect(() => {
-    if (forceFreshPiSetup) {
-      localStorage.setItem(PI_FORCE_FRESH_KEY, "true");
-    } else {
-      localStorage.removeItem(PI_FORCE_FRESH_KEY);
-    }
-  }, [forceFreshPiSetup]);
+    // Remove obsolete recovery markers from previous builds without touching
+    // saved server installations or any data on the SD card.
+    localStorage.removeItem("monde-ensemble.pi-flash-session");
+    localStorage.removeItem("monde-ensemble.pi-force-fresh");
+  }, []);
 
   useEffect(() => {
     if (localInstallation) {
@@ -735,35 +692,6 @@ function App() {
       const targets = await invoke<PiBootTarget[]>("discover_pi_boot_targets");
       setPiBootTargets(targets);
       setPiBootScanState("done");
-      if (
-        !piFlashResult &&
-        !forceFreshPiSetup &&
-        targets.length === 1 &&
-        activePiOs
-      ) {
-        const target = targets[0];
-        const recovered = await invoke<PiFlashResult | null>(
-          "recover_pi_flash_result",
-          {
-            targetId: target.id,
-            targetName: target.name,
-            targetSizeBytes: target.size_bytes,
-            imageName: activePiOs.name,
-            imageUrl: activePiOs.image_url,
-            imageSha256: activePiOs.image_sha256,
-            downloadSha256: activePiOs.download_sha256,
-            expectedDevices: activePiOs.devices,
-          },
-        );
-        if (recovered) {
-          setPiFlashResult(recovered);
-          setPiFlashExpectedModel(recovered.target_model);
-          setPiFlashExpectedDevices(recovered.expected_devices);
-          setPiEulaAccepted(false);
-          setOperationError("");
-          setConnection("Carte déjà écrite et vérifiée · reprise possible");
-        }
-      }
     } catch (error) {
       setPiBootScanError(String(error));
       setPiBootScanState("idle");
@@ -788,7 +716,6 @@ function App() {
     setPiWifiPassword("");
     setPiWifiCountry("FR");
     setPiEulaAccepted(false);
-    setForceFreshPiSetup(true);
     setConnection("Nouvelle préparation depuis zéro · carte à détecter");
   };
 
@@ -849,7 +776,6 @@ function App() {
       setPiFlashResult(result);
       setPiFlashExpectedModel(result.target_model);
       setPiFlashExpectedDevices(result.expected_devices);
-      setForceFreshPiSetup(false);
       setPiWifiPassword("");
     } catch (error) {
       setOperationError(String(error));

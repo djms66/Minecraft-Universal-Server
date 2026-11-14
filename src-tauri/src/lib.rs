@@ -1,5 +1,8 @@
 use serde::Serialize;
-use std::process::Command;
+use std::io::{self, Read};
+use std::process::{Command, Output, Stdio};
+use std::thread;
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 mod engine;
@@ -119,6 +122,39 @@ async fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         .map_err(|error| error.to_string())?
 }
 
+#[tauri::command]
+async fn recover_pi_flash_result(
+    app: tauri::AppHandle,
+    target_id: String,
+    target_name: String,
+    target_size_bytes: u64,
+    image_name: String,
+    image_url: String,
+    image_sha256: String,
+    download_sha256: Option<String>,
+    expected_devices: Vec<String>,
+) -> Result<Option<pi_imager::PiFlashResult>, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Le dossier de l’application est inaccessible : {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        pi_imager::recover_completed_flash(
+            &app_data,
+            &target_id,
+            &target_name,
+            target_size_bytes,
+            &image_name,
+            &image_url,
+            &image_sha256,
+            download_sha256.as_deref(),
+            &expected_devices,
+        )
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
 fn discover_pi_boot_targets_sync() -> Result<Vec<PiBootTarget>, String> {
     match std::env::consts::OS {
         "macos" => discover_macos_boot_targets(),
@@ -217,7 +253,7 @@ async fn prepare_pi_sd(
             "linux" => target.id.clone(),
             _ => return Err("Ce système ne peut pas préparer le support Raspberry Pi.".into()),
         };
-        pi_imager::flash_pi_os(
+        let mut result = pi_imager::flash_pi_os(
             &app_data,
             &target_device,
             &image_name,
@@ -247,16 +283,23 @@ async fn prepare_pi_sd(
                 }
                 Ok(())
             },
-        )
+        )?;
+        result.target_id = target.id;
+        result.target_name = target.name;
+        result.target_size_bytes = target.size_bytes;
+        result.target_model = target_model;
+        result.expected_devices = selected_image.devices.clone();
+        Ok(result)
     })
     .await
     .map_err(|error| error.to_string())?
 }
 
 fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
-    let output = Command::new("/usr/sbin/diskutil")
-        .args(["list", "external", "physical"])
-        .output()
+    let output = command_output_timeout(
+        Command::new("/usr/sbin/diskutil").args(["list", "external", "physical"]),
+        Duration::from_secs(10),
+    )
         .map_err(|_| "macOS n’a pas pu rechercher les supports externes. Vérifie les autorisations de l’application.".to_string())?;
     if !output.status.success() {
         return Err("macOS n’a pas fourni la liste des supports externes. Redémarre l’application puis relance la détection. Aucun disque n’a été modifié.".into());
@@ -282,10 +325,15 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
     // Profiler schemas omit the BSD identifier; never admit all internal disks.
     let mut built_in_card_seen = false;
     let mut built_in_card_mapped = false;
-    if let Ok(output) = Command::new("/usr/sbin/system_profiler")
-        .args(["-detailLevel", "full", "SPCardReaderDataType", "-json"])
-        .output()
-    {
+    if let Ok(output) = command_output_timeout(
+        Command::new("/usr/sbin/system_profiler").args([
+            "-detailLevel",
+            "mini",
+            "SPCardReaderDataType",
+            "-json",
+        ]),
+        Duration::from_secs(12),
+    ) {
         if output.status.success() {
             if let Ok(profile) = serde_json::from_slice::<serde_json::Value>(&output.stdout) {
                 if let Some(readers) = profile["SPCardReaderDataType"].as_array() {
@@ -331,8 +379,10 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                     }
 
                     if !cards_without_device_id.is_empty() {
-                        if let Ok(output) = Command::new("/usr/sbin/diskutil").arg("list").output()
-                        {
+                        if let Ok(output) = command_output_timeout(
+                            Command::new("/usr/sbin/diskutil").arg("list"),
+                            Duration::from_secs(10),
+                        ) {
                             if output.status.success() {
                                 for line in String::from_utf8_lossy(&output.stdout).lines() {
                                     let Some(rest) = line.strip_prefix("/dev/") else {
@@ -347,10 +397,11 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
                                     {
                                         continue;
                                     }
-                                    let Ok(info) = Command::new("/usr/sbin/diskutil")
-                                        .args(["info", &format!("/dev/{disk}")])
-                                        .output()
-                                    else {
+                                    let Ok(info) = command_output_timeout(
+                                        Command::new("/usr/sbin/diskutil")
+                                            .args(["info", &format!("/dev/{disk}")]),
+                                        Duration::from_secs(10),
+                                    ) else {
                                         continue;
                                     };
                                     if !info.status.success() {
@@ -399,13 +450,14 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
 
     let mut devices = Vec::new();
     for (disk, card_reader_info) in disks {
-        let info = Command::new("/usr/sbin/diskutil")
-            .args(["info", &format!("/dev/{disk}")])
-            .output()
-            .ok()
-            .filter(|result| result.status.success())
-            .map(|result| String::from_utf8_lossy(&result.stdout).into_owned())
-            .unwrap_or_default();
+        let info = command_output_timeout(
+            Command::new("/usr/sbin/diskutil").args(["info", &format!("/dev/{disk}")]),
+            Duration::from_secs(10),
+        )
+        .ok()
+        .filter(|result| result.status.success())
+        .map(|result| String::from_utf8_lossy(&result.stdout).into_owned())
+        .unwrap_or_default();
         let field = |key: &str| {
             info.lines().find_map(|row| {
                 let (name, value) = row.split_once(':')?;
@@ -440,6 +492,55 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
         });
     }
     Ok(devices)
+}
+
+/// Runs read-only device discovery commands with a hard deadline so the UI
+/// cannot remain in a permanent "searching" state if macOS stalls a probe.
+fn command_output_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
+    let mut child = command
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    let mut stdout = child.stdout.take().expect("stdout was piped");
+    let mut stderr = child.stderr.take().expect("stderr was piped");
+    let stdout_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let stderr_reader = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let deadline = Instant::now() + timeout;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = stdout_reader.join();
+            let _ = stderr_reader.join();
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "device discovery command timed out",
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    };
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| io::Error::other("stdout reader failed"))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| io::Error::other("stderr reader failed"))?;
+    Ok(Output {
+        status,
+        stdout,
+        stderr,
+    })
 }
 
 fn sd_media_name_matches(media_name: &str, card_name: &str, card_product: &str) -> bool {
@@ -1320,6 +1421,7 @@ pub fn run() {
             discover_pi,
             discover_new_pi,
             discover_pi_boot_targets,
+            recover_pi_flash_result,
             check_macos_pi_writer,
             prepare_pi_sd,
             get_compatibility,

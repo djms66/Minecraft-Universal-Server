@@ -4,7 +4,7 @@
 //! SHA-256 published by Raspberry Pi. Its own removable-drive guard and image
 //! verification remain enabled for every write.
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{
     fs::{self, File, OpenOptions},
@@ -34,12 +34,22 @@ const IMAGER_LINUX_ARMHF_URL: &str = "https://github.com/raspberrypi/rpi-imager/
 const IMAGER_LINUX_ARMHF_SHA256: &str =
     "dcf25bcbd83256e2b568d2fde8f994629937ebe254cfbf8ec7ad718491cff3bc";
 
-#[derive(Serialize)]
+#[derive(Clone, Deserialize, Serialize)]
 pub struct PiFlashResult {
     pub detail: String,
     pub log_path: String,
     pub imager_version: String,
     pub hostname: String,
+    #[serde(default)]
+    pub target_id: String,
+    #[serde(default)]
+    pub target_name: String,
+    #[serde(default)]
+    pub target_size_bytes: u64,
+    #[serde(default)]
+    pub target_model: String,
+    #[serde(default)]
+    pub expected_devices: Vec<String>,
 }
 
 struct MountedImager {
@@ -191,7 +201,113 @@ pub fn flash_pi_os(
         log_path: log_path.display().to_string(),
         imager_version: IMAGER_VERSION.into(),
         hostname,
+        target_id: String::new(),
+        target_name: String::new(),
+        target_size_bytes: 0,
+        target_model: String::new(),
+        expected_devices: Vec::new(),
     })
+}
+
+/// Reconstructs an interrupted UI session from the latest successful official
+/// Imager log, but only when the attached media matches that log's device,
+/// capacity, and verified image download. This never writes to the card.
+pub fn recover_completed_flash(
+    app_data: &Path,
+    target_id: &str,
+    target_name: &str,
+    target_size_bytes: u64,
+    image_name: &str,
+    image_url: &str,
+    image_sha256: &str,
+    download_sha256: Option<&str>,
+    expected_devices: &[String],
+) -> Result<Option<PiFlashResult>, String> {
+    if std::env::consts::OS != "macos"
+        || !valid_disk_id(target_id)
+        || target_name.trim().is_empty()
+        || target_size_bytes == 0
+        || !image_url.starts_with("https://downloads.raspberrypi.com/")
+        || !valid_sha256(image_sha256)
+        || download_sha256.is_some_and(|hash| !valid_sha256(hash))
+        || expected_devices.is_empty()
+        || expected_devices
+            .iter()
+            .all(|device| crate::engine::pi_os_device_generation(device).is_none())
+    {
+        return Ok(None);
+    }
+
+    let image_cache_key = download_sha256.unwrap_or(image_sha256);
+    let expected_start = format!("started cycle for \"{image_cache_key}.img.xz\"");
+    let expected_device = format!("device: \"/dev/r{target_id}\"");
+    let expected_disk = format!("block device size: {target_size_bytes} bytes");
+    let root = app_data.join("pi-first-boot");
+    let entries = match fs::read_dir(root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error(error)),
+    };
+
+    let mut matches = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(io_error)?;
+        let run_id = entry.file_name().to_string_lossy().to_string();
+        if !valid_run_id(&run_id) || !entry.file_type().map_err(io_error)?.is_dir() {
+            continue;
+        }
+        let log_path = entry.path().join("ecriture.log");
+        let metadata = match fs::symlink_metadata(&log_path) {
+            Ok(metadata) if metadata.file_type().is_file() => metadata,
+            Ok(_) => continue,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(io_error(error)),
+        };
+        let log = fs::read_to_string(&log_path).map_err(io_error)?;
+        let log = log.to_ascii_lowercase();
+        if !log.contains(&expected_start)
+            || !log.contains(&expected_device)
+            || !log.contains(&expected_disk)
+            || !log.contains("write complete, switching to slow drive scanning")
+            || !log.contains("verification completed - valid: true")
+        {
+            continue;
+        }
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        matches.push((modified, run_id, log_path));
+    }
+
+    let Some((_, run_id, log_path)) = matches.into_iter().max_by_key(|(modified, _, _)| *modified)
+    else {
+        return Ok(None);
+    };
+    let hostname = format!("monde-ensemble-{run_id}");
+    Ok(Some(PiFlashResult {
+        detail: format!(
+            "{image_name} déjà écrit et vérifié sur {target_name} ({:.1} Go).",
+            target_size_bytes as f64 / 1_000_000_000.0
+        ),
+        log_path: log_path.display().to_string(),
+        imager_version: IMAGER_VERSION.into(),
+        hostname,
+        target_id: target_id.to_string(),
+        target_name: target_name.to_string(),
+        target_size_bytes,
+        target_model: String::new(),
+        expected_devices: expected_devices.to_vec(),
+    }))
+}
+
+fn valid_disk_id(value: &str) -> bool {
+    value.strip_prefix("disk").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    })
+}
+
+fn valid_run_id(value: &str) -> bool {
+    value.len() == 32 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
 fn imager_cli_args(
@@ -1074,8 +1190,8 @@ fn restrict_file_permissions(_path: &Path) -> Result<(), String> {
 mod tests {
     use super::{
         copy_pipe_to_log, imager_cli_args, network_config, powershell_quote,
-        process_targets_imager_device, redacted_prefix_len, restrict_file_permissions,
-        sensitive_log_values, user_data, windows_quote,
+        process_targets_imager_device, recover_completed_flash, redacted_prefix_len,
+        restrict_file_permissions, sensitive_log_values, user_data, windows_quote,
     };
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt;
@@ -1131,6 +1247,58 @@ mod tests {
         assert!(args.contains(&"--debug".to_string()));
         assert!(!args.contains(&"--disable-verify".to_string()));
         assert!(args.contains(&"/private/pi-images/verified.img.xz".to_string()));
+    }
+
+    #[test]
+    fn recovery_requires_successful_verification_for_the_same_image_and_card() {
+        let root = std::env::temp_dir().join(format!(
+            "monde-ensemble-flash-recovery-{}",
+            uuid::Uuid::new_v4().simple()
+        ));
+        let run_id = "8a456aea15ce4e68bb9861d0290e0e69";
+        let log_dir = root.join("pi-first-boot").join(run_id);
+        fs::create_dir_all(&log_dir).unwrap();
+        let cache_key = "b8a393dc1c3701450b5fffbfe74368a98fb6eab7415ce456cc0cead886ea8780";
+        let log = format!(
+            "Started cycle for \"{cache_key}.img.xz\" size: 3078619136 device: \"/dev/rdisk16\"\nBlock device size: 31914983424 bytes\nWrite complete, switching to slow drive scanning\nVerification completed - valid: true duration: 4098 ms\n"
+        );
+        fs::write(log_dir.join("ecriture.log"), &log).unwrap();
+        let devices = vec!["pi3-64bit-cm3".to_string(), "pi4-64bit".to_string()];
+
+        let recovered = recover_completed_flash(
+            &root,
+            "disk16",
+            "SDHC Card (Class 10)",
+            31_914_983_424,
+            "Raspberry Pi OS Lite (64-bit)",
+            "https://downloads.raspberrypi.com/test.img.xz",
+            &"a".repeat(64),
+            Some(cache_key),
+            &devices,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(recovered.hostname, format!("monde-ensemble-{run_id}"));
+        assert_eq!(recovered.target_id, "disk16");
+        assert_eq!(recovered.expected_devices, devices);
+        assert!(recovered.detail.contains("déjà écrit et vérifié"));
+
+        let wrong_card = recover_completed_flash(
+            &root,
+            "disk16",
+            "SDHC Card (Class 10)",
+            31_000_000_000,
+            "Raspberry Pi OS Lite (64-bit)",
+            "https://downloads.raspberrypi.com/test.img.xz",
+            &"a".repeat(64),
+            Some(cache_key),
+            &devices,
+        )
+        .unwrap();
+        assert!(wrong_card.is_none());
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

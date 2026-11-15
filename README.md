@@ -1,4 +1,4 @@
-# Minecraft Universal Server 0.18.94
+# Minecraft Universal Server 0.18.95
 
 Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -84,10 +84,10 @@ Sur Windows, l’installation de l’outil officiel peut déclencher la confirma
 
 ## Builds par plateforme
 
-Les icônes d’application partent du master vectoriel `src-tauri/icon-source/logo_MUS.svg`. Un SVG dérivé ajoute un fond blanc sous les zones transparentes et un contour noir extérieur de 25 px sur l’icône 512 px avant la génération Tauri. Les formats macOS `.icns`, Windows `.ico`, Linux PNG, les tailles iOS et les ressources Android adaptatives sont ainsi générés depuis le dessin vectoriel. Pour les régénérer :
+Les icônes partent du master vectoriel `src-tauri/icon-source/logo_MUS.svg`. Le SVG dérivé ajoute le fond blanc, le contour extérieur gris très clair de 25 px (sur l’icône 512 px), et garde les lettres M/U/S comme découpes du dessin. Le post-traitement `scripts/finish_mus_icons.py` recolore précisément ces découpes en noir dans les PNG, puis dans les formats macOS `.icns` et Windows `.ico`. Les ressources Linux, iOS et Android sont aussi régénérées. Pour régénérer toutes les variantes, installe Pillow une fois (`python3 -m pip install Pillow`), puis lance :
 
 ```sh
-npx tauri icon src-tauri/icon-source/logo_MUS_icon.svg --output src-tauri/icons --ios-color '#ffffff'
+npm run icons:generate
 ```
 
 Les fichiers Android et iOS sont les ressources d’icône prêtes pour ces cibles; l’application actuelle ne dispose pas encore de projets mobiles Android/iOS initialisés.

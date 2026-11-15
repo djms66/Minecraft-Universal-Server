@@ -11,12 +11,16 @@ use std::{
     io::{self, Read, Write},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const IMAGER_VERSION: &str = "2.0.12";
+const MAX_IMAGER_WRITE_TIME: Duration = Duration::from_secs(45 * 60);
 const IMAGER_MAC_URL: &str =
     "https://github.com/raspberrypi/rpi-imager/releases/download/v2.0.12/rpi-imager-v2.0.12.dmg";
 const IMAGER_MAC_SHA256: &str = "15b1a94c712c0032750855653c2bf129dceb401329fbce0a83d7cf05dc58a421";
@@ -189,6 +193,7 @@ pub fn flash_pi_os(
     wifi_country: &str,
     progress: impl Fn(&str, u8),
     verify_target: impl Fn() -> Result<(), String>,
+    cancelled: Arc<AtomicBool>,
 ) -> Result<PiFlashResult, String> {
     // The caller first validates this exact URL against the official Imager
     // catalog; keep HTTPS and SHA-256 checks here as defense in depth.
@@ -265,7 +270,14 @@ pub fn flash_pi_os(
         &network_config_contents,
     );
     progress("Écriture et vérification de la carte…", 38);
-    run_imager(&tool, &args, &log_path, &redactions, &progress)?;
+    run_imager(
+        &tool,
+        &args,
+        &log_path,
+        &redactions,
+        &progress,
+        &cancelled,
+    )?;
 
     // Sensitive cloud-init files are removed by the guard on success or error.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
@@ -727,6 +739,7 @@ fn run_imager(
     log_path: &Path,
     redactions: &[Vec<u8>],
     progress: &impl Fn(&str, u8),
+    cancelled: &AtomicBool,
 ) -> Result<(), String> {
     if std::env::consts::OS == "macos" {
         let target_device = args.last().ok_or_else(|| {
@@ -760,8 +773,34 @@ fn run_imager(
         .take()
         .map(|pipe| copy_pipe_to_log(pipe, Arc::clone(&log), redactions.to_vec()));
     let mut last_percent = 18u8;
+    let started_at = Instant::now();
     loop {
         update_write_progress(log_path, &mut last_percent, progress);
+        // The macOS Imager process is a direct child of the app. On Windows,
+        // the elevated writer is spawned behind Start-Process and cannot be
+        // safely stopped by killing its PowerShell parent.
+        if std::env::consts::OS == "macos" && cancelled.load(Ordering::Acquire) {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(thread) = stdout_thread {
+                let _ = thread.join();
+            }
+            if let Some(thread) = stderr_thread {
+                let _ = thread.join();
+            }
+            return Err("Écriture interrompue. La carte peut être incomplète : laisse-la connectée, puis utilise la récupération de carte avant de recommencer.".into());
+        }
+        if std::env::consts::OS == "macos" && started_at.elapsed() >= MAX_IMAGER_WRITE_TIME {
+            let _ = child.kill();
+            let _ = child.wait();
+            if let Some(thread) = stdout_thread {
+                let _ = thread.join();
+            }
+            if let Some(thread) = stderr_thread {
+                let _ = thread.join();
+            }
+            return Err("L’écriture a dépassé 45 minutes et a été arrêtée pour rendre la main. La carte peut être incomplète : laisse-la connectée, puis utilise la récupération de carte avant de recommencer.".into());
+        }
         match child.try_wait().map_err(io_error)? {
             Some(status) => {
                 if let Some(thread) = stdout_thread {

@@ -1,6 +1,10 @@
 use serde::Serialize;
 use std::io::{self, Read};
 use std::process::{Command, Output, Stdio};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc,
+};
 use std::thread;
 use std::time::{Duration, Instant};
 use tauri::Manager;
@@ -30,6 +34,27 @@ struct PiBootTarget {
     size: String,
     size_bytes: u64,
     connection: String,
+}
+
+#[derive(Clone, Default)]
+struct PiWriteControl(Arc<AtomicBool>);
+
+#[tauri::command]
+fn cancel_pi_sd(control: tauri::State<'_, PiWriteControl>) -> Result<(), String> {
+    control.0.store(true, Ordering::Release);
+    Ok(())
+}
+
+#[tauri::command]
+fn open_macos_disk_utility() -> Result<(), String> {
+    if std::env::consts::OS != "macos" {
+        return Err("L’Utilitaire de disque est disponible uniquement sur macOS.".into());
+    }
+    Command::new("/usr/bin/open")
+        .args(["-a", "Disk Utility"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|_| "macOS n’a pas pu ouvrir l’Utilitaire de disque.".into())
 }
 
 #[tauri::command]
@@ -176,6 +201,8 @@ async fn prepare_pi_sd(
     if !confirm_erase {
         return Err("Confirme l’effacement du support sélectionné pour continuer. Aucun support n’a été modifié.".into());
     }
+    let cancellation = app.state::<PiWriteControl>().0.clone();
+    cancellation.store(false, Ordering::Release);
     let app_data = app.path().app_data_dir().map_err(|error| {
         format!("Le dossier sécurisé de l’application est inaccessible : {error}")
     })?;
@@ -263,6 +290,7 @@ async fn prepare_pi_sd(
                 }
                 Ok(())
             },
+            cancellation,
         )?;
         result.target_id = target.id;
         result.target_name = target.name;
@@ -1403,6 +1431,7 @@ async fn restore_pi_server(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .manage(PiWriteControl::default())
         .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let app_data = app.path().app_data_dir()?;
@@ -1416,6 +1445,8 @@ pub fn run() {
             discover_new_pi,
             discover_pi_boot_targets,
             check_macos_pi_writer,
+            cancel_pi_sd,
+            open_macos_disk_utility,
             recover_prepared_pi,
             prepare_pi_sd,
             get_compatibility,

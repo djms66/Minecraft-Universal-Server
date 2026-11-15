@@ -261,6 +261,11 @@ function App() {
   // A verified card session is recovered from the app's write log on launch,
   // so closing the app cannot strand a successfully prepared Raspberry Pi.
   const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
+  const [piFlashNeedsRecovery, setPiFlashNeedsRecovery] = useState(false);
+  const [piFlashTargetAttempt, setPiFlashTargetAttempt] =
+    useState<PiBootTarget | null>(null);
+  const [piWriteCancelRequested, setPiWriteCancelRequested] = useState(false);
+  const piFlashWritingStarted = useRef(false);
   const [piBootWaitStartedAt, setPiBootWaitStartedAt] = useState<number | null>(
     null,
   );
@@ -443,6 +448,9 @@ function App() {
   const progressChannel = () => {
     const channel = new Channel<ProgressMessage>();
     channel.onmessage = (message) => {
+      if (/^(Écriture et vérification de la carte|Écriture de Raspberry Pi OS|Vérification de la carte écrite)/.test(message.step)) {
+        piFlashWritingStarted.current = true;
+      }
       const macOsWriteWait =
         system?.os === "macos" &&
         message.step.startsWith("Écriture et vérification de la carte");
@@ -817,6 +825,10 @@ function App() {
     const device = pendingPiTarget;
     if (busy || piCardWriteStarted.current || !device || !activePiOs) return;
     piCardWriteStarted.current = true;
+    piFlashWritingStarted.current = false;
+    setPiFlashTargetAttempt(device);
+    setPiFlashNeedsRecovery(false);
+    setPiWriteCancelRequested(false);
     setPendingPiTarget(null);
     resetOperation();
     setPiFlashResult(null);
@@ -836,15 +848,33 @@ function App() {
         progress: progressChannel(),
       });
       setPiFlashResult(result);
+      setPiFlashNeedsRecovery(false);
       setPiFlashExpectedModel(result.target_model);
       setPiFlashExpectedDevices(result.expected_devices);
       setPiWifiPassword("");
     } catch (error) {
       setOperationError(String(error));
       setOperationProgress(null);
+      setPiFlashNeedsRecovery(piFlashWritingStarted.current);
     } finally {
       setBusy(false);
+      setPiWriteCancelRequested(false);
       piCardWriteStarted.current = false;
+    }
+  };
+
+  const cancelPiFlash = async () => {
+    if (!busy || piWriteCancelRequested || system?.os !== "macos") return;
+    const confirmed = window.confirm(
+      "Arrêter maintenant l’écriture Raspberry Pi Imager ? La carte peut rester incomplète. L’application la laissera connectée et indiquera comment la récupérer.",
+    );
+    if (!confirmed) return;
+    setPiWriteCancelRequested(true);
+    try {
+      await invoke("cancel_pi_sd");
+    } catch (error) {
+      setPiWriteCancelRequested(false);
+      setOperationError(`Impossible d’arrêter l’écriture : ${String(error)}`);
     }
   };
 
@@ -2455,6 +2485,46 @@ function App() {
                           result={null}
                           error={operationError}
                         />
+                      )}
+                      {busy && system?.os === "macos" && piFlashWritingStarted.current && (
+                        <div className="pi-write-control" aria-live="polite">
+                          <p>
+                            {piWriteCancelRequested
+                              ? "Arrêt en cours… garde la carte connectée."
+                              : "L’écriture dure plus longtemps que prévu ? Tu peux l’arrêter ici."}
+                          </p>
+                          <button
+                            className="button secondary"
+                            type="button"
+                            onClick={() => void cancelPiFlash()}
+                            disabled={piWriteCancelRequested}
+                          >
+                            {piWriteCancelRequested ? "Arrêt en cours…" : "Arrêter l’écriture"}
+                          </button>
+                        </div>
+                      )}
+                      {piFlashNeedsRecovery && piFlashTargetAttempt && (
+                        <section className="pi-flash-recovery" role="alert" aria-live="polite">
+                          <strong>La carte n’a peut-être pas fini d’être écrite.</strong>
+                          <p>
+                            Le support concerné est <b>{piFlashTargetAttempt.name}</b> · {piFlashTargetAttempt.size} · {piFlashTargetAttempt.id}. Ne le retire pas pendant l’arrêt d’Imager.
+                          </p>
+                          <ol>
+                            <li>Quand l’écriture est arrêtée, éjecte la carte depuis le Finder, débranche-la, puis reconnecte-la.</li>
+                            <li>Relance « Détecter la carte SD ou le SSD » et sélectionne uniquement ce support.</li>
+                            <li>Si elle reste invisible, vérifie le petit verrou LOCK de l’adaptateur SD. Sur Mac, l’Utilitaire de disque peut afficher le support physique via Présentation → Afficher tous les appareils. Vérifie son nom et sa capacité avant toute action d’effacement.</li>
+                          </ol>
+                          {system?.os === "macos" && (
+                            <button
+                              className="button secondary"
+                              type="button"
+                              onClick={() => void invoke("open_macos_disk_utility").catch((error) => setOperationError(String(error)))}
+                            >
+                              Ouvrir l’Utilitaire de disque
+                            </button>
+                          )}
+                          <small>Aucun effacement ni changement de format n’est lancé automatiquement.</small>
+                        </section>
                       )}
                       {piFlashResult && (
                         <div className="pi-flash-success" aria-live="polite">

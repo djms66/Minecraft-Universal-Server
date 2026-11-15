@@ -3,7 +3,7 @@
 
 The supplied vector logo draws its letters as transparent cutouts in the colored
 faces.  The generated rounded-square background shows through those cutouts.
-This pass recolors only the cutouts white, keeping the light-gray tile and the
+This pass recolors only the cutouts white, keeping the slightly darker light-gray tile and the
 rest of the artwork intact.
 
 Requires Pillow: python3 -m pip install Pillow
@@ -117,7 +117,7 @@ def main() -> None:
     background_xml = ICON_DIR / "android" / "values" / "ic_launcher_background.xml"
     if background_xml.exists():
         text = background_xml.read_text()
-        background_xml.write_text(text.replace("#FFFFFF", "#F2F2F2").replace("#ffffff", "#F2F2F2"))
+        background_xml.write_text(text.replace("#FFFFFF", "#E0E2E5").replace("#ffffff", "#E0E2E5"))
     print(f"Colorized M/U/S in {len(pngs)} PNG assets and embedded macOS icon sizes.")
 
 

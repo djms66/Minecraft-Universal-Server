@@ -1710,7 +1710,7 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MINECRAFT UNIVERSAL SERVER <span>·</span> {__APP_VERSION__}
+          M.U.S. <span>·</span> {__APP_VERSION__}
         </div>
       </aside>
 

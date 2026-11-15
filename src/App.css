@@ -148,6 +148,7 @@ button {
   font-size: 9px;
 }
 .side-version {
+  white-space: nowrap;
   font:
     8px "DM Mono",
     monospace;

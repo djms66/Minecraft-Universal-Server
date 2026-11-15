@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import brandLogo from "./assets/logo_minecraft_universal_server.png";
 import {
   localeDirection,
   localeOptions,
@@ -1653,23 +1654,11 @@ function App() {
     <div className="app-shell" lang={locale} dir={localeDirection(locale)}>
       <aside className="sidebar">
         <div className="brand">
-          <div className="brand-mark">
-            <i />
-            <i />
-            <i />
-            <i />
-          </div>
-          <div className="brand-copy">
-            <strong>MINECRAFT</strong>
-            <span>UNIVERSAL SERVER</span>
-          </div>
-          <small className="brand-motto">
-            <span>One world</span>
-            <span>•</span>
-            <span>Java + Bedrock</span>
-            <span>•</span>
-            <span>Any device</span>
-          </small>
+          <img
+            className="brand-logo"
+            src={brandLogo}
+            alt="Minecraft Universal Server — One world • Java + Bedrock • Any device"
+          />
         </div>
         <div className="side-label">
           {hasManagedServer ? "TON SERVEUR" : "PREMIÈRE INSTALLATION"}

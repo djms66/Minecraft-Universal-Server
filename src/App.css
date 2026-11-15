@@ -3045,3 +3045,21 @@ button { min-height: 44px; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; }
 }
+
+/* German labels are longer; wrap them instead of clipping the interface. */
+.app-shell:lang(de) .topbar { gap: 12px; padding-inline: 28px; }
+.app-shell:lang(de) .top-status { min-width: 0; }
+.app-shell:lang(de) .top-status > span {
+  max-width: 210px;
+  white-space: normal;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+.app-shell:lang(de) .beginner-pill { max-width: 150px; line-height: 1.35; }
+.app-shell:lang(de) .target-card { min-width: 0; }
+.app-shell:lang(de) .target-card strong,
+.app-shell:lang(de) .target-card small { overflow-wrap: anywhere; }
+@media (max-width: 1180px) {
+  .app-shell:lang(de) .crumb { display: none; }
+  .app-shell:lang(de) .top-status > span { max-width: 165px; }
+}

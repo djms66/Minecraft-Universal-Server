@@ -21,6 +21,11 @@ type SystemInfo = {
 };
 type Page = "home" | "install" | "compat" | "backup" | "advanced";
 type PluginTarget = "local" | "pi";
+
+function countryName(locale: Locale, region: string): string {
+  return new Intl.DisplayNames([locale], { type: "region" }).of(region) ?? region;
+}
+
 type CompatibilityReport = {
   paper_version: string;
   paper_build_id: number;
@@ -1864,8 +1869,9 @@ function App() {
                 </div>
                 {target === "this" ? (
                   <>
-                    <SystemPanel system={system} error={systemError} />
+                    <SystemPanel locale={locale} system={system} error={systemError} />
                     <LocalInstallPanel
+                      locale={locale}
                       compatibility={compatibility}
                       compatibilityError={compatibilityError}
                       destination={destination}
@@ -1939,16 +1945,16 @@ function App() {
                                 }
                                 disabled={busy || Boolean(piFlashResult)}
                               >
-                                <option value="FR">France</option>
-                                <option value="BE">Belgique</option>
-                                <option value="CH">Suisse</option>
-                                <option value="CA">Canada</option>
-                                <option value="US">États-Unis</option>
-                                <option value="GB">Royaume-Uni</option>
-                                <option value="DE">Allemagne</option>
-                                <option value="ES">Espagne</option>
-                                <option value="IT">Italie</option>
-                                <option value="NL">Pays-Bas</option>
+                                <option value="FR">{countryName(locale, "FR")}</option>
+                                <option value="BE">{countryName(locale, "BE")}</option>
+                                <option value="CH">{countryName(locale, "CH")}</option>
+                                <option value="CA">{countryName(locale, "CA")}</option>
+                                <option value="US">{countryName(locale, "US")}</option>
+                                <option value="GB">{countryName(locale, "GB")}</option>
+                                <option value="DE">{countryName(locale, "DE")}</option>
+                                <option value="ES">{countryName(locale, "ES")}</option>
+                                <option value="IT">{countryName(locale, "IT")}</option>
+                                <option value="NL">{countryName(locale, "NL")}</option>
                               </select>
                             </div>
                           </>
@@ -2103,6 +2109,7 @@ function App() {
                           operationResult ||
                           operationError) && (
                           <OperationStatus
+                            locale={locale}
                             progress={operationProgress}
                             result={operationResult}
                             error={operationError}
@@ -2430,6 +2437,7 @@ function App() {
                       )}
                       {(operationProgress || operationError) && (
                         <OperationStatus
+                          locale={locale}
                           progress={operationProgress}
                           result={null}
                           error={operationError}
@@ -2628,10 +2636,11 @@ function App() {
             </section>
           )}
           {page === "compat" && (
-            <Compatibility report={compatibility} error={compatibilityError} />
+            <Compatibility locale={locale} report={compatibility} error={compatibilityError} />
           )}
           {page === "backup" && (
             <Backups
+              locale={locale}
               source={backupSource}
               output={backupOutput}
               piInstallation={piInstallation}
@@ -2661,6 +2670,7 @@ function App() {
           )}
           {page === "advanced" && (
             <Advanced
+              locale={locale}
               system={system}
               localInstallation={localInstallation}
               localServerStatus={localServerStatus}
@@ -2786,13 +2796,16 @@ function describePiModels(devices: string[]) {
 }
 
 function SystemPanel({
+  locale,
   system,
   error,
 }: {
+  locale: Locale;
   system: SystemInfo | null;
   error: string;
 }) {
   return (
+    <LocalizedTree locale={locale}>
     <div className="machine-panel">
       <div className="panel-head">
         <div>
@@ -2817,6 +2830,7 @@ function SystemPanel({
           </div>
           <div className="spec-grid">
             <Spec
+              locale={locale}
               label="MÉMOIRE"
               value={
                 system.memory_gb ? `${system.memory_gb} Go` : "Non détectée"
@@ -2824,11 +2838,13 @@ function SystemPanel({
               note="Mémoire vive"
             />
             <Spec
+              locale={locale}
               label="DISQUE"
               value={system.disk_gb ? `${system.disk_gb} Go` : "Non détecté"}
               note="Taille totale"
             />
             <Spec
+              locale={locale}
               label="ESPACE LIBRE"
               value={
                 system.free_disk_gb
@@ -2849,10 +2865,12 @@ function SystemPanel({
         <div className="skeleton">Lecture des caractéristiques…</div>
       )}
     </div>
+    </LocalizedTree>
   );
 }
 
 function LocalInstallPanel({
+  locale,
   compatibility,
   compatibilityError,
   destination,
@@ -2865,6 +2883,7 @@ function LocalInstallPanel({
   onChooseFolder,
   onInstall,
 }: {
+  locale: Locale;
   compatibility: CompatibilityReport | null;
   compatibilityError: string;
   destination: string;
@@ -2878,6 +2897,7 @@ function LocalInstallPanel({
   onInstall: () => void;
 }) {
   return (
+    <LocalizedTree locale={locale}>
     <div className="action-panel">
       <div className="panel-head">
         <div>
@@ -2894,18 +2914,22 @@ function LocalInstallPanel({
       </p>
       <div className="release-grid">
         <ReleaseItem
+          locale={locale}
           label="MINECRAFT JAVA"
           value={compatibility?.java_version ?? "Vérification…"}
         />
         <ReleaseItem
+          locale={locale}
           label="MINECRAFT BEDROCK"
           value={compatibility?.bedrock_versions ?? "Vérification…"}
         />
         <ReleaseItem
+          locale={locale}
           label="PAPER"
           value={compatibility?.paper_version ?? "Vérification…"}
         />
         <ReleaseItem
+          locale={locale}
           label="GEYSER / FLOODGATE"
           value={
             compatibility
@@ -2971,24 +2995,29 @@ function LocalInstallPanel({
         </div>
       )}
     </div>
+    </LocalizedTree>
   );
 }
 
-function ReleaseItem({ label, value }: { label: string; value: string }) {
+function ReleaseItem({ label, value, locale }: { label: string; value: string; locale: Locale }) {
   return (
+    <LocalizedTree locale={locale}>
     <div className="release-item">
       <small>{label}</small>
       <strong>{value}</strong>
     </div>
+    </LocalizedTree>
   );
 }
 
 function ExternalAccessGuide({
+  locale,
   address,
   javaPort,
   bedrockPort,
   onCopyAddress,
 }: {
+  locale: Locale;
   address: string;
   javaPort: number;
   bedrockPort: number;
@@ -2996,14 +3025,17 @@ function ExternalAccessGuide({
 }) {
   if (!address || address === "127.0.0.1") {
     return (
+      <LocalizedTree locale={locale}>
       <p className="pi-network-note">
         Actualise le serveur pour afficher son adresse sur le réseau avant de
         préparer l’accès depuis l’extérieur.
       </p>
+      </LocalizedTree>
     );
   }
 
   return (
+    <LocalizedTree locale={locale}>
     <details className="pi-network-guide">
       <summary>Jouer avec des amis depuis l’extérieur</summary>
       <p>
@@ -3068,24 +3100,29 @@ function ExternalAccessGuide({
         Voir le guide officiel Free pour la redirection de port
       </a>
     </details>
+    </LocalizedTree>
   );
 }
 
 function Spec({
+  locale,
   label,
   value,
   note,
 }: {
+  locale: Locale;
   label: string;
   value: string;
   note: string;
 }) {
   return (
+    <LocalizedTree locale={locale}>
     <div className="spec">
       <span>{label}</span>
       <strong>{value}</strong>
       <small>{note}</small>
     </div>
+    </LocalizedTree>
   );
 }
 
@@ -3441,6 +3478,7 @@ function Home({
             </span>
           </div>
           <ExternalAccessGuide
+            locale={locale}
             address={localServerStatus?.address || ""}
             javaPort={localServerStatus?.java_port || 25565}
             bedrockPort={localServerStatus?.bedrock_port || 19132}
@@ -4044,6 +4082,7 @@ function Home({
             </p>
           )}
           <ExternalAccessGuide
+            locale={locale}
             address={piServerStatus?.address || ""}
             javaPort={piServerStatus?.java_port || 25565}
             bedrockPort={piServerStatus?.bedrock_port || 19132}
@@ -4351,9 +4390,11 @@ function rangeIncludesVersion(
 }
 
 function Compatibility({
+  locale,
   report,
   error,
 }: {
+  locale: Locale;
   report: CompatibilityReport | null;
   error: string;
 }) {
@@ -4387,6 +4428,7 @@ function Compatibility({
     ],
   ];
   return (
+    <LocalizedTree locale={locale}>
     <div className="content-column">
       <div className="compat-banner">
         <div className="compat-emblem">
@@ -4478,10 +4520,11 @@ function Compatibility({
         {report ? (
           <>
             <div className="release-grid">
-              <ReleaseItem label="PAPER" value={report.paper_version} />
-              <ReleaseItem label="GEYSER" value={report.geyser_version} />
-              <ReleaseItem label="FLOODGATE" value={report.floodgate_version} />
+              <ReleaseItem locale={locale} label="PAPER" value={report.paper_version} />
+              <ReleaseItem locale={locale} label="GEYSER" value={report.geyser_version} />
+              <ReleaseItem locale={locale} label="FLOODGATE" value={report.floodgate_version} />
               <ReleaseItem
+                locale={locale}
                 label="CLIENTS BEDROCK"
                 value={report.bedrock_versions}
               />
@@ -4560,10 +4603,12 @@ function Compatibility({
         peut rendre ces formats compatibles par simple mise à jour.
       </div>
     </div>
+    </LocalizedTree>
   );
 }
 
 function Backups({
+  locale,
   source,
   output,
   piInstallation,
@@ -4585,6 +4630,7 @@ function Backups({
   onRestore,
   onRestorePi,
 }: {
+  locale: Locale;
   source: string;
   output: string;
   piInstallation: PiInstallation | null;
@@ -4607,6 +4653,7 @@ function Backups({
   onRestorePi: () => void;
 }) {
   return (
+    <LocalizedTree locale={locale}>
     <div className="content-column">
       <div className="backup-hero">
         <div className="backup-illustration">▤</div>
@@ -4746,10 +4793,10 @@ function Backups({
         </div>
       )}
       {progress && (
-        <OperationStatus progress={progress} result={result} error={error} />
+        <OperationStatus locale={locale} progress={progress} result={result} error={error} />
       )}
       {!progress && (result || error) && (
-        <OperationStatus progress={null} result={result} error={error} />
+        <OperationStatus locale={locale} progress={null} result={result} error={error} />
       )}
       <div className="source-note">
         L’archive complète peut contenir des extensions sous licence. Monde
@@ -4757,20 +4804,24 @@ function Backups({
         les licences des extensions.
       </div>
     </div>
+    </LocalizedTree>
   );
 }
 
 function OperationStatus({
+  locale,
   progress,
   result,
   error,
 }: {
+  locale: Locale;
   progress: ProgressMessage | null;
   result: OperationResult | null;
   error: string;
 }) {
   const indeterminate = Boolean(progress?.indeterminate);
   return (
+    <LocalizedTree locale={locale}>
     <div className={error ? "inline-error" : "operation-success"}>
       {progress && (
         <>
@@ -4807,16 +4858,19 @@ function OperationStatus({
         </>
       )}
     </div>
+    </LocalizedTree>
   );
 }
 
 function GameSettingsPanel({
+  locale,
   localInstallation,
   localServerStatus,
   piInstallation,
   piServerStatus,
   busy,
 }: {
+  locale: Locale;
   localInstallation: LocalInstallation | null;
   localServerStatus: LocalServerStatus | null;
   piInstallation: PiInstallation | null;
@@ -4916,6 +4970,7 @@ function GameSettingsPanel({
 
   const hasServer = Boolean(localInstallation || piInstallation);
   return (
+    <LocalizedTree locale={locale}>
     <section className="operation-card advanced-log-card game-settings-card">
       <div className="eyebrow">MODE AVANCÉ · RÉGLAGES DU MONDE</div>
       <h3>Configurer le jeu</h3>
@@ -5176,10 +5231,12 @@ function GameSettingsPanel({
         </>
       )}
     </section>
+    </LocalizedTree>
   );
 }
 
 function Advanced({
+  locale,
   system,
   localInstallation,
   localServerStatus,
@@ -5200,6 +5257,7 @@ function Advanced({
   onRefresh,
   onCheckUpdates,
 }: {
+  locale: Locale;
   system: SystemInfo | null;
   localInstallation: LocalInstallation | null;
   localServerStatus: LocalServerStatus | null;
@@ -5317,6 +5375,7 @@ function Advanced({
       ? Boolean(localServerStatus?.running)
       : Boolean(piServerStatus?.running);
   return (
+    <LocalizedTree locale={locale}>
     <div className="content-column">
       <div className="advanced-intro">
         <div className="advanced-mark">⚙</div>
@@ -5336,7 +5395,11 @@ function Advanced({
             <strong>Machine de cette application</strong>
             <small>
               {system
-                ? `${system.os} ${system.version} · ${system.architecture} · mémoire ${system.memory_gb ?? "inconnue"} Go · disque libre ${system.free_disk_gb ?? "inconnu"} Go`
+                ? <>
+                    {system.os} {system.version} · {system.architecture} ·{" "}
+                    mémoire {system.memory_gb ?? "inconnue"} Go · disque libre{" "}
+                    {system.free_disk_gb ?? "inconnu"} Go
+                  </>
                 : "Lecture en cours"}
             </small>
           </p>
@@ -5408,6 +5471,7 @@ function Advanced({
         </div>
       </div>
       <GameSettingsPanel
+        locale={locale}
         localInstallation={localInstallation}
         localServerStatus={localServerStatus}
         piInstallation={piInstallation}
@@ -5592,7 +5656,7 @@ function Advanced({
           </button>
         </div>
         {pluginProgress && (
-          <OperationStatus progress={pluginProgress} result={null} error="" />
+          <OperationStatus locale={locale} progress={pluginProgress} result={null} error="" />
         )}
         {!pluginMinecraftVersion && (
           <p className="path-note">
@@ -5725,6 +5789,7 @@ function Advanced({
         </p>
       </div>
     </div>
+    </LocalizedTree>
   );
 }
 

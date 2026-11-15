@@ -5806,7 +5806,6 @@ fn run_ssh_with_known_hosts(
             "-o",
             &format!("UserKnownHostsFile={known_hosts}"),
             "-o",
-            "-o",
             &format!("GlobalKnownHostsFile={SSH_NULL_DEVICE}"),
             "-o",
             "PasswordAuthentication=no",

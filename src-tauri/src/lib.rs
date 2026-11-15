@@ -146,6 +146,19 @@ async fn check_macos_pi_writer(app: tauri::AppHandle) -> Result<String, String> 
 }
 
 #[tauri::command]
+async fn recover_prepared_pi(
+    app: tauri::AppHandle,
+) -> Result<Option<pi_imager::PiFlashResult>, String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Le dossier de l’application est inaccessible : {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || pi_imager::recover_latest_prepared_pi(&app_data))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
 async fn prepare_pi_sd(
     app: tauri::AppHandle,
     target_id: String,
@@ -1403,6 +1416,7 @@ pub fn run() {
             discover_new_pi,
             discover_pi_boot_targets,
             check_macos_pi_writer,
+            recover_prepared_pi,
             prepare_pi_sd,
             get_compatibility,
             search_paper_plugins,

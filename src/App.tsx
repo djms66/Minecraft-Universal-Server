@@ -257,8 +257,8 @@ function App() {
   const [piWifiSsid, setPiWifiSsid] = useState("");
   const [piWifiPassword, setPiWifiPassword] = useState("");
   const [piWifiCountry, setPiWifiCountry] = useState("FR");
-  // A card-preparation result is deliberately session-only: every launch starts
-  // at step 1 and requires fresh device detection and erase confirmation.
+  // A verified card session is recovered from the app's write log on launch,
+  // so closing the app cannot strand a successfully prepared Raspberry Pi.
   const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
   const [piBootWaitStartedAt, setPiBootWaitStartedAt] = useState<number | null>(
     null,
@@ -376,10 +376,27 @@ function App() {
   }, [piInstallation]);
 
   useEffect(() => {
-    // Remove obsolete recovery markers from previous builds without touching
-    // saved server installations or any data on the SD card.
+    let active = true;
     localStorage.removeItem("monde-ensemble.pi-flash-session");
     localStorage.removeItem("monde-ensemble.pi-force-fresh");
+    invoke<PiFlashResult | null>("recover_prepared_pi")
+      .then((result) => {
+        if (!active || !result) return;
+        setPiFlashResult(result);
+        setPiFlashExpectedModel("");
+        setPiFlashExpectedDevices(result.expected_devices);
+        setPiUser("minecraft");
+        setTarget("pi");
+        setPage("install");
+        setConnection("Carte déjà préparée · reprise de l’installation sans nouvel effacement");
+      })
+      .catch(() => {
+        // Recovery is best-effort; a missing or incomplete log leaves the
+        // normal first-install flow untouched.
+      });
+    return () => {
+      active = false;
+    };
   }, []);
 
   useEffect(() => {
@@ -951,7 +968,7 @@ function App() {
       if (
         !actualGeneration ||
         (expectedGeneration && actualGeneration !== expectedGeneration) ||
-        !selectedSystemSupportsPi
+        (piFlashExpectedDevices.length > 0 && !selectedSystemSupportsPi)
       ) {
         throw new Error(
           `Le Pi détecté (${device.model}) ne correspond pas au modèle prévu pour ce système. Aucun serveur n’a été installé. Vérifie le modèle et choisis un système compatible avant de recommencer.`,
@@ -2533,13 +2550,15 @@ function App() {
                             {piFlashResult.imager_version} · journal :{" "}
                             {piFlashResult.log_path}
                           </small>
-                          <button
-                            className="button secondary pi-restart-setup"
-                            onClick={restartPiSetupFromZero}
-                            disabled={busy}
-                          >
-                            Repartir de zéro · effacer et réinstaller
-                          </button>
+                          {piFlashResult.target_id && (
+                            <button
+                              className="button secondary pi-restart-setup"
+                              onClick={restartPiSetupFromZero}
+                              disabled={busy}
+                            >
+                              Repartir de zéro · effacer et réinstaller
+                            </button>
+                          )}
                           <small>
                             La carte sera entièrement effacée après une
                             confirmation, puis le parcours recommencera à

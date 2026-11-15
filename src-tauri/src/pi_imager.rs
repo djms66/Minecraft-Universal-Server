@@ -52,6 +52,79 @@ pub struct PiFlashResult {
     pub expected_devices: Vec<String>,
 }
 
+/// Restores the latest completed first-boot card session after an application
+/// restart. Only the newest log is considered, so an older prepared card can
+/// never silently replace a newer failed or incomplete attempt.
+pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResult>, String> {
+    let root = app_data.join("pi-first-boot");
+    let entries = match fs::read_dir(&root) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(io_error(error)),
+    };
+
+    let mut latest: Option<(std::time::SystemTime, PathBuf, String)> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Some(run_id) = path.file_name().and_then(|name| name.to_str()) else {
+            continue;
+        };
+        if run_id.len() != 32 || !run_id.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+            continue;
+        }
+        let log_path = path.join("ecriture.log");
+        let Ok(metadata) = fs::metadata(&log_path) else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        if latest
+            .as_ref()
+            .is_some_and(|(seen, _, _)| modified <= *seen)
+        {
+            continue;
+        }
+        let Ok(log) = fs::read_to_string(&log_path) else {
+            continue;
+        };
+        let hostname = format!("monde-ensemble-{run_id}");
+        let lowered = log.to_ascii_lowercase();
+        let completed = lowered.contains("write complete")
+            && lowered.contains("verification complete")
+            && log.contains(&hostname);
+        latest = Some((
+            modified,
+            log_path,
+            if completed { hostname } else { String::new() },
+        ));
+    }
+
+    let Some((_, log_path, hostname)) = latest else {
+        return Ok(None);
+    };
+    if hostname.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(PiFlashResult {
+        detail:
+            "Carte Raspberry Pi écrite et vérifiée. Reprends l’installation sans réécrire la carte."
+                .into(),
+        log_path: log_path.display().to_string(),
+        imager_version: IMAGER_VERSION.into(),
+        hostname,
+        target_id: String::new(),
+        target_name: String::new(),
+        target_size_bytes: 0,
+        target_model: String::new(),
+        // The prepared image is app-owned and was validated against the
+        // official Pi OS catalogue before writing. Hardware is checked again
+        // against the Pi's reported model before any server files are copied.
+        expected_devices: Vec::new(),
+    }))
+}
+
 struct MountedImager {
     executable: PathBuf,
     mountpoint: Option<PathBuf>,

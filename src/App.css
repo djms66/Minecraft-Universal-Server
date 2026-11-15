@@ -2834,17 +2834,85 @@ button { min-height: 44px; }
 
 /* Installation */
 .install-layout { display: block; max-width: 980px; }
+.install-layout:has(.pi-panel) { max-width: 1080px; }
+.install-layout:has(.pi-panel) .wizard-aside { display: none; }
 .first-run-note { display: none; }
-.step-ribbon { border: 0; padding: 0 0 16px; background: transparent; }
-.step-num { width: 32px; height: 32px; font-size: 15px; }
-.step-ribbon strong { font-size: 20px; color: #27362b; }
-.step-ribbon small { font-size: 14px; color: #68756a; }
+.install-progress {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin: 8px 0 34px;
+  padding: 0;
+  list-style: none;
+}
+.install-progress::before {
+  position: absolute;
+  top: 23px;
+  left: 12.5%;
+  right: 12.5%;
+  height: 4px;
+  background: #d8ddd8;
+  content: "";
+}
+.install-progress li {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  justify-items: center;
+  gap: 7px;
+  color: #69716b;
+  text-align: center;
+}
+.install-progress li > span {
+  display: grid;
+  width: 48px;
+  height: 48px;
+  place-items: center;
+  border: 2px solid #c9ceca;
+  border-radius: 50%;
+  background: #f7f8f6;
+  color: #515a53;
+  font-size: 21px;
+  font-weight: 750;
+}
+.install-progress li.current > span {
+  border-color: #a7e832;
+  background: #a7e832;
+  color: #172119;
+}
+.install-progress li.complete > span {
+  border-color: #36784c;
+  background: #36784c;
+  color: #fff;
+}
+.install-progress li > strong { font-size: 15px; }
+.install-progress li.current > strong,
+.install-progress li.complete > strong { color: #202923; }
+.install-question { margin: 0 0 14px; color: #202923; font-size: 25px; line-height: 1.2; }
 .target-choice { gap: 14px; margin: 0 0 20px; }
-.target-card { min-height: 116px; padding: 18px 20px; border-radius: 8px; }
+.target-card {
+  display: grid;
+  grid-template-columns: 54px minmax(0, 1fr);
+  align-content: center;
+  column-gap: 12px;
+  min-height: 116px;
+  padding: 18px 20px;
+  border-radius: 8px;
+}
 .target-card strong { font-size: 17px; }
 .target-card small { font-size: 14px; line-height: 1.4; }
-.target-card em { margin-top: 8px; font-size: 13px; }
-.target-icon { width: 34px; height: 34px; margin-bottom: 10px; font-size: 20px; }
+.target-card em { grid-column: 2; margin-top: 6px; font-size: 13px; }
+.target-card strong, .target-card small { grid-column: 2; }
+.target-icon {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  align-self: center;
+  width: 42px;
+  height: 42px;
+  margin: 0;
+  font-size: 24px;
+}
 .target-card.selected { border: 2px solid #347448; background: #f1f7eb; }
 .pi-panel, .machine-panel { padding: 22px; border-radius: 8px; }
 .pi-fresh-entry { padding: 0 0 16px; border: 0; background: transparent; }
@@ -2855,7 +2923,7 @@ button { min-height: 44px; }
 .pi-panel > .eyebrow { font-size: 11px; }
 .pi-panel h3 { font-size: 23px; }
 .pi-panel > p, .pi-panel .pi-setup-help { font-size: 15px; line-height: 1.55; }
-.pi-first-boot { margin-top: 18px; padding: 20px; border-color: var(--line); border-radius: 8px; font-size: 15px; }
+.pi-first-boot { margin-top: 10px; padding: 12px 0 0; border: 0; border-radius: 0; font-size: 15px; }
 .pi-first-boot h4 { margin: 0 0 6px; font-size: 20px; line-height: 1.3; }
 .pi-first-boot > p { margin: 0; max-width: 720px; color: #58675b; font-size: 15px; line-height: 1.5; }
 .pi-first-steps { gap: 8px; margin: 20px 0 18px; }
@@ -2878,6 +2946,29 @@ button { min-height: 44px; }
 .pi-os-details > strong { display: block; padding: 12px 12px 0; font-size: 15px; }
 .pi-os-details > span, .pi-os-details > small { display: block; padding: 0 12px; font-size: 13px; line-height: 1.5; }
 .pi-os-details .pi-error { padding: 8px 12px; font-size: 14px; }
+.pi-wifi-section { margin: 0 0 16px; }
+.pi-wifi-section > small { grid-column: 1 / -1; }
+.pi-os-details { margin: 8px 0 14px; }
+.pi-os-details summary { color: #293b2e; }
+.pi-detect-support .button { width: 100%; min-height: 58px; background: #176338; color: #fff; font-size: 18px; font-weight: 750; }
+.pi-storage-list li { min-height: 74px; padding: 12px 16px; border-radius: 8px; }
+.pi-storage-list li > div strong { font-size: 14px; }
+.pi-storage-list em { font-size: 13px; }
+.pi-storage-list .pi-flash-button { min-height: 42px; padding: 8px 14px; font-size: 14px; }
+.pi-storage-guidance { font-size: 14px; }
+.pi-fresh-entry { padding-bottom: 8px; }
+.pi-fresh-entry p { margin-bottom: 2px; }
+.pi-panel > .pi-fresh-entry + .pi-os-recommendation { margin-top: 8px; }
+@media (max-width: 760px) {
+  .install-progress { gap: 4px; margin-bottom: 24px; }
+  .install-progress::before { top: 18px; height: 3px; }
+  .install-progress li { gap: 5px; }
+  .install-progress li > span { width: 38px; height: 38px; font-size: 17px; }
+  .install-progress li > strong { font-size: 12px; }
+  .target-choice { grid-template-columns: 1fr; }
+  .target-card { min-height: 92px; }
+  .pi-wifi-section { grid-template-columns: 1fr; }
+}
 .pi-first-boot .pi-advanced-storage { margin-top: 14px; }
 .pi-advanced-storage { margin-top: 14px; font-size: 14px; }
 .pi-advanced-storage summary { min-height: 44px; padding: 12px 4px; color: #3f5947; font-size: 14px; font-weight: 650; }

@@ -322,6 +322,8 @@ function App() {
   const [localActionMessage, setLocalActionMessage] = useState("");
   const [localStatusError, setLocalStatusError] = useState("");
   const [piStatusError, setPiStatusError] = useState("");
+  const [piStatusRefreshing, setPiStatusRefreshing] = useState(false);
+  const piStatusRefreshingRef = useRef(false);
   const [piActionMessage, setPiActionMessage] = useState("");
   const [piUpdateCheck, setPiUpdateCheck] = useState<PiUpdateCheck | null>(
     null,
@@ -1006,8 +1008,9 @@ function App() {
   }, [piBootWaitComplete, piEulaAccepted, piFlashResult, busy]);
 
   const refreshPiStatus = async (includeLogs = false) => {
-    if (!piInstallation) return;
-    setBusy(true);
+    if (!piInstallation || piStatusRefreshingRef.current) return;
+    piStatusRefreshingRef.current = true;
+    setPiStatusRefreshing(true);
     setPiStatusError("");
     try {
       const status = await invoke<PiServerStatus>("inspect_pi_server", {
@@ -1039,7 +1042,8 @@ function App() {
     } catch (error) {
       setPiStatusError(String(error));
     } finally {
-      setBusy(false);
+      piStatusRefreshingRef.current = false;
+      setPiStatusRefreshing(false);
     }
   };
 
@@ -1604,10 +1608,15 @@ function App() {
     backup: "Sauvegarder et déplacer",
     advanced: "Réglages avancés",
   };
+  const serverConfirmedReady = Boolean(
+    localServerStatus?.ready || piServerStatus?.ready,
+  );
   const pageIntro: Record<Page, string> = {
     home: "Vérifie l’état du serveur et retrouve l’adresse à saisir dans Minecraft.",
     install: hasManagedServer
-      ? "Créer une installation séparée. Ton serveur existant reste intact."
+      ? serverConfirmedReady
+        ? "Créer une installation séparée. Le serveur en ligne ne sera pas modifié."
+        : "Le profil enregistré est conservé. L’état du serveur n’est pas confirmé; la nouvelle installation reste séparée."
       : "On avance ensemble, étape par étape, jusqu’à ta première connexion.",
     compat:
       "Les règles qui rendront les mises à jour sûres, expliquées sans jargon.",
@@ -1615,9 +1624,7 @@ function App() {
       "Tes constructions et réglages doivent pouvoir te suivre sur une autre machine.",
     advanced: "Les réglages avancés restent séparés de l’installation guidée.",
   };
-  const serverConfirmedReady = Boolean(
-    localServerStatus?.ready || piServerStatus?.ready,
-  );
+  const installStep = justInstalled ? 4 : piFlashResult ? 3 : busy ? 2 : 1;
 
   return (
     <LocalizedTree locale={locale}>
@@ -1791,6 +1798,7 @@ function App() {
               onSetPiWhitelist={setPiWhitelist}
               onPreparePiPlayerManagement={preparePiPlayerManagement}
               piStatusError={piStatusError}
+              piStatusRefreshing={piStatusRefreshing}
               piActionMessage={piActionMessage}
               actionProgress={busy ? (operationProgress?.step ?? "") : ""}
               busy={busy}
@@ -1812,13 +1820,24 @@ function App() {
           {page === "install" && (
             <section className="install-layout">
               <div className="wizard-main">
-                <div className="step-ribbon">
-                  <span className="step-num">1</span>
-                  <div>
-                    <strong>Où veux-tu mettre ton serveur ?</strong>
-                    <small>Tu pourras le déplacer plus tard.</small>
-                  </div>
-                </div>
+                <ol className="install-progress" aria-label="Étapes d’installation">
+                  {[
+                    "Choisir où",
+                    "Préparer",
+                    "Démarrer",
+                    "Jouer",
+                  ].map((label, index) => {
+                    const step = index + 1;
+                    const state = step < installStep ? "complete" : step === installStep ? "current" : "";
+                    return (
+                      <li key={label} className={state} aria-current={step === installStep ? "step" : undefined}>
+                        <span>{step < installStep ? "✓" : step}</span>
+                        <strong>{label}</strong>
+                      </li>
+                    );
+                  })}
+                </ol>
+                <h2 className="install-question">Où installer le serveur ?</h2>
                 <div className="target-choice">
                   <button
                     className={
@@ -1862,6 +1881,85 @@ function App() {
                   </>
                 ) : (
                   <div className="pi-panel">
+                    <div className="pi-wireless-fields pi-wifi-section">
+                        <div>
+                          <label htmlFor="pi-wifi-ssid">
+                            Réseau Wi-Fi (facultatif)
+                          </label>
+                          <input
+                            id="pi-wifi-ssid"
+                            value={piWifiSsid}
+                            onChange={(event) =>
+                              setPiWifiSsid(event.target.value)
+                            }
+                            autoComplete="off"
+                            placeholder="Vide si le Pi sera relié par câble"
+                            disabled={busy || Boolean(piFlashResult)}
+                          />
+                        </div>
+                        {piWifiSsid && (
+                          <>
+                            <small className="pi-wifi-note">
+                              Le Wi-Fi sera configuré pour le premier démarrage.
+                            </small>
+                            <details className="pi-wifi-security">
+                              <summary>À savoir sur le mot de passe Wi-Fi</summary>
+                              <p>
+                                Il est écrit temporairement sur la carte pour
+                                configurer le premier démarrage, puis sa
+                                suppression est programmée. Pour ne pas l’écrire
+                                sur la carte, relie le Pi au routeur avec un
+                                câble Ethernet.
+                              </p>
+                            </details>
+                            <div>
+                              <label htmlFor="pi-wifi-password">
+                                Mot de passe Wi-Fi
+                              </label>
+                              <input
+                                id="pi-wifi-password"
+                                type="password"
+                                value={piWifiPassword}
+                                onChange={(event) =>
+                                  setPiWifiPassword(event.target.value)
+                                }
+                                autoComplete="new-password"
+                                disabled={busy || Boolean(piFlashResult)}
+                              />
+                            </div>
+                            <div>
+                              <label htmlFor="pi-wifi-country">
+                                Pays du réseau Wi-Fi
+                              </label>
+                              <select
+                                id="pi-wifi-country"
+                                value={piWifiCountry}
+                                onChange={(event) =>
+                                  setPiWifiCountry(event.target.value)
+                                }
+                                disabled={busy || Boolean(piFlashResult)}
+                              >
+                                <option value="FR">France</option>
+                                <option value="BE">Belgique</option>
+                                <option value="CH">Suisse</option>
+                                <option value="CA">Canada</option>
+                                <option value="US">États-Unis</option>
+                                <option value="GB">Royaume-Uni</option>
+                                <option value="DE">Allemagne</option>
+                                <option value="ES">Espagne</option>
+                                <option value="IT">Italie</option>
+                                <option value="NL">Pays-Bas</option>
+                              </select>
+                            </div>
+                          </>
+                        )}
+                        {!piWifiSsid && (
+                          <small>
+                            Sans Wi-Fi ici, branche le Pi au routeur avec un
+                            câble réseau lors du premier démarrage.
+                          </small>
+                        )}
+                      </div>
                     <div className="pi-fresh-entry">
                       <div className="eyebrow">
                         NOUVEAU PI · PARCOURS DÉBUTANT
@@ -2064,171 +2162,8 @@ function App() {
                         Renseigne le Wi-Fi si nécessaire, puis détecte la carte.
                         Elle ne sera effacée qu’après confirmation.
                       </p>
-                      <ol
-                        className="pi-first-steps"
-                        aria-label="Progression de l’installation"
-                      >
-                        <li
-                          className={
-                            activePiOs && !piOsLoading ? "complete" : "current"
-                          }
-                        >
-                          <b>1</b>
-                          <span>
-                            <strong>Vérifier le système et le réseau</strong>
-                            <small>
-                              Système automatique ·{" "}
-                              {piFlashResult
-                                ? "Configuration de démarrage écrite sur la carte"
-                                : piWifiSsid
-                                  ? piWifiPassword
-                                    ? "Wi-Fi renseigné"
-                                    : "mot de passe Wi-Fi à saisir"
-                                  : "Wi-Fi facultatif"}
-                            </small>
-                          </span>
-                        </li>
-                        <li
-                          className={
-                            piBootTargets.length > 0
-                              ? "complete"
-                              : activePiOs
-                                ? "current"
-                                : ""
-                          }
-                        >
-                          <b>2</b>
-                          <span>
-                            <strong>Détecter la carte ou le SSD</strong>
-                            <small>
-                              {piBootTargets.length > 0
-                                ? `${piBootTargets.length} support${piBootTargets.length > 1 ? "s" : ""} détecté${piBootTargets.length > 1 ? "s" : ""}`
-                                : "Branche la carte au Mac"}
-                            </small>
-                          </span>
-                        </li>
-                        <li
-                          className={
-                            piFlashResult
-                              ? "complete"
-                              : piBootTargets.length > 0
-                                ? "current"
-                                : ""
-                          }
-                        >
-                          <b>3</b>
-                          <span>
-                            <strong>Écrire et vérifier la carte</strong>
-                            <small>
-                              {piFlashResult
-                                ? "Système écrit et vérifié"
-                                : "À confirmer avant l’écriture"}
-                            </small>
-                          </span>
-                        </li>
-                        <li
-                          className={
-                            piServerStatus?.ready
-                              ? "complete"
-                              : piFlashResult
-                                ? "current"
-                                : ""
-                          }
-                        >
-                          <b>4</b>
-                          <span>
-                            <strong>
-                              Démarrer le Pi et installer le serveur
-                            </strong>
-                            <small>
-                              {piServerStatus?.ready
-                                ? "Serveur contrôlé · adresse prête dans Minecraft"
-                                : piFlashResult
-                                  ? "Insère la carte puis rallume le Pi"
-                                  : "Après la préparation de la carte"}
-                            </small>
-                          </span>
-                        </li>
-                      </ol>
-                      <div className="pi-wireless-fields">
-                        <div>
-                          <label htmlFor="pi-wifi-ssid">
-                            Réseau Wi-Fi (facultatif)
-                          </label>
-                          <input
-                            id="pi-wifi-ssid"
-                            value={piWifiSsid}
-                            onChange={(event) =>
-                              setPiWifiSsid(event.target.value)
-                            }
-                            autoComplete="off"
-                            placeholder="Vide si le Pi sera relié par câble"
-                            disabled={busy || Boolean(piFlashResult)}
-                          />
-                        </div>
-                        {piWifiSsid && (
-                          <>
-                            <small className="pi-wifi-note">
-                              Le Wi-Fi sera configuré pour le premier démarrage.
-                            </small>
-                            <details className="pi-wifi-security">
-                              <summary>À savoir sur le mot de passe Wi-Fi</summary>
-                              <p>
-                                Il est écrit temporairement sur la carte pour
-                                configurer le premier démarrage, puis sa
-                                suppression est programmée. Pour ne pas l’écrire
-                                sur la carte, relie le Pi au routeur avec un
-                                câble Ethernet.
-                              </p>
-                            </details>
-                            <div>
-                              <label htmlFor="pi-wifi-password">
-                                Mot de passe Wi-Fi
-                              </label>
-                              <input
-                                id="pi-wifi-password"
-                                type="password"
-                                value={piWifiPassword}
-                                onChange={(event) =>
-                                  setPiWifiPassword(event.target.value)
-                                }
-                                autoComplete="new-password"
-                                disabled={busy || Boolean(piFlashResult)}
-                              />
-                            </div>
-                            <div>
-                              <label htmlFor="pi-wifi-country">
-                                Pays du réseau Wi-Fi
-                              </label>
-                              <select
-                                id="pi-wifi-country"
-                                value={piWifiCountry}
-                                onChange={(event) =>
-                                  setPiWifiCountry(event.target.value)
-                                }
-                                disabled={busy || Boolean(piFlashResult)}
-                              >
-                                <option value="FR">France</option>
-                                <option value="BE">Belgique</option>
-                                <option value="CH">Suisse</option>
-                                <option value="CA">Canada</option>
-                                <option value="US">États-Unis</option>
-                                <option value="GB">Royaume-Uni</option>
-                                <option value="DE">Allemagne</option>
-                                <option value="ES">Espagne</option>
-                                <option value="IT">Italie</option>
-                                <option value="NL">Pays-Bas</option>
-                              </select>
-                            </div>
-                          </>
-                        )}
-                        {!piWifiSsid && (
-                          <small>
-                            Sans Wi-Fi ici, branche le Pi au routeur avec un
-                            câble réseau lors du premier démarrage.
-                          </small>
-                        )}
-                      </div>
+
+
                       <details
                         className="pi-advanced-storage"
                         onToggle={(event) =>
@@ -2607,16 +2542,21 @@ function App() {
                     </section>
                   </div>
                 )}
-                <div
-                  className={hasManagedServer ? "notice safe" : "notice amber"}
-                >
+                <div className={serverConfirmedReady ? "notice safe" : "notice amber"}>
                   <span>{hasManagedServer ? "✓" : "!"}</span>
                   <p>
-                    {hasManagedServer ? (
+                    {serverConfirmedReady ? (
                       <>
-                        <strong>Le serveur actuel reste intact.</strong>
+                        <strong>Le serveur en ligne reste intact.</strong>
                         <br />
                         Une installation neuve est créée à côté de l’existante.
+                      </>
+                    ) : hasManagedServer ? (
+                      <>
+                        <strong>Le profil enregistré est conservé.</strong>
+                        <br />
+                        Le serveur n’est pas confirmé en ligne. La carte ne sera
+                        écrite qu’après sa détection et ta confirmation.
                       </>
                     ) : (
                       <>
@@ -3187,6 +3127,7 @@ function Home({
   onSetPiWhitelist,
   onPreparePiPlayerManagement,
   piStatusError,
+  piStatusRefreshing,
   piActionMessage,
   actionProgress,
   busy,
@@ -3239,6 +3180,7 @@ function Home({
   onSetPiWhitelist: (enabled: boolean) => void;
   onPreparePiPlayerManagement: () => void;
   piStatusError: string;
+  piStatusRefreshing: boolean;
   piActionMessage: string;
   actionProgress: string;
   busy: boolean;
@@ -3899,9 +3841,11 @@ function Home({
               <button
                 className="text-button"
                 onClick={onRefreshPi}
-                disabled={busy}
+                disabled={busy || piStatusRefreshing}
               >
-                {busy ? "Lecture…" : "Actualiser l’état et le journal"}
+                {piStatusRefreshing
+                  ? "Lecture…"
+                  : "Actualiser l’état et le journal"}
               </button>
               <button
                 className="text-button"

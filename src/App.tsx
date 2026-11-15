@@ -467,7 +467,7 @@ function App() {
     const selected = await open({
       directory: false,
       multiple: false,
-      filters: [{ name: "Sauvegarde Monde Ensemble", extensions: ["gz"] }],
+      filters: [{ name: "Sauvegarde de serveur Minecraft", extensions: ["gz"] }],
     });
     if (typeof selected === "string") setRestoreArchive(selected);
   };
@@ -1660,8 +1660,9 @@ function App() {
             <i />
           </div>
           <div>
-            <strong>MONDE</strong>
-            <span>ENSEMBLE</span>
+            <strong>MINECRAFT</strong>
+            <span>UNIVERSAL SERVER</span>
+            <small>One world. Java + Bedrock. Any device.</small>
           </div>
         </div>
         <div className="side-label">
@@ -1714,14 +1715,14 @@ function App() {
           </div>
         </div>
         <div className="side-version">
-          MONDE ENSEMBLE <span>·</span> {__APP_VERSION__}
+          MINECRAFT UNIVERSAL SERVER <span>·</span> {__APP_VERSION__}
         </div>
       </aside>
 
       <main className="main-area">
         <header className="topbar">
           <div className="crumb">
-            MONDE ENSEMBLE <span>/</span> {pageTitle[page].toUpperCase()}
+            MINECRAFT UNIVERSAL SERVER <span>/</span> {pageTitle[page].toUpperCase()}
           </div>
           <div className="top-status">
             <label className="locale-picker">
@@ -4517,7 +4518,7 @@ function Compatibility({
             <p>
               MCXboxBroadcast peut faire apparaître le serveur dans la liste
               d’amis de la console. Cette méthode demande de configurer un
-              compte Xbox séparé et un relais côté serveur; Monde Ensemble ne
+              compte Xbox séparé et un relais côté serveur; Minecraft Universal Server ne
               crée pas ce compte et ne configure pas ce relais.
             </p>
           </div>
@@ -4782,7 +4783,7 @@ function Backups({
           <div className="eyebrow">TRANSFÉRER SUR LE RASPBERRY PI</div>
           <h3>Restaurer aussi sur le Pi</h3>
           <p>
-            Utilise l’archive choisie ci-dessus. Monde Ensemble vérifie son
+            Utilise l’archive choisie ci-dessus. Minecraft Universal Server vérifie son
             intégrité, adapte Java au Pi et crée un dossier serveur neuf. Le
             serveur actuel reste conservé; la nouvelle copie reste arrêtée.
           </p>
@@ -5150,7 +5151,7 @@ function GameSettingsPanel({
                 <div className="eyebrow">PACK DE RESSOURCES · JAVA</div>
                 <p className="path-note">
                   Pour les joueurs Java, indique un lien HTTPS direct vers le
-                  fichier ZIP hébergé en ligne. Monde Ensemble ne l’héberge pas
+                  fichier ZIP hébergé en ligne. Minecraft Universal Server ne l’héberge pas
                   et ne vérifie pas que ce lien est accessible depuis Internet.
                   Ce réglage ne convertit pas le pack pour Bedrock.
                 </p>

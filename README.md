@@ -1,4 +1,4 @@
-# Monde Ensemble 0.18.83
+# Minecraft Universal Server 0.18.84
 
 Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -51,7 +51,7 @@ Toutes les installations neuves et restaurations sont faites à côté des dossi
 - La préparation d’un Pi neuf est intégrée, mais l’écriture réelle sur carte/SSD et le premier démarrage doivent encore être validés sur chaque cible Mac, Windows et Linux, avec leurs appareils et supports physiques. Le paquet Mac local ne certifie pas les autres plateformes.
 - Le démarrage automatique après redémarrage dépend du service de planification déjà actif sur le Pi. L’application en vérifie la présence; sinon elle affiche que cette fonction n’est pas configurée.
 - L’application n’écrit pas dans la Freebox et ne peut donc pas confirmer elle-même le bail DHCP. Le tableau de bord fournit l’adresse IP et matérielle ainsi qu’un parcours guidé pour enregistrer le bail permanent dans l’application Free ; l’adresse ne devient durable qu’après cette confirmation dans la box.
-- La mise à jour coordonnée automatique est limitée aux serveurs locaux et Pi créés par Monde Ensemble. Le serveur doit être arrêté depuis l’application ; un mod, plugin non géré, pack de données, pack client, lien symbolique, runtime Java incompatible, espace insuffisant ou catalogue indisponible reporte la mise à jour et conserve la version actuelle.
+- La mise à jour coordonnée automatique est limitée aux serveurs locaux et Pi créés par Minecraft Universal Server. Le serveur doit être arrêté depuis l’application ; un mod, plugin non géré, pack de données, pack client, lien symbolique, runtime Java incompatible, espace insuffisant ou catalogue indisponible reporte la mise à jour et conserve la version actuelle.
 - Une mise à jour de Paper peut modifier les données de monde au premier démarrage. L’application conserve donc une archive complète avant lancement et ne valide la mise à jour qu’après le signal serveur prêt et l’ouverture des ports Java et Bedrock. Les sauvegardes automatiques s’accumulent et exigent de l’espace libre; l’application ne supprime pas les anciennes copies.
 - Les profils locaux antérieurs à 0.8.0 n’ont pas le contrôle RCON local nécessaire aux boutons de démarrage, d’arrêt et de mise à jour. Une copie mise à jour locale prend de l’espace supplémentaire : l’ancienne version et l’archive sont conservées, sans suppression automatique.
 - La gestion des joueurs est disponible sur les nouveaux serveurs locaux et Pi gérés. Les profils Pi plus anciens peuvent être préparés depuis le tableau de bord après arrêt du serveur; deux copies des réglages sont créées avant toute modification. Sur Bedrock, Floodgate exige que le joueur ait déjà rejoint un serveur Geyser avant que sa commande de liste d’accès puisse l’ajouter.

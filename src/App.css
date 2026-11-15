@@ -77,7 +77,7 @@ button {
   opacity: 0.53;
 }
 .brand strong,
-.brand span {
+.brand-copy > span {
   display: block;
   letter-spacing: 1.7px;
   line-height: 1.07;
@@ -86,7 +86,7 @@ button {
   font-size: 14px;
   font-weight: 800;
 }
-.brand span {
+.brand-copy > span {
   font-family: "DM Mono", monospace;
   font-size: 8px;
   color: #a0b8a3;
@@ -2771,10 +2771,47 @@ button { min-height: 44px; }
   padding: 28px 16px 20px;
   background: var(--deep);
 }
-.brand { padding: 4px 14px 38px; }
-.brand-mark { grid-template-columns: repeat(2, 12px); grid-template-rows: repeat(2, 12px); gap: 3px; }
-.brand strong { font-size: 18px; letter-spacing: 1.4px; }
-.brand span { font-size: 11px; }
+.brand {
+  box-sizing: border-box;
+  width: 100%;
+  align-self: center;
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-items: center;
+  column-gap: 10px;
+  row-gap: 9px;
+  margin: 0 0 24px;
+  padding: 12px;
+  border: 1px solid rgba(209, 239, 152, 0.24);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.035);
+}
+.brand-mark {
+  width: 30px;
+  grid-template-columns: repeat(2, 14px);
+  grid-template-rows: repeat(2, 14px);
+  gap: 2px;
+}
+.brand-copy { min-width: 0; }
+.brand strong { font-size: 18px; letter-spacing: 1.2px; white-space: nowrap; }
+.brand-copy > span { font-size: 10px; letter-spacing: 1px; white-space: nowrap; }
+.brand .brand-motto {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+  max-width: none;
+  margin: 0;
+  color: #d0dfd1;
+  font-size: 8px;
+  font-weight: 550;
+  line-height: 1;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+.brand .brand-motto span { display: inline; margin: 0; color: inherit; font: inherit; letter-spacing: inherit; }
 .side-label { padding: 0 14px 12px; font-size: 11px; letter-spacing: 1px; }
 .nav-item { min-height: 48px; padding: 12px 14px; border-radius: 7px; font-size: 15px; }
 .nav-item b { font-size: 19px; }
@@ -3025,6 +3062,11 @@ button { min-height: 44px; }
 
 @media (max-width: 1050px) {
   .sidebar { width: 210px; }
+  .brand { grid-template-columns: 26px minmax(0, 1fr); column-gap: 8px; padding: 10px; }
+  .brand-mark { width: 26px; grid-template-columns: repeat(2, 12px); grid-template-rows: repeat(2, 12px); gap: 2px; }
+  .brand strong { font-size: 15px; letter-spacing: 1px; }
+  .brand-copy > span { font-size: 9px; letter-spacing: 0.75px; }
+  .brand .brand-motto { font-size: 7px; }
   .main-area { width: calc(100% - 210px); margin-left: 210px; }
   .topbar { padding-inline: 28px; }
   .page-wrap { width: calc(100% - 52px); }
@@ -3035,7 +3077,7 @@ button { min-height: 44px; }
   .locale-picker select { max-width: 122px; }
   .app-shell { display: block; }
   .sidebar { position: static; width: 100%; min-height: 0; padding: 12px 16px; }
-  .brand { padding: 2px 8px 12px; }
+  .brand { width: 100%; margin: 0 0 12px; padding: 10px 12px; }
   .side-label, .side-spacer, .server-mini, .side-version { display: none; }
   .sidebar nav { display: flex; overflow-x: auto; gap: 6px; }
   .nav-item { flex: 0 0 auto; min-height: 42px; width: auto; font-size: 14px; }

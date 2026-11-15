@@ -1659,11 +1659,17 @@ function App() {
             <i />
             <i />
           </div>
-          <div>
+          <div className="brand-copy">
             <strong>MINECRAFT</strong>
             <span>UNIVERSAL SERVER</span>
-            <small>One world. Java + Bedrock. Any device.</small>
           </div>
+          <small className="brand-motto">
+            <span>One world</span>
+            <span>•</span>
+            <span>Java + Bedrock</span>
+            <span>•</span>
+            <span>Any device</span>
+          </small>
         </div>
         <div className="side-label">
           {hasManagedServer ? "TON SERVEUR" : "PREMIÈRE INSTALLATION"}

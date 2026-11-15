@@ -1,4 +1,4 @@
-# Minecraft Universal Server 0.18.88
+# Minecraft Universal Server 0.18.89
 
 Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -83,6 +83,14 @@ Pour un Pi neuf sans stockage, la préparation commence sur l’ordinateur qui e
 Sur Windows, l’installation de l’outil officiel peut déclencher la confirmation administrateur de Windows ; sur Mac/Linux, l’écriture du support demande l’autorisation du système. Cette étape est imposée par l’écriture d’un disque. L’application conserve la protection de Raspberry Pi Imager contre l’écriture sur le disque système.
 
 ## Builds par plateforme
+
+Les icônes d’application partent du master `src-tauri/icon-source/logo_MUS.png` (le SVG est conservé à côté). Tauri génère les formats macOS `.icns`, Windows `.ico`, Linux PNG, les tailles iOS et les ressources Android avec icône adaptative et fond blanc. Pour les régénérer :
+
+```sh
+npx tauri icon src-tauri/icon-source/logo_MUS.png --output src-tauri/icons --ios-color '#ffffff'
+```
+
+Les fichiers Android et iOS sont les ressources d’icône prêtes pour ces cibles; l’application actuelle ne dispose pas encore de projets mobiles Android/iOS initialisés.
 
 Le workflow GitHub Actions produit séparément des DMG et archives macOS Apple Silicon et Intel, un installateur Windows x64, puis des paquets Debian Linux x64 et ARM64. Les sorties restent des artefacts de compilation, pas des versions certifiées : elles doivent encore être ouvertes et vérifiées sur chaque système cible. Le paquet ARM64 est destiné à un Linux graphique compatible avec les dépendances Tauri ; Raspberry Pi OS Lite est sans interface de bureau et ne lance pas cette application graphique.
 

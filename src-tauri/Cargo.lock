@@ -1982,11 +1982,12 @@ dependencies = [
 
 [[package]]
 name = "monde-ensemble"
-version = "0.18.69"
+version = "0.18.70"
 dependencies = [
  "chrono",
  "flate2",
  "fs2",
+ "if-addrs",
  "mdns-sd",
  "regex",
  "reqwest 0.12.28",

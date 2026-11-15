@@ -47,6 +47,10 @@ const PAPER_READY_LOG_PATTERN: &str = r"INFO\]: Done \(";
 const MAX_RESTORE_BYTES: u64 = 1024 * 1024 * 1024 * 1024;
 const REMOTE_SERVER_ARTIFACT_CHECK: &str = "for f in paper.jar plugins/Geyser-Spigot.jar plugins/Floodgate-Spigot.jar plugins/Geyser-Spigot/config.yml; do if [ ! -s \"$f\" ]; then printf 'Fichier requis absent ou vide : %s\\n' \"$f\" >&2; exit 42; fi; done; if ! grep -Eq '^[[:space:]]*transport:[[:space:]]*nethernet([[:space:]#]|$)' plugins/Geyser-Spigot/config.yml; then echo 'Configuration Geyser sans NetherNet.' >&2; exit 43; fi;";
 static APP_DATA_DIRECTORY: OnceLock<PathBuf> = OnceLock::new();
+#[cfg(windows)]
+const SSH_NULL_DEVICE: &str = "NUL";
+#[cfg(not(windows))]
+const SSH_NULL_DEVICE: &str = "/dev/null";
 
 /// Stores the app-owned location used for first-boot Raspberry Pi SSH access.
 pub fn configure_app_data_directory(path: PathBuf) {
@@ -82,7 +86,7 @@ fn add_identity_file(command: &mut Command, identity: &Path) {
 }
 
 const REMOTE_NETWORK_IDENTITY_COMMAND: &str = r#"network_interface="$(ip -4 route show default 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"; network_ip=""; if [ -n "$network_interface" ]; then network_ip="$(ip -o -4 address show dev "$network_interface" scope global 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; if [ -z "$network_ip" ]; then network_interface="$(ip -o -4 address show scope global up 2>/dev/null | awk 'NR == 1 { print $2 }')"; network_ip="$(ip -o -4 address show dev "$network_interface" scope global up 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; network_mac=""; if [ -n "$network_interface" ] && [ -r "/sys/class/net/$network_interface/address" ]; then network_mac="$(cat "/sys/class/net/$network_interface/address")"; fi; printf 'IP=%s\nNETWORK_INTERFACE=%s\nMAC_ADDRESS=%s\n' "$network_ip" "$network_interface" "$network_mac""#;
-const REMOTE_PROBE_COMMAND_TEMPLATE: &str = r#"printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; @NETWORK_IDENTITY@; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
+const REMOTE_PROBE_COMMAND_TEMPLATE: &str = r#"printf 'HOSTNAME='; hostname -s; printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; @NETWORK_IDENTITY@; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
 
 fn remote_probe_command() -> String {
     REMOTE_PROBE_COMMAND_TEMPLATE.replace("@NETWORK_IDENTITY@", REMOTE_NETWORK_IDENTITY_COMMAND)
@@ -4540,7 +4544,9 @@ fn discover_pi_internal(
             3,
             true,
         ) {
-            if let Ok(facts) = parse_remote_facts(&output) {
+            if let Ok(facts) = parse_remote_facts(&output)
+                && facts.hostname.eq_ignore_ascii_case(expected)
+            {
                 return Ok(vec![DiscoveredPi {
                     host,
                     address: facts.ip,
@@ -4578,6 +4584,10 @@ fn discover_pi_internal(
     let _ = mdns.stop_browse("_ssh._tcp.local.");
     let _ = mdns.shutdown();
     if candidates.is_empty() {
+        if let Some(expected) = expected_hostname {
+            return discover_prepared_pi_by_local_scan(username, expected)
+                .map(|device| vec![device]);
+        }
         return Err("Aucun appareil SSH n’a été annoncé sur le réseau local. Vérifie que le Pi est allumé sur le même Wi-Fi ou câble réseau.".into());
     }
 
@@ -4610,6 +4620,11 @@ fn discover_pi_internal(
         .into_iter()
         .filter_map(|(host, address, result)| {
             let facts = parse_remote_facts(&result.ok()?).ok()?;
+            if expected_hostname
+                .is_some_and(|expected| !facts.hostname.eq_ignore_ascii_case(expected))
+            {
+                return None;
+            }
             Some(DiscoveredPi {
                 host,
                 address: if facts.ip.is_empty() {
@@ -4624,9 +4639,122 @@ fn discover_pi_internal(
     discovered.sort_by(|left, right| left.host.cmp(&right.host));
     discovered.dedup_by(|left, right| left.address == right.address);
     if discovered.is_empty() {
+        if let Some(expected) = expected_hostname {
+            return discover_prepared_pi_by_local_scan(username, expected)
+                .map(|device| vec![device]);
+        }
         return Err("Le réseau a répondu, mais aucun Pi n’a pu être vérifié avec le compte et la clé SSH de cet ordinateur. Rien n’a été modifié.".into());
     }
     Ok(discovered)
+}
+
+/// Fallback for routers that assign an address but suppress SSH mDNS records.
+/// The scan is restricted to directly connected IPv4 subnets no larger than
+/// /23, probes only TCP/22, and authenticates only the expected card hostname.
+/// Host keys discovered by this one-time IP scan are held in a private temp
+/// file and removed afterward; normal SSH trust settings remain untouched.
+fn discover_prepared_pi_by_local_scan(
+    username: &str,
+    expected_hostname: &str,
+) -> Result<DiscoveredPi, String> {
+    let interfaces = if_addrs::get_if_addrs()
+        .map_err(|_| "Impossible de lire les adresses réseau de cet ordinateur.".to_string())?;
+    let mut candidates = std::collections::BTreeSet::new();
+    for interface in interfaces {
+        let if_addrs::IfAddr::V4(ref address) = interface.addr else {
+            continue;
+        };
+        let prefix = address.prefixlen;
+        if !interface.is_oper_up()
+            || interface.is_loopback()
+            || address.ip.is_link_local()
+            || !(23..=30).contains(&prefix)
+        {
+            continue;
+        }
+        let ip = u32::from(address.ip);
+        let mask = if prefix == 0 {
+            0
+        } else {
+            u32::MAX << (32 - prefix)
+        };
+        let network = ip & mask;
+        let broadcast = network | !mask;
+        for host in network.saturating_add(1)..broadcast {
+            let candidate = std::net::Ipv4Addr::from(host);
+            if candidate != address.ip {
+                candidates.insert(candidate);
+            }
+        }
+    }
+    if candidates.is_empty() {
+        return Err("Aucune annonce SSH n’a été trouvée et aucun sous-réseau local exploitable n’est disponible. Vérifie que le Mac et le Pi sont sur le même réseau.".into());
+    }
+
+    let candidates = candidates.into_iter().collect::<Vec<_>>();
+    let mut reachable = Vec::new();
+    for batch in candidates.chunks(64) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        for candidate in batch.iter().copied() {
+            let sender = sender.clone();
+            std::thread::spawn(move || {
+                if TcpStream::connect_timeout(
+                    &std::net::SocketAddr::from((candidate, 22)),
+                    Duration::from_millis(350),
+                )
+                .is_ok()
+                {
+                    let _ = sender.send(candidate);
+                }
+            });
+        }
+        drop(sender);
+        reachable.extend(receiver);
+        if reachable.len() >= 32 {
+            break;
+        }
+    }
+    reachable.truncate(32);
+    if reachable.is_empty() {
+        return Err("Aucune annonce SSH n’a été trouvée et aucun appareil du réseau local ne répond sur le port SSH (22). Vérifie que le Pi est allumé, connecté au bon Wi-Fi ou au routeur, puis réessaie. La carte et le Pi n’ont pas été modifiés.".into());
+    }
+
+    let known_hosts =
+        std::env::temp_dir().join(format!("monde-ensemble-known-hosts-{}.tmp", Uuid::new_v4()));
+    OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&known_hosts)
+        .map_err(|_| {
+            "Impossible de créer le fichier temporaire de vérification SSH.".to_string()
+        })?;
+    let mut found = None;
+    for address in reachable {
+        let host = address.to_string();
+        if let Ok(output) = run_ssh_with_known_hosts(
+            &format!("{username}@{host}"),
+            &remote_probe_command(),
+            3,
+            &known_hosts,
+        ) {
+            if let Ok(facts) = parse_remote_facts(&output)
+                && facts.hostname.eq_ignore_ascii_case(expected_hostname)
+            {
+                found = Some(DiscoveredPi {
+                    host,
+                    address: if facts.ip.is_empty() {
+                        address.to_string()
+                    } else {
+                        facts.ip
+                    },
+                    model: facts.model,
+                });
+                break;
+            }
+        }
+    }
+    let _ = fs::remove_file(&known_hosts);
+    found.ok_or_else(|| "Le réseau local a répondu, mais le Pi préparé n’a pas confirmé le nom inscrit sur sa carte avec la clé SSH de cette application. Vérifie que tu as démarré la carte préparée par cette installation. Rien n’a été modifié.".into())
 }
 
 /// Reads the saved installation's process, ports and recent log without
@@ -5519,6 +5647,7 @@ fn select_remote_port(
 }
 
 struct RemoteFacts {
+    hostname: String,
     model: String,
     memory_gb: f64,
     free_gb: u64,
@@ -5550,6 +5679,7 @@ fn parse_remote_facts(output: &str) -> Result<RemoteFacts, String> {
         return Err("L’appareil trouvé ne s’identifie pas comme un Raspberry Pi. Aucun fichier n’a été envoyé.".into());
     }
     Ok(RemoteFacts {
+        hostname: required("HOSTNAME")?.trim().to_string(),
         model,
         memory_gb: required("MEMORY_GB")?
             .parse()
@@ -5624,6 +5754,48 @@ fn run_ssh_timeout_policy(
             &format!("ConnectTimeout={timeout_seconds}"),
             "-o",
             host_key_policy,
+            "-o",
+            "PasswordAuthentication=no",
+            destination,
+            command,
+        ])
+        .output()
+        .map_err(|_| {
+            "L’outil d’accès sécurisé SSH n’est pas disponible sur cet ordinateur.".to_string()
+        })?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let detail = [stderr, stdout]
+            .into_iter()
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join("\n");
+        return Err(ssh_failure_message(output.status.code(), &detail));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+}
+
+fn run_ssh_with_known_hosts(
+    destination: &str,
+    command: &str,
+    timeout_seconds: u8,
+    known_hosts: &Path,
+) -> Result<String, String> {
+    let known_hosts = known_hosts.to_string_lossy().into_owned();
+    let output = ssh_command()
+        .args([
+            "-o",
+            "BatchMode=yes",
+            "-o",
+            &format!("ConnectTimeout={timeout_seconds}"),
+            "-o",
+            "StrictHostKeyChecking=accept-new",
+            "-o",
+            &format!("UserKnownHostsFile={known_hosts}"),
+            "-o",
+            "-o",
+            &format!("GlobalKnownHostsFile={SSH_NULL_DEVICE}"),
             "-o",
             "PasswordAuthentication=no",
             destination,
@@ -8137,7 +8309,7 @@ mod tests {
     #[test]
     fn remote_facts_keep_the_default_route_address_and_hardware_identity() {
         let facts = super::parse_remote_facts(
-            "MODEL=Raspberry Pi 5 Model B Rev 1.0\nMEMORY_GB=7.7\nFREE_GB=24\nARCH=aarch64\nIP=192.168.1.201\nNETWORK_INTERFACE=eth0\nMAC_ADDRESS=d8:3a:dd:12:34:56\nPORT_25565=free\nPORT_25566=free\nPORT_19132=free\nPORT_19133=free\nPORT_25575=free\nPORT_25576=free\n",
+            "HOSTNAME=monde-ensemble-test\nMODEL=Raspberry Pi 5 Model B Rev 1.0\nMEMORY_GB=7.7\nFREE_GB=24\nARCH=aarch64\nIP=192.168.1.201\nNETWORK_INTERFACE=eth0\nMAC_ADDRESS=d8:3a:dd:12:34:56\nPORT_25565=free\nPORT_25566=free\nPORT_19132=free\nPORT_19133=free\nPORT_25575=free\nPORT_25576=free\n",
         )
         .unwrap();
 

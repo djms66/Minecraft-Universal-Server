@@ -4027,13 +4027,15 @@ fn prepare_local_update_copy(
     let artifact_stage = std::env::temp_dir().join(format!("monde-ensemble-local-update-{id}"));
     fs::create_dir(&artifact_stage).map_err(io_error)?;
     let _cleanup_artifacts = RemoveDirectoryOnDrop(artifact_stage.clone());
-    for (index, artifact) in artifacts.iter().enumerate() {
-        progress(
-            &format!("Téléchargement et vérification de {}…", artifact.version),
-            49 + index as u8 * 7,
-        );
-        download_verified(&client, artifact, &artifact_stage.join(&artifact.name))?;
-    }
+    progress(
+        "Téléchargement parallèle et vérification SHA-256 des composants…",
+        52,
+    );
+    let destinations = artifacts
+        .iter()
+        .map(|artifact| artifact_stage.join(&artifact.name))
+        .collect::<Vec<_>>();
+    download_artifacts_parallel(&client, &artifacts, &destinations)?;
 
     let staging = parent.join(format!(".Monde-Ensemble-{id}.preparing"));
     fs::create_dir(&staging).map_err(io_error)?;
@@ -5197,13 +5199,11 @@ fn update_pi_server_if_ready(
         staging.join("plugins/Geyser-Spigot.jar"),
         staging.join("plugins/Floodgate-Spigot.jar"),
     ];
-    for (index, (artifact, destination)) in artifacts.iter().zip(&destinations).enumerate() {
-        progress(
-            &format!("Téléchargement et contrôle de {}…", artifact.version),
-            15 + index as u8 * 15,
-        );
-        download_verified(&client, artifact, destination)?;
-    }
+    progress(
+        "Téléchargement parallèle et contrôle SHA-256 des composants…",
+        35,
+    );
+    download_artifacts_parallel(&client, &artifacts, &destinations)?;
 
     let geyser_jar = File::open(staging.join("plugins/Geyser-Spigot.jar")).map_err(io_error)?;
     let mut geyser_archive = zip::ZipArchive::new(geyser_jar).map_err(|error| {
@@ -5907,19 +5907,22 @@ fn build_fresh_server(
         },
     ];
     fs::create_dir_all(stage.join("plugins")).map_err(io_error)?;
-    for (index, artifact) in artifacts.iter().enumerate() {
-        let percent = 10 + (index as u8 * 18);
-        progress(
-            &format!("Téléchargement et contrôle de {}…", artifact.name),
-            percent,
-        );
-        let destination = if index == 0 {
-            stage.join("paper.jar")
-        } else {
-            stage.join("plugins").join(&artifact.name)
-        };
-        download_verified(&client, artifact, &destination)?;
-    }
+    progress(
+        "Téléchargement parallèle et contrôle SHA-256 de Paper, Geyser et Floodgate…",
+        48,
+    );
+    let destinations = artifacts
+        .iter()
+        .enumerate()
+        .map(|(index, artifact)| {
+            if index == 0 {
+                stage.join("paper.jar")
+            } else {
+                stage.join("plugins").join(&artifact.name)
+            }
+        })
+        .collect::<Vec<_>>();
+    download_artifacts_parallel(&client, &artifacts, &destinations)?;
 
     progress("Préparation du Java adapté à cet ordinateur…", 66);
     let java_major = java_major_for(&supported.java)?;
@@ -7538,6 +7541,47 @@ fn download_verified(
 ) -> Result<(), String> {
     download_url_verified(client, &artifact.url, &artifact.checksum, destination)
         .map_err(|error| format!("{} ({}) : {error}", artifact.name, artifact.version))
+}
+
+/// Fetch independent, checksum-pinned server components concurrently. Every
+/// artifact still passes the same HTTPS, SHA-256 and JAR validation as before.
+fn download_artifacts_parallel(
+    client: &Client,
+    artifacts: &[Artifact],
+    destinations: &[PathBuf],
+) -> Result<(), String> {
+    if artifacts.len() != destinations.len() {
+        return Err("La liste des fichiers à télécharger est incohérente.".into());
+    }
+    std::thread::scope(|scope| {
+        let handles = artifacts
+            .iter()
+            .zip(destinations.iter())
+            .map(|(artifact, destination)| {
+                let client = client.clone();
+                let destination = destination.clone();
+                scope.spawn(move || download_verified(&client, artifact, &destination))
+            })
+            .collect::<Vec<_>>();
+
+        let mut first_error = None;
+        for handle in handles {
+            match handle.join() {
+                Ok(Ok(())) => {}
+                Ok(Err(error)) => {
+                    if first_error.is_none() {
+                        first_error = Some(error);
+                    }
+                }
+                Err(_) => {
+                    if first_error.is_none() {
+                        first_error = Some("Un téléchargement de composant a échoué.".into());
+                    }
+                }
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    })
 }
 
 fn download_url_verified(

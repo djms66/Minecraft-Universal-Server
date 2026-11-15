@@ -1,10 +1,12 @@
-# Monde Ensemble 0.18.70
+# Monde Ensemble 0.18.72
 
-Application de bureau francophone qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
+Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
 ## Ce que fait cette version
 
 - démarre les nouveaux utilisateurs dans un guide « installer mon serveur » plutôt que dans un tableau de bord vide ; chaque lancement recommence la préparation du Pi à l’étape 1 et exige une nouvelle détection puis une confirmation explicite avant d’effacer le support ; pour un Pi neuf, montre d’abord le matériel nécessaire et la préparation depuis la carte ; après acceptation de la licence, une barre de 150 secondes suit le premier démarrage puis l’application recherche automatiquement le Pi et lance l’installation ; les outils de réglage apparaissent ensuite dans le tableau de bord ;
+- propose onze langues pour la navigation, l’entrée dans l’installation et la gestion des joueurs; la sélection est conservée sur cet ordinateur ;
+- télécharge Paper, Geyser et Floodgate en parallèle durant une installation ou mise à jour, puis vérifie chaque empreinte SHA-256 avant de préparer le serveur ;
 - détecte le système, l’architecture, la mémoire et l’espace libre local ;
 - consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
 - lit le format actuel du catalogue Java Adoptium ; après deux lectures HTTP/1, utilise `curl` sécurisé comme secours pour éviter qu’un corps HTTP mal décodé bloque l’installation ; le JRE ne passe à l’installation qu’après validation de son SHA-256 ;
@@ -82,7 +84,11 @@ Sur Windows, l’installation de l’outil officiel peut déclencher la confirma
 
 ## Builds par plateforme
 
-Le workflow GitHub Actions produit séparément un DMG et une archive macOS Apple Silicon, un installateur Windows x64, puis des paquets Debian Linux x64 et ARM64. Les sorties restent des artefacts de compilation, pas des versions certifiées : elles doivent encore être ouvertes et vérifiées sur chaque système cible. Le paquet ARM64 est destiné à un Linux graphique compatible avec les dépendances Tauri ; Raspberry Pi OS Lite est sans interface de bureau et ne lance pas cette application graphique.
+Le workflow GitHub Actions produit séparément des DMG et archives macOS Apple Silicon et Intel, un installateur Windows x64, puis des paquets Debian Linux x64 et ARM64. Les sorties restent des artefacts de compilation, pas des versions certifiées : elles doivent encore être ouvertes et vérifiées sur chaque système cible. Le paquet ARM64 est destiné à un Linux graphique compatible avec les dépendances Tauri ; Raspberry Pi OS Lite est sans interface de bureau et ne lance pas cette application graphique.
+
+## Langues
+
+Le sélecteur de langue propose le français, l’anglais, le chinois simplifié, l’hindi, l’espagnol, l’arabe, le bengali, le portugais, le russe, l’ourdou et l’indonésien. La préférence est enregistrée localement. Cette première couverture localise la navigation, les pages d’entrée et les commandes de liste d’accès; les messages de diagnostic fournis par les serveurs tiers restent dans leur langue d’origine.
 
 ## Compiler
 

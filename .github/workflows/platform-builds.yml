@@ -19,6 +19,11 @@ jobs:
           - label: macOS Apple Silicon
             os: macos-15
             bundle: dmg
+            arch: AppleSilicon
+          - label: macOS Intel
+            os: macos-15-intel
+            bundle: dmg
+            arch: Intel
           - label: Windows x64
             os: windows-2025
             bundle: nsis
@@ -77,12 +82,14 @@ jobs:
 
       - name: Create portable macOS application archive
         if: runner.os == 'macOS'
+        env:
+          ARCH: ${{ matrix.arch }}
         shell: bash
         run: |
           version=$(node -p "require('./package.json').version")
           ditto -c -k --sequesterRsrc --keepParent \
             "src-tauri/target/release/bundle/macos/Monde Ensemble.app" \
-            "src-tauri/target/release/bundle/macos/Monde-Ensemble-${version}-macOS-AppleSilicon.zip"
+            "src-tauri/target/release/bundle/macos/Monde-Ensemble-${version}-macOS-${ARCH}.zip"
 
       - name: Upload macOS artifacts
         if: runner.os == 'macOS'

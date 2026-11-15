@@ -1,6 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Channel, invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
+import {
+  localeDirection,
+  localeOptions,
+  LocalizedTree,
+  type Locale,
+} from "./i18n";
 import "./App.css";
 
 type SystemInfo = {
@@ -213,6 +219,12 @@ function hasSavedServerRegistration() {
 }
 
 function App() {
+  const [locale, setLocale] = useState<Locale>(() => {
+    const stored = localStorage.getItem("monde-ensemble.locale");
+    return localeOptions.some(([code]) => code === stored)
+      ? (stored as Locale)
+      : "fr";
+  });
   const [page, setPage] = useState<Page>(() =>
     hasSavedServerRegistration() ? "home" : "install",
   );
@@ -334,6 +346,12 @@ function App() {
   const [operationResult, setOperationResult] =
     useState<OperationResult | null>(null);
   const [operationError, setOperationError] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem("monde-ensemble.locale", locale);
+    document.documentElement.lang = locale;
+    document.documentElement.dir = localeDirection(locale);
+  }, [locale]);
 
   useEffect(() => {
     invoke<SystemInfo>("inspect_system")
@@ -1597,9 +1615,13 @@ function App() {
       "Tes constructions et réglages doivent pouvoir te suivre sur une autre machine.",
     advanced: "Les réglages avancés restent séparés de l’installation guidée.",
   };
+  const serverConfirmedReady = Boolean(
+    localServerStatus?.ready || piServerStatus?.ready,
+  );
 
   return (
-    <div className="app-shell">
+    <LocalizedTree locale={locale}>
+    <div className="app-shell" lang={locale} dir={localeDirection(locale)}>
       <aside className="sidebar">
         <div className="brand">
           <div className="brand-mark">
@@ -1648,12 +1670,16 @@ function App() {
           <div>
             <strong>
               {hasManagedServer
-                ? "Serveur enregistré"
+                ? serverConfirmedReady
+                  ? "Serveur prêt"
+                  : "Connexion enregistrée"
                 : "Aucun serveur installé"}
             </strong>
             <small>
               {hasManagedServer
-                ? "L’installation existante est conservée"
+                ? serverConfirmedReady
+                  ? "État confirmé en ligne"
+                  : "Serveur non confirmé en ligne"
                 : "Le guide va partir de zéro"}
             </small>
           </div>
@@ -1669,10 +1695,26 @@ function App() {
             MONDE ENSEMBLE <span>/</span> {pageTitle[page].toUpperCase()}
           </div>
           <div className="top-status">
+            <label className="locale-picker">
+              <span>Langue</span>
+              <select
+                value={locale}
+                onChange={(event) => setLocale(event.target.value as Locale)}
+                aria-label="Langue de l’application"
+              >
+                {localeOptions.map(([code, label]) => (
+                  <option key={code} value={code}>
+                    {label}
+                  </option>
+                ))}
+              </select>
+            </label>
             <span className="build-version">Version {__APP_VERSION__}</span>
             <span>
               {hasManagedServer
-                ? "SERVEUR EXISTANT · DONNÉES PROTÉGÉES"
+                ? serverConfirmedReady
+                  ? "SERVEUR EN LIGNE · MONDE PROTÉGÉ"
+                  : "CONNEXION ENREGISTRÉE · ÉTAT À VÉRIFIER"
                 : "ÉTAPE 1 · AUCUN SERVEUR INSTALLÉ"}
             </span>
             <div className="beginner-pill">
@@ -1714,6 +1756,7 @@ function App() {
           </div>
           {page === "home" && (
             <Home
+                locale={locale}
               system={system}
               systemError={systemError}
               localInstallation={localInstallation}
@@ -2772,6 +2815,7 @@ function App() {
         </footer>
       </main>
     </div>
+    </LocalizedTree>
   );
 }
 
@@ -3106,6 +3150,7 @@ function Spec({
 }
 
 function Home({
+  locale,
   justInstalled,
   onContinueFromInstall,
   system,
@@ -3157,6 +3202,7 @@ function Home({
   onCompat,
   onBackup,
 }: {
+  locale: Locale;
   justInstalled: boolean;
   onContinueFromInstall: () => void;
   system: SystemInfo | null;
@@ -3240,6 +3286,7 @@ function Home({
     const statusError = isPi ? piStatusError : localStatusError;
 
     return (
+      <LocalizedTree locale={locale}>
       <section
         className="install-finish"
         aria-labelledby="install-finish-title"
@@ -3315,10 +3362,12 @@ function Home({
           Terminé · ouvrir le tableau de bord
         </button>
       </section>
+      </LocalizedTree>
     );
   }
 
   return (
+    <LocalizedTree locale={locale}>
     <>
       {localInstallation && (
         <section
@@ -3583,7 +3632,7 @@ function Home({
                     >
                       <option value="java">Java · PC et Mac</option>
                       <option value="bedrock">
-                        Bedrock · mobile, console, Windows
+                        Bedrock · Xbox, PlayStation, Switch, mobile, Windows
                       </option>
                     </select>
                   </label>
@@ -3622,12 +3671,19 @@ function Home({
                     Retirer
                   </button>
                 </div>
+                <p className="player-tools-note edition-hint">
+                  Java = launcher Minecraft sur PC/Mac. Bedrock = Xbox,
+                  PlayStation, Switch, téléphone, tablette ou Minecraft pour
+                  Windows. Utilise le nom de l’édition choisie.
+                </p>
                 {localPlayerPlatform === "bedrock" && (
                   <p className="player-tools-note">
-                    Floodgate peut ajouter un gamertag après sa première
-                    connexion à un serveur Geyser. Si la liste est déjà active,
-                    il faut d’abord l’autoriser autrement; l’application ne
-                    désactive jamais la protection pour le faire.
+                    Choisis Bedrock pour Xbox, PlayStation, Switch, téléphone,
+                    tablette ou Minecraft Bedrock sur Windows. Le gamertag Xbox
+                    n’est pas un nom Java. Si Floodgate indique que le joueur
+                    n’existe pas, il doit d’abord avoir rejoint une fois ce
+                    serveur Geyser; la protection ne sera pas désactivée par
+                    surprise.
                   </p>
                 )}
                 <details className="player-list-output">
@@ -4097,7 +4153,7 @@ function Home({
                   >
                     <option value="java">Java · PC et Mac</option>
                     <option value="bedrock">
-                      Bedrock · mobile, console, Windows
+                      Bedrock · Xbox, PlayStation, Switch, mobile, Windows
                     </option>
                   </select>
                 </label>
@@ -4134,11 +4190,19 @@ function Home({
                   Retirer
                 </button>
               </div>
+              <p className="player-tools-note edition-hint">
+                Java = launcher Minecraft sur PC/Mac. Bedrock = Xbox,
+                PlayStation, Switch, téléphone, tablette ou Minecraft pour
+                Windows. Utilise le nom de l’édition choisie.
+              </p>
               {piPlayerPlatform === "bedrock" && (
                 <p className="player-tools-note">
-                  Un gamertag Bedrock doit avoir rejoint une première fois un
-                  serveur Geyser. La protection ne sera jamais désactivée pour
-                  contourner cette règle.
+                  Choisis Bedrock pour Xbox, PlayStation, Switch, téléphone,
+                  tablette ou Minecraft Bedrock sur Windows. Le gamertag Xbox
+                  n’est pas un nom Java. Si Floodgate indique que le joueur
+                  n’existe pas, il doit d’abord avoir rejoint une fois ce
+                  serveur Geyser; la protection ne sera pas désactivée par
+                  surprise.
                 </p>
               )}
               <details className="player-list-output">
@@ -4305,6 +4369,7 @@ function Home({
         </div>
       </div>
     </>
+    </LocalizedTree>
   );
 }
 

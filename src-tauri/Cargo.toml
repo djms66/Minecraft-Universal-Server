@@ -1,6 +1,6 @@
 [package]
 name = "monde-ensemble"
-version = "0.18.71"
+version = "0.18.72"
 description = "Un guide sûr pour les serveurs Minecraft multiplateformes"
 authors = ["Daniel Streng"]
 edition = "2024"
@@ -38,8 +38,8 @@ if-addrs = "0.15"
 
 # Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
-codegen-units = 1
-lto = true
+codegen-units = 8
+lto = "thin"
 opt-level = 3
 panic = "abort"
 strip = true

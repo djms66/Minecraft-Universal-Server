@@ -12,8 +12,8 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -67,6 +67,9 @@ pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResul
         Err(error) => return Err(io_error(error)),
     };
 
+    let cleared_at = fs::metadata(root.join("prepared-session-cleared"))
+        .and_then(|metadata| metadata.modified())
+        .ok();
     let mut latest: Option<(std::time::SystemTime, PathBuf, String)> = None;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -83,6 +86,9 @@ pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResul
         let Ok(modified) = metadata.modified() else {
             continue;
         };
+        if cleared_at.is_some_and(|cleared| modified <= cleared) {
+            continue;
+        }
         if latest
             .as_ref()
             .is_some_and(|(seen, _, _)| modified <= *seen)
@@ -127,6 +133,19 @@ pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResul
         // against the Pi's reported model before any server files are copied.
         expected_devices: Vec::new(),
     }))
+}
+
+/// Records that the user deliberately left a restored card-preparation flow.
+/// Keep the diagnostic logs; this marker only prevents an old successful log
+/// from trapping the next launch in the obsolete "card ready" screen.
+pub fn clear_prepared_pi_recovery(app_data: &Path) -> Result<(), String> {
+    let root = app_data.join("pi-first-boot");
+    fs::create_dir_all(&root).map_err(io_error)?;
+    fs::write(
+        root.join("prepared-session-cleared"),
+        chrono::Utc::now().to_rfc3339(),
+    )
+    .map_err(io_error)
 }
 
 struct MountedImager {
@@ -270,14 +289,7 @@ pub fn flash_pi_os(
         &network_config_contents,
     );
     progress("Écriture et vérification de la carte…", 38);
-    run_imager(
-        &tool,
-        &args,
-        &log_path,
-        &redactions,
-        &progress,
-        &cancelled,
-    )?;
+    run_imager(&tool, &args, &log_path, &redactions, &progress, &cancelled)?;
 
     // Sensitive cloud-init files are removed by the guard on success or error.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);

@@ -251,6 +251,9 @@ function App() {
   const [pendingPiTarget, setPendingPiTarget] = useState<PiBootTarget | null>(
     null,
   );
+  const [pendingEmergencyErase, setPendingEmergencyErase] =
+    useState<PiBootTarget | null>(null);
+  const [piEmergencyEraseMode, setPiEmergencyEraseMode] = useState(false);
   const [piBootScanState, setPiBootScanState] = useState<
     "idle" | "scanning" | "done"
   >("idle");
@@ -754,7 +757,7 @@ function App() {
   };
 
   const findPiBootTargets = async () => {
-    if (busy || piFlashResult || piBootScanState === "scanning") return;
+    if (busy || piBootScanState === "scanning") return;
     setPiBootScanState("scanning");
     setPiBootScanError("");
     setPiBootTargets([]);
@@ -768,13 +771,42 @@ function App() {
     }
   };
 
-  const restartPiSetupFromZero = () => {
+  const leaveRestoredPiCardStep = async () => {
+    if (busy) return;
+    setBusy(true);
+    setOperationError("");
+    try {
+      await invoke("clear_prepared_pi_recovery");
+      setPiFlashResult(null);
+      setPiFlashExpectedModel("");
+      setPiFlashExpectedDevices([]);
+      setPiBootTargets([]);
+      setPiBootScanState("idle");
+      setPiBootScanError("");
+      setPiEulaAccepted(false);
+      setPiEmergencyEraseMode(false);
+      setConnection("État de carte réinitialisé · détecte le support pour continuer");
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const restartPiSetupFromZero = async () => {
     if (!piFlashResult || busy) return;
     const sizeGb = (piFlashResult.target_size_bytes / 1_000_000_000).toFixed(1);
     const confirmed = window.confirm(
       `Repartir de zéro sur « ${piFlashResult.target_name} » (${sizeGb} Go, ${piFlashResult.target_id}) ? Tout le contenu de cette carte sera effacé.`,
     );
     if (!confirmed) return;
+
+    try {
+      await invoke("clear_prepared_pi_recovery");
+    } catch (error) {
+      setOperationError(String(error));
+      return;
+    }
 
     setPiFlashResult(null);
     setPiFlashExpectedModel("");
@@ -787,6 +819,43 @@ function App() {
     setPiWifiCountry("FR");
     setPiEulaAccepted(false);
     setConnection("Nouvelle préparation depuis zéro · carte à détecter");
+  };
+
+  const confirmEmergencyErase = async () => {
+    const device = pendingEmergencyErase;
+    if (!device || busy) return;
+    setBusy(true);
+    setPendingEmergencyErase(null);
+    setOperationError("");
+    setOperationProgress({
+      step: "Effacement sécurisé du support amovible…",
+      percent: 50,
+      indeterminate: true,
+    });
+    try {
+      const result = await invoke<string>("erase_removable_support", {
+        targetId: device.id,
+        targetName: device.name,
+        targetSizeBytes: device.size_bytes,
+        confirmErase: true,
+      });
+      setPiFlashResult(null);
+      setPiFlashNeedsRecovery(false);
+      setPiFlashTargetAttempt(null);
+      setPiFlashExpectedModel("");
+      setPiFlashExpectedDevices([]);
+      setPiBootTargets([]);
+      setPiBootScanState("idle");
+      setPiBootScanError("");
+      setPiEulaAccepted(false);
+      setPiEmergencyEraseMode(false);
+      setConnection(result);
+    } catch (error) {
+      setOperationError(String(error));
+    } finally {
+      setOperationProgress(null);
+      setBusy(false);
+    }
   };
 
   const flashPiOs = async (device: PiBootTarget) => {
@@ -2368,10 +2437,12 @@ function App() {
                       <div className="pi-detect-support">
                         <button
                           className="button secondary"
-                          onClick={findPiBootTargets}
+                          onClick={() => {
+                            setPiEmergencyEraseMode(false);
+                            void findPiBootTargets();
+                          }}
                           disabled={
                             busy ||
-                            Boolean(piFlashResult) ||
                             piBootScanState === "scanning"
                           }
                         >
@@ -2379,6 +2450,26 @@ function App() {
                             ? "Recherche des supports…"
                             : "Détecter la carte SD ou le SSD"}
                         </button>
+                        {system?.os === "macos" && (
+                          <button
+                            className="button destructive pi-emergency-erase-button"
+                            type="button"
+                            onClick={() => {
+                              setPiEmergencyEraseMode(true);
+                              void findPiBootTargets();
+                            }}
+                            disabled={busy || piBootScanState === "scanning"}
+                          >
+                            Effacer une carte SD ou une clé USB · urgence
+                          </button>
+                        )}
+                        {piEmergencyEraseMode && (
+                          <p className="pi-emergency-erase-hint" role="status">
+                            Choisis le support à formater en ExFAT. Son nom et sa
+                            capacité seront confirmés avant l’effacement; le
+                            serveur du Pi n’est pas touché.
+                          </p>
+                        )}
                         {piBootScanState === "scanning" && (
                           <p
                             className="pi-scan-status"
@@ -2423,6 +2514,16 @@ function App() {
                                     {device.size} · {device.connection}
                                   </span>
                                 </div>
+                                {piEmergencyEraseMode && (
+                                  <button
+                                    className="button destructive pi-flash-button"
+                                    type="button"
+                                    onClick={() => setPendingEmergencyErase(device)}
+                                    disabled={busy || device.size_bytes <= 0}
+                                  >
+                                    Effacer ce support en ExFAT
+                                  </button>
+                                )}
                                 {piBootTargets.length === 1 &&
                                   activePiOs &&
                                   device.size_bytes > 0 && (
@@ -2630,6 +2731,15 @@ function App() {
                             confirmation, puis le parcours recommencera à
                             l’étape de détection.
                           </small>
+                          <button
+                            className="button secondary pi-restart-setup"
+                            type="button"
+                            onClick={() => void leaveRestoredPiCardStep()}
+                            disabled={busy}
+                          >
+                            J’ai déjà effacé ou changé la carte · quitter cette
+                            étape
+                          </button>
                         </div>
                       )}
                     </section>
@@ -2838,6 +2948,65 @@ function App() {
                     {busy
                       ? "Préparation en cours…"
                       : "Effacer la carte et continuer"}
+                  </button>
+                </div>
+              </section>
+            </div>
+          )}
+          {pendingEmergencyErase && (
+            <div className="erase-confirm-backdrop">
+              <section
+                className="erase-confirm"
+                role="alertdialog"
+                aria-modal="true"
+                aria-labelledby="emergency-erase-title"
+                aria-describedby="emergency-erase-warning"
+              >
+                <div className="eyebrow">EFFACEMENT D’URGENCE</div>
+                <h2 id="emergency-erase-title">Effacer ce support ?</h2>
+                <p>
+                  macOS demandera son autorisation administrateur avant de le
+                  formater en ExFAT.
+                </p>
+                <dl className="erase-confirm-device">
+                  <div>
+                    <dt>Support détecté</dt>
+                    <dd>{pendingEmergencyErase.name}</dd>
+                  </div>
+                  <div>
+                    <dt>Capacité</dt>
+                    <dd>{pendingEmergencyErase.size}</dd>
+                  </div>
+                  <div>
+                    <dt>Identifiant</dt>
+                    <dd>{pendingEmergencyErase.id}</dd>
+                  </div>
+                  <div>
+                    <dt>Branché sur</dt>
+                    <dd>{pendingEmergencyErase.connection}</dd>
+                  </div>
+                </dl>
+                <p className="erase-confirm-warning" id="emergency-erase-warning">
+                  Tout le contenu de ce support sera supprimé. Vérifie son nom
+                  et sa capacité. Le disque interne du Mac et le serveur du Pi
+                  ne seront pas effacés.
+                </p>
+                <div className="erase-confirm-actions">
+                  <button
+                    className="button secondary"
+                    type="button"
+                    autoFocus
+                    onClick={() => setPendingEmergencyErase(null)}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    className="button destructive"
+                    type="button"
+                    onClick={() => void confirmEmergencyErase()}
+                    disabled={busy}
+                  >
+                    Effacer ce support maintenant
                   </button>
                 </div>
               </section>

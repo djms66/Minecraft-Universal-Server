@@ -2,8 +2,8 @@ use serde::Serialize;
 use std::io::{self, Read};
 use std::process::{Command, Output, Stdio};
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::{Duration, Instant};
@@ -55,6 +55,79 @@ fn open_macos_disk_utility() -> Result<(), String> {
         .spawn()
         .map(|_| ())
         .map_err(|_| "macOS n’a pas pu ouvrir l’Utilitaire de disque.".into())
+}
+
+#[tauri::command]
+async fn erase_removable_support(
+    app: tauri::AppHandle,
+    target_id: String,
+    target_name: String,
+    target_size_bytes: u64,
+    confirm_erase: bool,
+) -> Result<String, String> {
+    if !confirm_erase {
+        return Err("Confirme le nom et la capacité du support à effacer.".into());
+    }
+    if std::env::consts::OS != "macos" {
+        return Err("L’effacement d’urgence intégré est actuellement disponible sur macOS.".into());
+    }
+    if !target_id.strip_prefix("disk").is_some_and(|suffix| {
+        !suffix.is_empty() && suffix.bytes().all(|byte| byte.is_ascii_digit())
+    }) {
+        return Err("Identifiant de support invalide. Aucun disque n’a été effacé.".into());
+    }
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Le dossier de l’application est inaccessible : {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || {
+        let targets = discover_pi_boot_targets_sync()?;
+        let target = targets
+            .iter()
+            .find(|target| {
+                target.id == target_id
+                    && target.name == target_name
+                    && target.size_bytes == target_size_bytes
+            })
+            .ok_or_else(|| "Le support a changé ou n’est plus détecté. Relance la détection; rien n’a été effacé.".to_string())?;
+        if target.size_bytes == 0 {
+            return Err("macOS n’a pas confirmé la capacité du support. Aucun disque n’a été effacé.".into());
+        }
+
+        // The identifier is restricted to disk + ASCII digits and is checked
+        // against fresh read-only discovery immediately before the privileged
+        // format. This keeps the administrator prompt from accepting a path
+        // supplied directly by the webview.
+        let script = format!(
+            "do shell script \"/usr/sbin/diskutil eraseDisk ExFAT MUS /dev/{} GPT\" with administrator privileges",
+            target.id
+        );
+        let output = Command::new("/usr/bin/osascript")
+            .args(["-e", &script])
+            .output()
+            .map_err(|_| "macOS n’a pas pu lancer l’effacement. Vérifie la carte puis réessaie.".to_string())?;
+        if !output.status.success() {
+            return Err("L’effacement a été annulé ou a échoué. Vérifie le support dans l’Utilitaire de disque avant de réessayer.".into());
+        }
+        pi_imager::clear_prepared_pi_recovery(&app_data)?;
+        Ok(format!(
+            "{} ({}) a été effacé et formaté en ExFAT. Tu peux maintenant le réutiliser ou relancer la préparation du Raspberry Pi.",
+            target.name, target.size
+        ))
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+#[tauri::command]
+async fn clear_prepared_pi_recovery(app: tauri::AppHandle) -> Result<(), String> {
+    let app_data = app
+        .path()
+        .app_data_dir()
+        .map_err(|error| format!("Le dossier de l’application est inaccessible : {error}"))?;
+    tauri::async_runtime::spawn_blocking(move || pi_imager::clear_prepared_pi_recovery(&app_data))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -1447,6 +1520,8 @@ pub fn run() {
             check_macos_pi_writer,
             cancel_pi_sd,
             open_macos_disk_utility,
+            erase_removable_support,
+            clear_prepared_pi_recovery,
             recover_prepared_pi,
             prepare_pi_sd,
             get_compatibility,

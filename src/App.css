@@ -1734,6 +1734,25 @@ button {
 .pi-flash-recovery small {
   font-size: 11px;
 }
+.pi-detect-support .pi-emergency-erase-button {
+  width: 100%;
+  margin-top: 8px;
+  border: 1px solid #a94d3c;
+  background: #fff7f3;
+  color: #8c382b;
+}
+.pi-detect-support .pi-emergency-erase-button:hover {
+  background: #fbe8df;
+}
+.pi-emergency-erase-hint {
+  margin: 8px 0 0;
+  padding: 12px 14px;
+  border-left: 3px solid #b65c48;
+  background: #fff7f3;
+  color: #70483d;
+  font-size: 12px;
+  line-height: 1.5;
+}
 .error-text {
   font-size: 10px;
   color: #aa483d;

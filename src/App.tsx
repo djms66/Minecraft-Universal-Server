@@ -771,7 +771,7 @@ function App() {
     }
   };
 
-  const leaveRestoredPiCardStep = async () => {
+  const reopenPiCardPreparation = async () => {
     if (busy) return;
     setBusy(true);
     setOperationError("");
@@ -785,7 +785,9 @@ function App() {
       setPiBootScanError("");
       setPiEulaAccepted(false);
       setPiEmergencyEraseMode(false);
-      setConnection("État de carte réinitialisé · détecte le support pour continuer");
+      setConnection(
+        "Préparation rouverte · configure le Wi-Fi puis détecte la carte pour la réécrire",
+      );
     } catch (error) {
       setOperationError(String(error));
     } finally {
@@ -797,7 +799,7 @@ function App() {
     if (!piFlashResult || busy) return;
     const sizeGb = (piFlashResult.target_size_bytes / 1_000_000_000).toFixed(1);
     const confirmed = window.confirm(
-      `Repartir de zéro sur « ${piFlashResult.target_name} » (${sizeGb} Go, ${piFlashResult.target_id}) ? Tout le contenu de cette carte sera effacé.`,
+      `Recommencer la préparation sur « ${piFlashResult.target_name} » (${sizeGb} Go, ${piFlashResult.target_id}) ? Rien ne sera écrit maintenant. L’application demandera une nouvelle confirmation avant d’effacer la carte.`,
     );
     if (!confirmed) return;
 
@@ -2727,18 +2729,18 @@ function App() {
                             </button>
                           )}
                           <small>
-                            La carte sera entièrement effacée après une
-                            confirmation, puis le parcours recommencera à
-                            l’étape de détection.
+                            Pour reprendre avec une nouvelle configuration
+                            Wi-Fi, rouvre la préparation ci-dessous. Aucun
+                            support n’est modifié par cette action; l’effacement
+                            sera confirmé séparément après sa détection.
                           </small>
                           <button
                             className="button secondary pi-restart-setup"
                             type="button"
-                            onClick={() => void leaveRestoredPiCardStep()}
+                            onClick={() => void reopenPiCardPreparation()}
                             disabled={busy}
                           >
-                            J’ai déjà effacé ou changé la carte · quitter cette
-                            étape
+                            Recommencer la préparation de la carte
                           </button>
                         </div>
                       )}

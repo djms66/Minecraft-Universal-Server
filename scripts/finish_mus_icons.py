@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Color the logo's negative-space M/U/S glyphs black in generated icon assets.
+"""Color the logo's negative-space M/U/S glyphs white in generated icon assets.
 
 The supplied vector logo draws its letters as transparent cutouts in the colored
-faces.  Tauri's SVG rasterizer correctly turns those cutouts white because the
-icon has a white background.  This pass recolors only those cutouts, keeping the
-white background and the rest of the artwork intact.
+faces.  The generated rounded-square background shows through those cutouts.
+This pass recolors only the cutouts white, keeping the light-gray tile and the
+rest of the artwork intact.
 
 Requires Pillow: python3 -m pip install Pillow
 """
@@ -23,8 +23,8 @@ ICON_DIR = ROOT / "src-tauri" / "icons"
 MASTER = ICON_DIR / "icon.png"
 
 # Bounding boxes mapped from the supplied 512 x 512 app icon.  Each box is over
-# a colored face, so near-white pixels inside it belong to the corresponding
-# negative-space letter rather than to the white canvas.
+# a colored face, so near-gray pixels inside it belong to the corresponding
+# negative-space letter rather than to the rounded tile.
 GLYPH_BOXES_512 = (
     (90, 100, 220, 235),  # M
     (300, 100, 415, 235),  # U
@@ -58,15 +58,15 @@ def colorize_letters(image: Image.Image) -> Image.Image:
                 if alpha > 240 and min(red, green, blue) >= 240:
                     mask_pixels[x, y] = 255
 
-        # Extend one raster pixel beyond the solid white core to cover the
-        # antialiased edge without leaving a pale halo around the black glyph.
+        # Extend one raster pixel beyond the solid tile-colored core to cover
+        # the antialiased edge without leaving a gray halo around the glyph.
         mask = white_core.filter(ImageFilter.MaxFilter(3)) if width >= 64 else white_core
         mask_data = mask.load()
         for y in range(crop.height):
             for x in range(crop.width):
                 if mask_data[x, y]:
                     red, green, blue, alpha = core_pixels[x, y]
-                    pixels[box[0] + x, box[1] + y] = (0, 0, 0, alpha)
+                    pixels[box[0] + x, box[1] + y] = (255, 255, 255, alpha)
 
     return image
 
@@ -114,6 +114,10 @@ def main() -> None:
         output.save(path, format="PNG", optimize=True)
     colorize_icns(ICON_DIR / "icon.icns")
     rebuild_ico()
+    background_xml = ICON_DIR / "android" / "values" / "ic_launcher_background.xml"
+    if background_xml.exists():
+        text = background_xml.read_text()
+        background_xml.write_text(text.replace("#FFFFFF", "#F2F2F2").replace("#ffffff", "#F2F2F2"))
     print(f"Colorized M/U/S in {len(pngs)} PNG assets and embedded macOS icon sizes.")
 
 

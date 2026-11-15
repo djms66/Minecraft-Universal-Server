@@ -4561,11 +4561,34 @@ fn discover_pi_internal(
             if let Ok(facts) = parse_remote_facts(&output)
                 && facts.hostname.eq_ignore_ascii_case(expected)
             {
-                return Ok(vec![DiscoveredPi {
-                    host,
-                    address: facts.ip,
-                    model: facts.model,
-                }]);
+                // The prepared hostname can resolve unreliably on home
+                // routers. Once its SSH identity is confirmed, also verify
+                // the reported IPv4 address and pin that address with the
+                // same accept-new policy. Later install/status calls can use
+                // the stable IP while strict host-key checking stays enabled.
+                if !facts.ip.is_empty()
+                    && let Ok(ip_output) = run_ssh_timeout_policy(
+                        &format!("{username}@{}", facts.ip),
+                        &remote_probe_command(),
+                        3,
+                        true,
+                    )
+                    && let Ok(ip_facts) = parse_remote_facts(&ip_output)
+                    && ip_facts.hostname.eq_ignore_ascii_case(expected)
+                {
+                    return Ok(vec![DiscoveredPi {
+                        host: facts.ip.clone(),
+                        address: if ip_facts.ip.is_empty() {
+                            facts.ip
+                        } else {
+                            ip_facts.ip
+                        },
+                        model: ip_facts.model,
+                    }]);
+                }
+                // Do not hand the installer a hostname whose IP path has
+                // already failed. Continue through DNS-SD and the bounded
+                // local scan so the remaining SSH steps use a verified IP.
             }
         }
     }
@@ -4608,15 +4631,16 @@ fn discover_pi_internal(
     let (sender, receiver) = std::sync::mpsc::channel();
     let mut targets = Vec::new();
     for (host, address) in candidates {
-        targets.push((host, address.clone()));
-        if expected_hostname.is_none() {
-            targets.push((address.clone(), address));
-        }
+        targets.push((host, address.clone(), false));
+        // Probe the IPv4 address as well as its mDNS name. For a first-boot
+        // card this safely trusts the same unique, random-hostname Pi and
+        // records its SSH key under the IP used by subsequent operations.
+        targets.push((address.clone(), address, true));
     }
     targets.sort();
     targets.dedup();
     let accept_new_host_key = expected_hostname.is_some();
-    for (host, address) in targets.into_iter().take(12) {
+    for (host, address, by_ip) in targets.into_iter().take(24) {
         let sender = sender.clone();
         let username = username.to_string();
         std::thread::spawn(move || {
@@ -4626,13 +4650,16 @@ fn discover_pi_internal(
                 3,
                 accept_new_host_key,
             );
-            let _ = sender.send((host, address, result));
+            let _ = sender.send((host, address, by_ip, result));
         });
     }
     drop(sender);
     let mut discovered = receiver
         .into_iter()
-        .filter_map(|(host, address, result)| {
+        .filter_map(|(host, address, by_ip, result)| {
+            if expected_hostname.is_some() && !by_ip {
+                return None;
+            }
             let facts = parse_remote_facts(&result.ok()?).ok()?;
             if expected_hostname
                 .is_some_and(|expected| !facts.hostname.eq_ignore_ascii_case(expected))
@@ -4640,7 +4667,11 @@ fn discover_pi_internal(
                 return None;
             }
             Some(DiscoveredPi {
-                host,
+                host: if expected_hostname.is_some() && by_ip {
+                    address.clone()
+                } else {
+                    host
+                },
                 address: if facts.ip.is_empty() {
                     address
                 } else {
@@ -4754,16 +4785,32 @@ fn discover_prepared_pi_by_local_scan(
             if let Ok(facts) = parse_remote_facts(&output)
                 && facts.hostname.eq_ignore_ascii_case(expected_hostname)
             {
-                found = Some(DiscoveredPi {
-                    host,
-                    address: if facts.ip.is_empty() {
-                        address.to_string()
-                    } else {
-                        facts.ip
-                    },
-                    model: facts.model,
-                });
-                break;
+                // The temporary file above proves which Pi answered, but
+                // install_pi uses the user's normal strict SSH known-hosts
+                // store. Pin the already-verified IP there before returning
+                // so the following install can connect without weakening
+                // host-key checks or leaving a one-use key file behind.
+                if let Ok(pinned_output) = run_ssh_timeout_policy(
+                    &format!("{username}@{host}"),
+                    &remote_probe_command(),
+                    3,
+                    true,
+                ) && let Ok(pinned_facts) = parse_remote_facts(&pinned_output)
+                    && pinned_facts
+                        .hostname
+                        .eq_ignore_ascii_case(expected_hostname)
+                {
+                    found = Some(DiscoveredPi {
+                        host,
+                        address: if pinned_facts.ip.is_empty() {
+                            address.to_string()
+                        } else {
+                            pinned_facts.ip
+                        },
+                        model: pinned_facts.model,
+                    });
+                    break;
+                }
             }
         }
     }

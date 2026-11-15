@@ -1581,7 +1581,7 @@ function App() {
 
   const pageTitle: Record<Page, string> = {
     home: "Mon serveur",
-    install: hasManagedServer ? "Préparer un serveur" : "Installer mon serveur",
+    install: hasManagedServer ? "Préparer un serveur" : "Préparer mon serveur",
     compat: "Ce qui peut jouer ensemble",
     backup: "Sauvegarder et déplacer",
     advanced: "Réglages avancés",
@@ -1589,8 +1589,8 @@ function App() {
   const pageIntro: Record<Page, string> = {
     home: "Vérifie l’état du serveur et retrouve l’adresse à saisir dans Minecraft.",
     install: hasManagedServer
-      ? "Prépare un autre serveur dans un dossier séparé; celui déjà enregistré reste intact."
-      : "Je te guide de la première vérification jusqu’à l’adresse à saisir dans Minecraft.",
+      ? "Créer une installation séparée. Ton serveur existant reste intact."
+      : "On avance ensemble, étape par étape, jusqu’à ta première connexion.",
     compat:
       "Les règles qui rendront les mises à jour sûres, expliquées sans jargon.",
     backup:
@@ -1669,6 +1669,7 @@ function App() {
             MONDE ENSEMBLE <span>/</span> {pageTitle[page].toUpperCase()}
           </div>
           <div className="top-status">
+            <span className="build-version">Version {__APP_VERSION__}</span>
             <span>
               {hasManagedServer
                 ? "SERVEUR EXISTANT · DONNÉES PROTÉGÉES"
@@ -1699,7 +1700,7 @@ function App() {
               <h1>{pageTitle[page]}</h1>
               <p>{pageIntro[page]}</p>
             </div>
-            <div className="world-stamp">
+            <div className="world-stamp" aria-hidden="true">
               <div className="grass" />
               <div className="dirt" />
               <div className="stamp-text">
@@ -1768,23 +1769,11 @@ function App() {
           {page === "install" && (
             <section className="install-layout">
               <div className="wizard-main">
-                {!hasManagedServer && (
-                  <div className="first-run-note" role="status">
-                    <strong>On commence de zéro.</strong>
-                    <span>
-                      Choisis où le serveur vivra. Je te guiderai jusqu’à son
-                      démarrage, puis je te donnerai l’adresse à entrer dans
-                      Minecraft.
-                    </span>
-                  </div>
-                )}
                 <div className="step-ribbon">
                   <span className="step-num">1</span>
                   <div>
                     <strong>Où veux-tu mettre ton serveur ?</strong>
-                    <small>
-                      Tu pourras le déplacer plus tard avec une sauvegarde.
-                    </small>
+                    <small>Tu pourras le déplacer plus tard.</small>
                   </div>
                 </div>
                 <div className="target-choice">
@@ -1835,10 +1824,8 @@ function App() {
                         NOUVEAU PI · PARCOURS DÉBUTANT
                       </div>
                       <p>
-                        Pi neuf ou sans système ? Branche sa carte SD ou son SSD
-                        vide à ce Mac. L’application prépare le système et le
-                        Wi-Fi, puis installe le serveur sur le Pi. Tu n’as pas à
-                        connaître son adresse ni à utiliser SSH.
+                        Pi neuf ? Branche sa carte ici. L’application prépare
+                        son système puis installe le serveur.
                       </p>
                       <button
                         className="text-button pi-existing-toggle"
@@ -1982,7 +1969,8 @@ function App() {
                         )}
                       </>
                     )}
-                    <div className="pi-os-recommendation" aria-live="polite">
+                    <details className="pi-os-recommendation pi-os-details" open={Boolean(piOsError)} aria-live="polite">
+                      <summary>Système automatique : {piOsRecommendation?.name ?? "vérification en cours"}</summary>
                       <div className="eyebrow">
                         SYSTÈME CHOISI AUTOMATIQUEMENT
                       </div>
@@ -2021,21 +2009,17 @@ function App() {
                           </small>
                         </>
                       )}
-                    </div>
+                    </details>
                     <section
                       className="pi-first-boot"
                       aria-labelledby="pi-fresh-title"
                     >
-                      <div className="eyebrow">PRÉPARATION D’UN PI NEUF</div>
                       <h4 id="pi-fresh-title">
-                        Préparer le Raspberry Pi depuis cette application
+                        Préparer la carte du Raspberry Pi
                       </h4>
                       <p>
-                        Cette préparation se fait sur le Mac avec la carte SD ou
-                        le SSD vide branché. Le Pi n’a pas besoin de système, de
-                        Wi-Fi ni de SSH pour commencer. L’application choisit le
-                        système compatible et vérifie le support avant de
-                        l’effacer.
+                        Renseigne le Wi-Fi si nécessaire, puis détecte la carte.
+                        Elle ne sera effacée qu’après confirmation.
                       </p>
                       <ol
                         className="pi-first-steps"
@@ -2076,7 +2060,7 @@ function App() {
                             <small>
                               {piBootTargets.length > 0
                                 ? `${piBootTargets.length} support${piBootTargets.length > 1 ? "s" : ""} détecté${piBootTargets.length > 1 ? "s" : ""}`
-                                : "Branche le support au Mac, puis lance la détection en bas"}
+                                : "Branche la carte au Mac"}
                             </small>
                           </span>
                         </li>
@@ -2095,7 +2079,7 @@ function App() {
                             <small>
                               {piFlashResult
                                 ? "Système écrit et vérifié"
-                                : "L’effacement ne démarre qu’après confirmation"}
+                                : "À confirmer avant l’écriture"}
                             </small>
                           </span>
                         </li>
@@ -2117,8 +2101,8 @@ function App() {
                               {piServerStatus?.ready
                                 ? "Serveur contrôlé · adresse prête dans Minecraft"
                                 : piFlashResult
-                                  ? "Insère la carte dans le Pi et termine l’installation"
-                                  : "Cette étape vient après l’écriture de la carte"}
+                                  ? "Insère la carte puis rallume le Pi"
+                                  : "Après la préparation de la carte"}
                             </small>
                           </span>
                         </li>
@@ -2142,12 +2126,18 @@ function App() {
                         {piWifiSsid && (
                           <>
                             <small className="pi-wifi-note">
-                              Le mot de passe est placé temporairement dans un
-                              fichier de démarrage ; l’application programme sa
-                              suppression au premier démarrage. Pour ne pas
-                              écrire le mot de passe sur la carte, utilise
-                              plutôt un câble réseau.
+                              Le Wi-Fi sera configuré pour le premier démarrage.
                             </small>
+                            <details className="pi-wifi-security">
+                              <summary>À savoir sur le mot de passe Wi-Fi</summary>
+                              <p>
+                                Il est écrit temporairement sur la carte pour
+                                configurer le premier démarrage, puis sa
+                                suppression est programmée. Pour ne pas l’écrire
+                                sur la carte, relie le Pi au routeur avec un
+                                câble Ethernet.
+                              </p>
+                            </details>
                             <div>
                               <label htmlFor="pi-wifi-password">
                                 Mot de passe Wi-Fi
@@ -2203,7 +2193,7 @@ function App() {
                         }
                       >
                         <summary>
-                          Je connais mon matériel · choix avancé du système
+                          Mode expert · choisir le système
                         </summary>
                         <p>
                           Le choix automatique reste recommandé. Les systèmes
@@ -2334,7 +2324,7 @@ function App() {
                           </p>
                           <details className="pi-advanced-storage">
                             <summary>
-                              Je veux démarrer depuis un SSD USB
+                              Démarrer depuis un SSD USB
                             </summary>
                             <p>
                               Le démarrage USB dépend du modèle du Pi, de son
@@ -3312,6 +3302,10 @@ function Home({
           Installé : Java {javaVersion || "à vérifier"} · Bedrock compatible{" "}
           {bedrockVersion || "à vérifier"}
         </p>
+        <p className="install-finish-next">
+          Ensuite, ouvre le tableau de bord et choisis « Ajouter ou retirer un
+          joueur » pour gérer la liste d’accès.
+        </p>
         {copiedAddress && <p role="status">{copiedAddress}</p>}
         <button
           className="button primary"
@@ -3363,6 +3357,9 @@ function Home({
                   : "HORS LIGNE"}
             </div>
           </div>
+          <a className="player-shortcut" href="#local-players-title">
+            <span aria-hidden="true">＋</span> Ajouter ou retirer un joueur
+          </a>
           <div className="pi-connect-grid">
             <div>
               <small>ORDINATEUR · JAVA</small>
@@ -3718,6 +3715,9 @@ function Home({
                     : "HORS LIGNE"}
             </div>
           </div>
+          <a className="player-shortcut" href="#pi-players-title">
+            <span aria-hidden="true">＋</span> Ajouter ou retirer un joueur
+          </a>
           <div className="pi-connect-grid">
             <div>
               <small>ORDINATEUR · JAVA</small>

@@ -4412,6 +4412,12 @@ pub fn install_remote_pi(
     } else {
         180
     };
+    let startup_profile = if heap_mb <= COMPACT_PI_HEAP_MB {
+        "profil léger"
+    } else {
+        "ce matériel"
+    };
+    let startup_started_at = std::time::Instant::now();
     let mut started = false;
     for attempt in 0..startup_attempts {
         let check_command = format!(
@@ -4425,7 +4431,13 @@ pub fn install_remote_pi(
             break;
         }
         progress(
-            "Le Pi démarre Minecraft pour la première fois…",
+            &format!(
+                "Premier démarrage de Minecraft sur le Pi — {:02}:{:02} écoulées (délai maximal : {} min pour {})…",
+                startup_started_at.elapsed().as_secs() / 60,
+                startup_started_at.elapsed().as_secs() % 60,
+                startup_attempts * 2 / 60,
+                startup_profile,
+            ),
             92 + ((attempt * 7) / startup_attempts) as u8,
         );
         std::thread::sleep(Duration::from_secs(2));

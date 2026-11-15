@@ -1,4 +1,4 @@
-# Minecraft Universal Server 0.18.99
+# Minecraft Universal Server 0.18.100
 
 Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 
@@ -33,7 +33,7 @@ Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueu
 - lit le catalogue officiel Raspberry Pi pour choisir par défaut la version vérifiée la plus récente de Raspberry Pi OS Lite 64 bits compatible avec Pi 3, 4 et 5 ; le parcours expert peut choisir une autre image 64 bits du catalogue si elle prend en charge le démarrage automatisé, le modèle, la mémoire et la capacité du support ;
 - prépare une carte SD ou un SSD depuis l’application avec Raspberry Pi Imager officiel, téléchargé à la demande et vérifié par SHA-256 ; choisit Raspberry Pi OS Lite et configure l’accès sécurisé sans demander au débutant d’installer Imager séparément ;
 - utilise uniquement les options reconnues par la version vérifiée de Raspberry Pi Imager et masque les données Wi-Fi dans les journaux de diagnostic conservés par l’application ; la vérification de l’image et de l’écriture reste active ;
-- prépare Ethernet en automatique ou le Wi-Fi saisi dans l’application, crée une clé SSH dédiée dans l’espace privé de l’application sans lire ni modifier les clés SSH personnelles, puis l’utilise pour communiquer avec le Pi ; attend le premier démarrage et lance ensuite l’installation du serveur ;
+- prépare Ethernet et le Wi-Fi saisi dans le format cloud-init officiel de Raspberry Pi Imager, crée une clé SSH dédiée dans l’espace privé de l’application sans lire ni modifier les clés SSH personnelles, puis attend le premier démarrage et lance l’installation du serveur ; pour cette première connexion, SSH n’essaie que la clé de l’application ;
 - affiche les modèles Pi compatibles avec cette image et compare la capacité des supports externes détectés à la place nécessaire au système et au serveur ;
 - choisit un profil compact sur les Pi 3B+ et les appareils disposant de moins de 2 Go : portée de jeu et nombre de joueurs réduits ; un Pi 4 ou 5 avec au moins 4 Go est recommandé pour plus de joueurs ou d’extensions ;
 - vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;

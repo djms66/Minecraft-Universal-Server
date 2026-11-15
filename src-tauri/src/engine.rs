@@ -85,6 +85,27 @@ fn add_identity_file(command: &mut Command, identity: &Path) {
     }
 }
 
+/// Constrains first-boot SSH to the key written onto the Raspberry Pi card.
+/// macOS may have many unrelated identities loaded in ssh-agent; OpenSSH can
+/// otherwise exhaust the server's authentication attempts before trying this
+/// application-owned key.
+fn add_managed_identity_only(command: &mut Command, identity: &Path) -> bool {
+    if !identity.is_file() {
+        return false;
+    }
+    command.args(["-o", "IdentitiesOnly=yes"]);
+    true
+}
+
+fn managed_identity_only_ssh_command() -> Command {
+    let mut command = ssh_command();
+    if let Some(directory) = APP_DATA_DIRECTORY.get() {
+        let identity = directory.join("ssh").join("monde-ensemble-pi");
+        add_managed_identity_only(&mut command, &identity);
+    }
+    command
+}
+
 const REMOTE_NETWORK_IDENTITY_COMMAND: &str = r#"network_interface="$(ip -4 route show default 2>/dev/null | awk 'NR == 1 { for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i + 1); exit } }')"; network_ip=""; if [ -n "$network_interface" ]; then network_ip="$(ip -o -4 address show dev "$network_interface" scope global 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; if [ -z "$network_ip" ]; then network_interface="$(ip -o -4 address show scope global up 2>/dev/null | awk 'NR == 1 { print $2 }')"; network_ip="$(ip -o -4 address show dev "$network_interface" scope global up 2>/dev/null | awk 'NR == 1 { split($4, address, "/"); print address[1] }')"; fi; network_mac=""; if [ -n "$network_interface" ] && [ -r "/sys/class/net/$network_interface/address" ]; then network_mac="$(cat "/sys/class/net/$network_interface/address")"; fi; printf 'IP=%s\nNETWORK_INTERFACE=%s\nMAC_ADDRESS=%s\n' "$network_ip" "$network_interface" "$network_mac""#;
 const REMOTE_PROBE_COMMAND_TEMPLATE: &str = r#"printf 'HOSTNAME='; hostname -s; printf 'MODEL='; tr -d '\000' </sys/firmware/devicetree/base/model 2>/dev/null || true; printf '\nMEMORY_GB='; awk '/MemTotal/ {printf "%.1f\n", $2/1048576}' /proc/meminfo; printf 'FREE_GB='; df -BG --output=avail "$HOME" | tail -1 | tr -dc '0-9'; printf '\nARCH='; uname -m; @NETWORK_IDENTITY@; for p in 25565 25566 19132 19133 25575 25576; do printf 'PORT_%s=' "$p"; if ss -H -lntu 2>/dev/null | awk '{print $5}' | grep -qE "[:.]$p$"; then echo busy; else echo free; fi; done"#;
 
@@ -5805,23 +5826,42 @@ fn run_ssh_timeout_policy(
     } else {
         "StrictHostKeyChecking=yes"
     };
-    let output = ssh_command()
-        .args([
-            "-o",
-            "BatchMode=yes",
-            "-o",
-            &format!("ConnectTimeout={timeout_seconds}"),
-            "-o",
-            host_key_policy,
-            "-o",
-            "PasswordAuthentication=no",
-            destination,
-            command,
-        ])
-        .output()
-        .map_err(|_| {
-            "L’outil d’accès sécurisé SSH n’est pas disponible sur cet ordinateur.".to_string()
-        })?;
+    let mut ssh = if accept_new_host_key {
+        managed_identity_only_ssh_command()
+    } else {
+        ssh_command()
+    };
+    let arguments = vec![
+        "-o".to_string(),
+        "BatchMode=yes".to_string(),
+        "-o".to_string(),
+        format!("ConnectTimeout={timeout_seconds}"),
+        "-o".to_string(),
+        host_key_policy.to_string(),
+        "-o".to_string(),
+        "PasswordAuthentication=no".to_string(),
+        destination.to_string(),
+        command.to_string(),
+    ];
+    let mut output = ssh.args(&arguments).output().map_err(|_| {
+        "L’outil d’accès sécurisé SSH n’est pas disponible sur cet ordinateur.".to_string()
+    })?;
+    // For already-paired Pis, preserve the user's existing SSH behavior first.
+    // Retry only OpenSSH's explicit agent-key exhaustion error, using the app
+    // key alone; do not retry host-key or ordinary authentication failures.
+    if !accept_new_host_key
+        && !output.status.success()
+        && String::from_utf8_lossy(&output.stderr)
+            .to_ascii_lowercase()
+            .contains("too many authentication failures")
+    {
+        output = managed_identity_only_ssh_command()
+            .args(&arguments)
+            .output()
+            .map_err(|_| {
+                "L’outil d’accès sécurisé SSH n’est pas disponible sur cet ordinateur.".to_string()
+            })?;
+    }
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -5842,7 +5882,7 @@ fn run_ssh_with_known_hosts(
     known_hosts: &Path,
 ) -> Result<String, String> {
     let known_hosts = known_hosts.to_string_lossy().into_owned();
-    let output = ssh_command()
+    let output = managed_identity_only_ssh_command()
         .args([
             "-o",
             "BatchMode=yes",
@@ -7969,13 +8009,13 @@ mod tests {
     use super::{
         GEYSER_CONFIG_FALLBACK, GameSettings, LocalStartResult, PAPER_READY_LOG_PATTERN,
         REMOTE_SERVER_ARTIFACT_CHECK, RaspberryPiOsEntry, RemoveDirOnDrop, add_identity_file,
-        apply_game_settings, artifact_hash_matches, copy_verified_pack, geyser_config_from_archive,
-        hash_file, inspect_bedrock_resource_pack, java_major_for, latest_supported_pi_image,
-        parse_game_settings, parse_supported_versions_page, record_managed_artifact_hashes,
-        restore_backup, safe_archive_path, safe_version, shell_single_quote, ssh_failure_message,
-        start_updated_local_copy_with_fallback, unpack_runtime, valid_bedrock_pack_filename,
-        valid_plugin_filename, valid_server_folder, valid_sha256, validate_game_settings,
-        validate_pi_server_package,
+        add_managed_identity_only, apply_game_settings, artifact_hash_matches, copy_verified_pack,
+        geyser_config_from_archive, hash_file, inspect_bedrock_resource_pack, java_major_for,
+        latest_supported_pi_image, parse_game_settings, parse_supported_versions_page,
+        record_managed_artifact_hashes, restore_backup, safe_archive_path, safe_version,
+        shell_single_quote, ssh_failure_message, start_updated_local_copy_with_fallback,
+        unpack_runtime, valid_bedrock_pack_filename, valid_plugin_filename, valid_server_folder,
+        valid_sha256, validate_game_settings, validate_pi_server_package,
     };
     use flate2::{Compression, write::GzEncoder};
     use std::{fs, fs::File, io::Write, path::Path, process::Command};
@@ -8337,6 +8377,27 @@ mod tests {
             .collect();
         assert_eq!(args[0], "-i");
         assert_eq!(args[1], identity.to_string_lossy());
+    }
+
+    #[test]
+    fn first_boot_ssh_ignores_unrelated_agent_identities() {
+        let (directory, _cleanup) = test_directory();
+        let identity = directory.join("monde-ensemble-pi");
+        let mut command = Command::new("ssh");
+
+        assert!(!add_managed_identity_only(&mut command, &identity));
+        assert!(command.get_args().next().is_none());
+
+        fs::write(&identity, "private key placeholder").unwrap();
+        add_identity_file(&mut command, &identity);
+        assert!(add_managed_identity_only(&mut command, &identity));
+        let args: Vec<_> = command
+            .get_args()
+            .map(|arg| arg.to_string_lossy())
+            .collect();
+        assert_eq!(args[0], "-i");
+        assert_eq!(args[1], identity.to_string_lossy());
+        assert_eq!(&args[2..], &["-o", "IdentitiesOnly=yes"]);
     }
 
     #[test]

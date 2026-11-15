@@ -1078,13 +1078,18 @@ fn validate_wifi(ssid: &str, password: &str, country: &str) -> Result<(), String
 }
 
 fn network_config(ssid: &str, password: &str, country: &str) -> String {
-    let mut config = String::from("version: 2\nethernets:\n  eth0:\n    dhcp4: true\n");
+    // Raspberry Pi Imager's cloud-init network-config uses Netplan's
+    // `network:` envelope. Without it, a first-boot Wi-Fi profile may not be
+    // applied, leaving the Pi invisible to the guided SSH installer.
+    let mut config = String::from(
+        "network:\n  version: 2\n  ethernets:\n    eth0:\n      dhcp4: true\n      dhcp6: true\n      optional: true\n",
+    );
     if !ssid.is_empty() {
         let ssid = serde_json::to_string(ssid).unwrap_or_else(|_| "\"\"".into());
         let password = serde_json::to_string(password).unwrap_or_else(|_| "\"\"".into());
         config.push_str(&format!(
-            "wifis:\n  wlan0:\n    dhcp4: true\n    regulatory-domain: {}\n    access-points:\n      {}:\n        password: {}\n",
-            country.to_ascii_uppercase(), ssid, password
+            "  wifis:\n    wlan0:\n      dhcp4: true\n      regulatory-domain: \"{}\"\n      access-points:\n        {}:\n          password: {}\n      optional: true\n",
+            country.to_ascii_uppercase(), ssid, password,
         ));
     }
     config
@@ -1261,10 +1266,12 @@ mod tests {
     fn network_config_preserves_wifi_values_as_yaml_strings() {
         let config = network_config("Maison: 2.4G", "mot de passe \"secret\"", "fr");
 
-        assert!(config.starts_with("version: 2\nethernets:\n"));
-        assert!(config.contains("regulatory-domain: FR\n"));
-        assert!(config.contains("\"Maison: 2.4G\":\n"));
-        assert!(config.contains("password: \"mot de passe \\\"secret\\\"\"\n"));
+        assert!(config.starts_with("network:\n  version: 2\n  ethernets:\n"));
+        assert!(config.contains("  wifis:\n    wlan0:\n"));
+        assert!(config.contains("      regulatory-domain: \"FR\"\n"));
+        assert!(config.contains("        \"Maison: 2.4G\":\n"));
+        assert!(config.contains("          password: \"mot de passe \\\"secret\\\"\"\n"));
+        assert!(config.ends_with("      optional: true\n"));
     }
 
     #[test]

@@ -1019,7 +1019,8 @@ function App() {
     setBusy(true);
     setOperationProgress({
       step: "Recherche du Pi sur le réseau local…",
-      percent: 8,
+      percent: 0,
+      indeterminate: true,
     });
     try {
       let device: DiscoveredPi | undefined;
@@ -1034,7 +1035,8 @@ function App() {
             attempt === 1
               ? "Connexion au Pi préparé…"
               : `Recherche du Pi · tentative ${attempt} · ${Math.floor(elapsed / 60_000)} min ${String(Math.floor((elapsed % 60_000) / 1000)).padStart(2, "0")} s`,
-          percent: Math.min(40, 30 + (elapsed / PI_DISCOVERY_TIMEOUT_MS) * 10),
+          percent: 0,
+          indeterminate: true,
         });
         try {
           const found = await invoke<DiscoveredPi[]>("discover_new_pi", {
@@ -5082,6 +5084,7 @@ function OperationStatus({
   error: string;
 }) {
   const indeterminate = Boolean(progress?.indeterminate);
+  const failed = Boolean(error);
   return (
     <LocalizedTree locale={locale}>
     <div className={error ? "inline-error" : "operation-success"}>
@@ -5089,26 +5092,34 @@ function OperationStatus({
         <>
           <div className="progress-head">
             <span>{progress.step}</span>
-            <b>{indeterminate ? "EN COURS" : `${progress.percent}%`}</b>
+            <b>
+              {failed
+                ? "ÉCHEC"
+                : indeterminate
+                  ? "EN COURS"
+                  : `${Math.round(progress.percent)}%`}
+            </b>
           </div>
-          <div
-            className={`progress-track${indeterminate ? " indeterminate" : ""}`}
-            role="progressbar"
-            aria-valuemin={indeterminate ? undefined : 0}
-            aria-valuemax={indeterminate ? undefined : 100}
-            aria-valuenow={indeterminate ? undefined : progress.percent}
-            aria-valuetext={
-              indeterminate
-                ? "Opération en cours, progression non disponible"
-                : undefined
-            }
-          >
-            <i
-              style={
-                indeterminate ? undefined : { width: `${progress.percent}%` }
+          {!failed && (
+            <div
+              className={`progress-track${indeterminate ? " indeterminate" : ""}`}
+              role="progressbar"
+              aria-valuemin={indeterminate ? undefined : 0}
+              aria-valuemax={indeterminate ? undefined : 100}
+              aria-valuenow={indeterminate ? undefined : progress.percent}
+              aria-valuetext={
+                indeterminate
+                  ? "Opération en cours, progression non disponible"
+                  : undefined
               }
-            />
-          </div>
+            >
+              <i
+                style={
+                  indeterminate ? undefined : { width: `${progress.percent}%` }
+                }
+              />
+            </div>
+          )}
         </>
       )}
       {error && <p>{error}</p>}

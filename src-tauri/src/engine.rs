@@ -4794,6 +4794,11 @@ fn discover_prepared_pi_by_local_scan(
         .map_err(|_| {
             "Impossible de créer le fichier temporaire de vérification SSH.".to_string()
         })?;
+    let reachable_ips = reachable
+        .iter()
+        .take(8)
+        .map(std::net::Ipv4Addr::to_string)
+        .collect::<Vec<_>>();
     let mut found = None;
     for address in reachable {
         let host = address.to_string();
@@ -4836,7 +4841,12 @@ fn discover_prepared_pi_by_local_scan(
         }
     }
     let _ = fs::remove_file(&known_hosts);
-    found.ok_or_else(|| "Le réseau local a répondu, mais le Pi préparé n’a pas confirmé le nom inscrit sur sa carte avec la clé SSH de cette application. Vérifie que tu as démarré la carte préparée par cette installation. Rien n’a été modifié.".into())
+    found.ok_or_else(|| {
+        format!(
+            "SSH répond sur {} sur le réseau local, mais aucun de ces appareils n’a confirmé le nom « {expected_hostname} » avec la clé de cette installation. Il peut s’agir d’un autre appareil SSH ou d’un premier démarrage du Pi qui n’a pas appliqué son compte/sa clé. Vérifie que la carte préparée ici est bien celle démarrée dans le Pi. Aucun fichier du serveur n’a été installé.",
+            reachable_ips.join(", ")
+        )
+    })
 }
 
 /// Reads the saved installation's process, ports and recent log without

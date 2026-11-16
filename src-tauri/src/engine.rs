@@ -4800,17 +4800,23 @@ fn discover_prepared_pi_by_local_scan(
         .map(std::net::Ipv4Addr::to_string)
         .collect::<Vec<_>>();
     let mut found = None;
+    let mut authenticated_hosts = Vec::new();
+    let mut authentication_rejections = 0usize;
     for address in reachable {
         let host = address.to_string();
-        if let Ok(output) = run_ssh_with_known_hosts(
+        match run_ssh_with_known_hosts(
             &format!("{username}@{host}"),
             &remote_probe_command(),
             3,
             &known_hosts,
         ) {
-            if let Ok(facts) = parse_remote_facts(&output)
-                && facts.hostname.eq_ignore_ascii_case(expected_hostname)
-            {
+            Ok(output) => {
+                if let Ok(facts) = parse_remote_facts(&output) {
+                    if !facts.hostname.eq_ignore_ascii_case(expected_hostname) {
+                        authenticated_hosts.push(format!("{host} ({})", facts.hostname));
+                        continue;
+                    }
+                }
                 // The temporary file above proves which Pi answered, but
                 // install_pi uses the user's normal strict SSH known-hosts
                 // store. Pin the already-verified IP there before returning
@@ -4838,9 +4844,29 @@ fn discover_prepared_pi_by_local_scan(
                     break;
                 }
             }
+            Err(error) => {
+                if error.to_ascii_lowercase().contains("permission denied") {
+                    authentication_rejections += 1;
+                }
+            }
         }
     }
     let _ = fs::remove_file(&known_hosts);
+    if let Some(device) = found {
+        return Ok(device);
+    }
+    if !authenticated_hosts.is_empty() {
+        return Err(format!(
+            "La clé SSH de l’application fonctionne sur {}, mais le nom reçu ne correspond pas à celui de la carte préparée ({expected_hostname}). Le premier démarrage n’a probablement pas appliqué le nom d’hôte. Vérifie que c’est bien le Pi et la carte de cette installation. Aucun serveur n’a été installé.",
+            authenticated_hosts.join(", ")
+        ));
+    }
+    if authentication_rejections > 0 {
+        return Err(format!(
+            "{} appareil(s) répondent en SSH sur le réseau, mais refusent la clé ou le compte « {username} » préparé par l’application. Cela indique que le premier démarrage n’a pas appliqué l’accès SSH de la carte, ou que ces appareils ne sont pas le Pi préparé. Vérifie que le Pi a bien démarré sur cette carte. Aucun serveur n’a été installé.",
+            authentication_rejections
+        ));
+    }
     found.ok_or_else(|| {
         format!(
             "SSH répond sur {} sur le réseau local, mais aucun de ces appareils n’a confirmé le nom « {expected_hostname} » avec la clé de cette installation. Il peut s’agir d’un autre appareil SSH ou d’un premier démarrage du Pi qui n’a pas appliqué son compte/sa clé. Vérifie que la carte préparée ici est bien celle démarrée dans le Pi. Aucun fichier du serveur n’a été installé.",

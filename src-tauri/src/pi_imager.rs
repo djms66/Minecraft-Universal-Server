@@ -1078,11 +1078,13 @@ fn validate_wifi(ssid: &str, password: &str, country: &str) -> Result<(), String
 }
 
 fn network_config(ssid: &str, password: &str, country: &str) -> String {
-    // Raspberry Pi Imager's cloud-init network-config uses Netplan's
-    // `network:` envelope. Without it, a first-boot Wi-Fi profile may not be
-    // applied, leaving the Pi invisible to the guided SSH installer.
+    // Raspberry Pi Imager's cloud-init network-config follows the official
+    // Netplan v2 shape. Keep it aligned with Imager's own generator instead
+    // of forcing a renderer that Raspberry Pi OS selects for itself.
+    // La configuration réseau cloud-init suit le format Netplan v2 officiel.
+    // On laisse Raspberry Pi OS choisir son moteur réseau, comme Imager.
     let mut config = String::from(
-        "network:\n  version: 2\n  renderer: NetworkManager\n  ethernets:\n    eth0:\n      dhcp4: true\n      dhcp6: true\n      optional: true\n",
+        "network:\n  version: 2\n  ethernets:\n    eth0:\n      dhcp4: true\n      dhcp6: true\n      optional: true\n",
     );
     if !ssid.is_empty() {
         let ssid = serde_json::to_string(ssid).unwrap_or_else(|_| "\"\"".into());
@@ -1266,14 +1268,12 @@ mod tests {
     fn network_config_preserves_wifi_values_as_yaml_strings() {
         let config = network_config("Maison: 2.4G", "mot de passe \"secret\"", "fr");
 
-        assert!(
-            config
-                .starts_with("network:\n  version: 2\n  renderer: NetworkManager\n  ethernets:\n")
-        );
+        assert!(config.starts_with("network:\n  version: 2\n  ethernets:\n"));
         assert!(config.contains("  wifis:\n    wlan0:\n"));
         assert!(config.contains("      regulatory-domain: \"FR\"\n"));
         assert!(config.contains("        \"Maison: 2.4G\":\n"));
         assert!(config.contains("          password: \"mot de passe \\\"secret\\\"\"\n"));
+        assert!(!config.contains("renderer:"));
         assert!(config.ends_with("      optional: true\n"));
     }
 

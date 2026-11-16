@@ -115,7 +115,8 @@ type PiFlashResult = {
   expected_devices: string[];
 };
 
-const PI_FIRST_BOOT_WAIT_MS = 150_000;
+const PI_FIRST_BOOT_WAIT_MS = 240_000;
+const PI_DISCOVERY_TIMEOUT_MS = 5 * 60_000;
 type PiInstallation = {
   host: string;
   username: string;
@@ -1023,13 +1024,17 @@ function App() {
     try {
       let device: DiscoveredPi | undefined;
       let lastError = "";
-      for (let attempt = 0; attempt < 12; attempt += 1) {
+      const discoveryStartedAt = Date.now();
+      let attempt = 0;
+      while (Date.now() - discoveryStartedAt < PI_DISCOVERY_TIMEOUT_MS) {
+        attempt += 1;
+        const elapsed = Date.now() - discoveryStartedAt;
         setOperationProgress({
           step:
-            attempt === 0
+            attempt === 1
               ? "Connexion au Pi préparé…"
-              : `Je cherche encore ton Pi… tentative ${attempt + 1}/12`,
-          percent: Math.min(30, 8 + attempt * 2),
+              : `Recherche du Pi · tentative ${attempt} · ${Math.floor(elapsed / 60_000)} min ${String(Math.floor((elapsed % 60_000) / 1000)).padStart(2, "0")} s`,
+          percent: Math.min(40, 30 + (elapsed / PI_DISCOVERY_TIMEOUT_MS) * 10),
         });
         try {
           const found = await invoke<DiscoveredPi[]>("discover_new_pi", {
@@ -1049,13 +1054,13 @@ function App() {
           if (lastError.includes("Plusieurs Raspberry Pi préparés"))
             throw error;
         }
-        if (attempt < 11) {
+        if (Date.now() - discoveryStartedAt < PI_DISCOVERY_TIMEOUT_MS) {
           await new Promise((resolve) => window.setTimeout(resolve, 5000));
         }
       }
       if (!device) {
         throw new Error(
-          `Le Pi n’a pas encore rejoint le réseau. Vérifie qu’il est allumé et relié au même routeur, puis réessaie. ${lastError}`,
+          `Après ${Math.ceil(PI_DISCOVERY_TIMEOUT_MS / 60_000)} minutes de recherche, le Pi n’a pas confirmé son nom et sa clé SSH. Vérifie qu’il est allumé, relié au même routeur, et que la carte préparée par cette installation est bien insérée, puis réessaie. ${lastError}`,
         );
       }
       const actualGeneration = device.model.match(
@@ -2642,15 +2647,16 @@ function App() {
                             </li>
                             <li>
                               Rallume le Pi et laisse-le allumé. Pour son
-                              premier démarrage, l’application attendra 2 min
-                              30 s après l’acceptation du contrat, puis cherchera
-                              le Pi et lancera l’installation automatiquement.
+                              premier démarrage, l’application attendra 4 min
+                              après l’acceptation du contrat, puis cherchera
+                              le Pi pendant jusqu’à 5 min et lancera
+                              l’installation dès qu’il sera confirmé.
                             </li>
                           </ol>
                           <div className="pi-first-boot-timer">
                             <small>
                               {!piEulaAccepted
-                                ? "Délai de démarrage : 2 min 30 s"
+                                ? "Délai de démarrage : 4 min"
                                 : piBootWaitComplete
                                   ? "Délai terminé · recherche automatique du Pi…"
                                   : `Démarrage du Pi · ${Math.floor(piBootWaitRemainingSeconds / 60)} min ${String(piBootWaitRemainingSeconds % 60).padStart(2, "0")} s restantes`}
@@ -2660,7 +2666,7 @@ function App() {
                               role="progressbar"
                               aria-label="Délai de démarrage du Raspberry Pi"
                               aria-valuemin={0}
-                              aria-valuemax={150}
+                              aria-valuemax={240}
                               aria-valuenow={Math.floor(
                                 piBootWaitElapsedMs / 1000,
                               )}
@@ -2704,7 +2710,7 @@ function App() {
                             }
                           >
                             {busy
-                              ? "Recherche du Pi (jusqu’à 1 min)…"
+                              ? "Recherche du Pi (jusqu’à 5 min)…"
                               : piBootWaitComplete
                                 ? "Réessayer la détection du Pi"
                                 : "Attendre le démarrage du Pi"}

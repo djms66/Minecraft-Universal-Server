@@ -1082,7 +1082,7 @@ fn network_config(ssid: &str, password: &str, country: &str) -> String {
     // `network:` envelope. Without it, a first-boot Wi-Fi profile may not be
     // applied, leaving the Pi invisible to the guided SSH installer.
     let mut config = String::from(
-        "network:\n  version: 2\n  ethernets:\n    eth0:\n      dhcp4: true\n      dhcp6: true\n      optional: true\n",
+        "network:\n  version: 2\n  renderer: NetworkManager\n  ethernets:\n    eth0:\n      dhcp4: true\n      dhcp6: true\n      optional: true\n",
     );
     if !ssid.is_empty() {
         let ssid = serde_json::to_string(ssid).unwrap_or_else(|_| "\"\"".into());
@@ -1266,7 +1266,10 @@ mod tests {
     fn network_config_preserves_wifi_values_as_yaml_strings() {
         let config = network_config("Maison: 2.4G", "mot de passe \"secret\"", "fr");
 
-        assert!(config.starts_with("network:\n  version: 2\n  ethernets:\n"));
+        assert!(
+            config
+                .starts_with("network:\n  version: 2\n  renderer: NetworkManager\n  ethernets:\n")
+        );
         assert!(config.contains("  wifis:\n    wlan0:\n"));
         assert!(config.contains("      regulatory-domain: \"FR\"\n"));
         assert!(config.contains("        \"Maison: 2.4G\":\n"));

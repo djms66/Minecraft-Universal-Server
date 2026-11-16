@@ -1,4 +1,4 @@
-# Minecraft Universal Server 0.18.101
+# Minecraft Universal Server 0.18.102
 
 Application de bureau qui prépare un nouveau serveur Minecraft Paper pour joueurs Java et Bedrock, et protège les dossiers de serveur par sauvegarde et restauration dans une copie neuve.
 

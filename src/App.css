@@ -2959,7 +2959,19 @@ button { min-height: 44px; }
 .pi-first-steps small { font-size: 13px; color: #647166; line-height: 1.4; }
 .pi-wireless-fields { gap: 14px; margin-top: 16px; padding: 16px; border-radius: 7px; grid-template-columns: 1fr 1fr .7fr; }
 .pi-wireless-fields label, .form-row label, .pi-candidate-choice { font-size: 14px; }
-.pi-wireless-fields input, .pi-wireless-fields select, .form-row input, .pi-candidate-choice select { min-height: 48px; padding: 11px 12px; border-radius: 6px; font-size: 15px; }
+.pi-wireless-fields input,
+.pi-wireless-fields select,
+.form-row input,
+.pi-candidate-choice select {
+  box-sizing: border-box;
+  height: 48px;
+  min-height: 48px;
+  align-self: start;
+  padding: 11px 12px;
+  border-radius: 6px;
+  font-size: 15px;
+  line-height: 1.2;
+}
 .pi-wireless-fields small, .pi-wifi-note { font-size: 13px; line-height: 1.45; }
 .pi-wifi-security { margin-top: 5px; }
 .pi-wifi-security summary { min-height: 40px; padding: 8px 0; color: #425244; font-size: 13px; font-weight: 650; }

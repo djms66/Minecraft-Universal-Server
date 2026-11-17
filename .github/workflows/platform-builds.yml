@@ -81,25 +81,12 @@ jobs:
       - name: Build native installer
         run: npx tauri build --bundles ${{ matrix.bundle }}
 
-      - name: Create portable macOS application archive
-        if: runner.os == 'macOS'
-        env:
-          ARCH: ${{ matrix.arch }}
-        shell: bash
-        run: |
-          version=$(node -p "require('./package.json').version")
-          ditto -c -k --sequesterRsrc --keepParent \
-            "src-tauri/target/release/bundle/macos/Minecraft Universal Server.app" \
-            "src-tauri/target/release/bundle/macos/Minecraft-Universal-Server-${version}-macOS-${ARCH}.zip"
-
       - name: Upload macOS artifacts
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
           name: mus-${{ matrix.label }}
-          path: |
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/*.zip
+          path: src-tauri/target/release/bundle/dmg/*.dmg
           if-no-files-found: error
           retention-days: 14
 

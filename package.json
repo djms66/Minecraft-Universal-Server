@@ -1,12 +1,12 @@
 {
   "name": "monde-ensemble",
   "private": true,
-  "version": "0.18.110",
+  "version": "0.18.111",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "icons:generate": "tauri icon src-tauri/icon-source/logo_MUS_icon.svg --output src-tauri/icons --ios-color \"#E0E2E5\" && python3 scripts/finish_mus_icons.py",
+    "icons:generate": "python3 scripts/build_mus_icon_source.py && tauri icon src-tauri/icon-source/logo_MUS_icon.svg --output src-tauri/icons --ios-color \"#D3D6DA\" && python3 scripts/finish_mus_icons.py",
     "format": "prettier --write \"src/**/*.{ts,tsx,css}\" index.html package.json vite.config.ts",
     "preview": "vite preview",
     "tauri": "tauri"

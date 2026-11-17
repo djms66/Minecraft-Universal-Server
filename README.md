@@ -1,138 +1,70 @@
 # Minecraft Universal Server
 
 <p align="center">
-  <img src="src-tauri/icon-source/logo_MUS.svg" alt="Minecraft Universal Server — One world, Java + Bedrock, any device" width="520">
+  <img src="src-tauri/icons/icon.png" alt="Minecraft Universal Server M.U.S. app icon" width="160">
 </p>
 
 <p align="center"><strong>One world. Java + Bedrock. Any device.</strong></p>
 
-**Un monde commun, un serveur Paper, des joueurs Java et Bedrock.** M.U.S. accompagne les débutants dans la création du serveur, de la préparation d’un Raspberry Pi à la gestion du monde, des joueurs et des sauvegardes.
+**Minecraft Universal Server (M.U.S.) helps you set up and manage one Minecraft world that Java Edition and Bedrock Edition players can join together.** It guides you from a fresh Raspberry Pi or desktop setup through server installation, player access, backups and maintenance.
 
-Minecraft Universal Server est une application de bureau open source, conçue pour macOS, Windows et Linux. Elle automatise les tâches délicates, explique les étapes qui effacent un support, et garde les anciennes installations intactes lors des mises à jour et restaurations.
+M.U.S. is an independent desktop application for **macOS, Windows and Linux**. The Minecraft server can run on the same computer as the app or on a Raspberry Pi. The app is not a Minecraft client and does not host a public relay: players connect to your server over your local network or through network access that you configure.
 
-> **État des builds :** la version source actuelle est **0.18.110**. Les compilations Windows et Linux sont configurées dans GitHub Actions, mais leur comportement doit encore être confirmé par des essais sur de vraies machines Windows et Linux. La première publication les signalera clairement comme builds à valider.
+[Download a build](https://github.com/djms66/Minecraft-Universal-Server/releases) · [Browse the source](https://github.com/djms66/Minecraft-Universal-Server) · [Report a problem](https://github.com/djms66/Minecraft-Universal-Server/issues)
 
-[Voir le code](https://github.com/djms66/Minecraft-Universal-Server) · [Téléchargements et versions](https://github.com/djms66/Minecraft-Universal-Server/releases) · [Signaler un problème](https://github.com/djms66/Minecraft-Universal-Server/issues)
+## What you can do
 
-### En bref
+- Create a shared Java/Bedrock server using Paper, Geyser and Floodgate.
+- Follow a guided setup on a computer or prepare a Raspberry Pi from a blank SD card or SSD. First boot can use Wi-Fi or Ethernet.
+- Manage a server, its Java and Bedrock allowlist, status and logs from the app.
+- Create and restore verified server backups without overwriting an existing server folder or backup.
+- Check supported component versions and apply coordinated updates with a rollback copy when the app can verify compatibility.
+- Use advanced controls for server settings, approved plugins and Bedrock resource packs.
+- Choose from 11 languages for the screens currently translated. Localization is still incomplete; Minecraft and third-party diagnostic messages remain in their original language.
 
-- **Java + Bedrock dans le même monde**, via Paper, Geyser et Floodgate.
-- **Installation guidée** sur Mac, Windows ou Linux ; serveur local ou Raspberry Pi.
-- **Wi-Fi ou Ethernet** pour le premier démarrage d’un Pi neuf.
-- **Liste d’accès, sauvegardes, mises à jour contrôlées et restauration** depuis l’application.
-- **11 langues** pour les principales étapes et commandes de gestion.
+## Get started
 
-### Quick overview
+1. Open [Releases](https://github.com/djms66/Minecraft-Universal-Server/releases) and choose a package for your computer. Check the release notes and platform status below before installing.
+2. Choose **This computer** to host the server locally, or **Raspberry Pi** to prepare or manage a Pi.
+3. For a new Pi, connect its blank SD card or SSD to the computer running M.U.S. Select **Detect storage**, confirm the device and capacity, then confirm the erase operation. The system image and first-boot settings are written to that storage. Existing data on the selected device will be erased.
+4. Configure Wi-Fi or use Ethernet. For Wi-Fi, the Pi and the computer must join the same router. The Wi-Fi password is temporarily written to the boot media so the Pi can join the network; the app schedules its removal on first boot. Use Ethernet if you do not want the password written to the card.
+5. Insert the prepared storage into a powered-off Pi, connect it to the same router, then turn it on. Accept the Minecraft EULA in the app when prompted. M.U.S. searches for the Pi, verifies its SSH identity and hardware, then installs the server when it can confirm the target.
+6. When setup completes, use the server dashboard to start the server, add the Java profile names or Bedrock gamertags that should be allowed to join, and copy the address shown by the app.
 
-**One shared Minecraft world for Java and Bedrock players.** M.U.S. guides server setup on desktop systems or a Raspberry Pi, then helps manage access, updates and backups. Windows and Linux packages need hands-on testing before they can be called verified.
+For a local server, keep the computer awake while the server is running. On a Pi, the Pi hosts the server and must remain powered on. Players on the same home network connect using the displayed local address. Inviting players over the internet may require router configuration and firewall rules; M.U.S. does not configure those on your behalf.
 
-Minecraft is a trademark of Mojang Studios. This independent project is not affiliated with, endorsed by, or sponsored by Mojang or Microsoft.
+## Platform and release status
 
-**Licence :** MIT pour ce dépôt ; les marques, services et composants tiers conservent leurs propres conditions. Voir [LICENSE](LICENSE) et [les mentions des tiers](THIRD_PARTY_NOTICES.md).
+The project targets desktop builds for macOS (Apple silicon and Intel), Windows x64, and Linux x64/ARM64. A build produced by CI is not proof that an installer has been tested on a real computer. Check the current [release](https://github.com/djms66/Minecraft-Universal-Server/releases) and [build workflow](https://github.com/djms66/Minecraft-Universal-Server/actions) for the status of each package.
 
----
+- **macOS:** packages are not notarized with an Apple Developer ID, so Gatekeeper may show a warning.
+- **Windows:** packages are not signed with a publisher certificate, so SmartScreen may show a warning.
+- **Linux:** packages require a compatible graphical desktop and the Tauri/WebKit system libraries. The ARM64 package is for desktop Linux; it does not run the graphical app on Raspberry Pi OS Lite.
+- **Raspberry Pi:** the Pi is a server target managed by the desktop app. The compact server profile is designed to support Raspberry Pi 3B+ and later ARM64 models. The guided image workflow targets compatible 64-bit Raspberry Pi OS. A generated image or successful build does not replace testing first boot and server operation on the exact Pi and storage device.
+- **iOS, iPadOS and Android:** there are no mobile app builds. These devices can use Minecraft Bedrock as clients if their Minecraft version and network can reach the server.
 
-## Détails de la version 0.18.110
+Windows and Linux packages need hands-on testing on their target systems. Until native install, launch, disk preparation and server-management flows have been confirmed on those systems, treat those packages as **tester builds**, not verified releases. See [CONTRIBUTING.md](CONTRIBUTING.md) if you can help test them.
 
-## Ce que fait cette version
+## Java and Bedrock compatibility
 
-- démarre les nouveaux utilisateurs dans un guide « installer mon serveur » plutôt que dans un tableau de bord vide ; chaque lancement recommence la préparation du Pi à l’étape 1 et exige une nouvelle détection puis une confirmation explicite avant d’effacer le support ; pour un Pi neuf, montre d’abord le matériel nécessaire et la préparation depuis la carte ; après acceptation de la licence, une barre de 4 minutes suit le premier démarrage puis l’application recherche automatiquement le Pi et lance l’installation ; les outils de réglage apparaissent ensuite dans le tableau de bord ;
-- propose onze langues pour la navigation, l’entrée dans l’installation et la gestion des joueurs; la sélection est conservée sur cet ordinateur ;
-- télécharge Paper, Geyser et Floodgate en parallèle durant une installation ou mise à jour, puis vérifie chaque empreinte SHA-256 avant de préparer le serveur ;
-- détecte le système, l’architecture, la mémoire et l’espace libre local ;
-- consulte les versions annoncées par GeyserMC et PaperMC, et bloque la préparation si leur catalogue est inaccessible ;
-- lit le format actuel du catalogue Java Adoptium ; après deux lectures HTTP/1, utilise `curl` sécurisé comme secours pour éviter qu’un corps HTTP mal décodé bloque l’installation ; le JRE ne passe à l’installation qu’après validation de son SHA-256 ;
-- prépare un nouveau dossier Paper + Geyser + Floodgate avec un runtime Java inclus et vérifié par SHA-256 ;
-- démarre ensuite ce nouveau serveur local, attend le message Minecraft « Done », vérifie explicitement `bedrock.transport: nethernet`, effectue depuis le Mac un échange de statut Minecraft Java et vérifie l’accès au signalement Bedrock TCP, puis confirme que les ports Java TCP et Bedrock UDP écoutent sur le serveur avant d’annoncer qu’il est prêt ; les dossiers de serveur précédents ne sont pas remplacés ;
-- mémorise le chemin des serveurs locaux créés par l’application, affiche l’adresse, les versions, les joueurs connectés et le journal, et permet de copier l’adresse Java complète ou l’IP Bedrock depuis le tableau de bord ; les boutons démarrent ou arrêtent le serveur proprement avec le contrôle RCON limité à la boucle locale ;
-- permet d’ajouter ou de retirer des comptes Java et des gamertags Bedrock de la liste d’accès d’un serveur local, puis de l’activer après avoir vérifié qu’elle contient au moins un joueur ; l’application n’ouvre pas temporairement la liste pour laisser entrer un Bedrock inconnu ;
-- compare à la demande les versions locales aux catalogues officiels et bloque la validation d’une mise à jour si des mods, extensions, packs, liens, configuration Geyser modifiée ou runtime incompatible sont détectés ; ce contrôle est en lecture seule ; enregistre aussi les empreintes SHA-256 du Paper, de Geyser et de Floodgate ; pour un ancien profil sans empreinte, vérifie le build installé auprès des catalogues officiels avant d’autoriser la mise à jour ;
-- en mode avancé, recherche dans Modrinth les plugins Paper déclarés pour la version Java exacte ; sur un serveur local ou Pi arrêté, crée une sauvegarde et une nouvelle copie avec un plugin publié sans dépendance obligatoire, vérifie son SHA-512 et permet de revenir à l’ancienne copie ;
-- en mode avancé, ajoute un pack de ressources Bedrock `.mcpack` ou `.zip` au dossier Geyser du serveur local ou Pi après validation du manifeste, du type, du nom, de la taille et de l’empreinte SHA-256 ; le serveur doit être arrêté et redémarré après l’ajout ;
-- en mode avancé, configure pour les joueurs Java un lien HTTPS direct vers un pack ZIP, son empreinte SHA-1 facultative et l’option qui l’exige ; sauvegarde `server.properties` avant l’enregistrement local ou Pi ;
-- en mode avancé, règle le nom affiché, le mode de jeu, la difficulté, le nombre maximal de joueurs, les distances d’affichage et de simulation, le PvP et le Nether ; exige l’arrêt du serveur, sauvegarde `server.properties` avant l’écriture et préserve les propriétés non gérées, dont le secret RCON ;
-- au démarrage demandé d’un serveur local géré, met à jour Paper, Geyser, Floodgate et la configuration NetherNet ensemble uniquement si les catalogues et les contenus sont compatibles ; crée une archive complète, prépare une nouvelle copie du serveur et conserve le dossier précédent ; en cas de blocage ou si la nouvelle copie ne confirme pas son démarrage et ses deux transports Bedrock, relance et vérifie l’ancienne version ; la copie candidate et l’archive restent conservées pour diagnostic ;
-- applique la même mise à jour coordonnée aux serveurs locaux gérés sur Mac et Windows, après validation du profil, des contenus, de l’espace libre et des ports ; vérifie la nouvelle copie au démarrage et conserve l’ancienne pour retour arrière ;
-- conserve un aperçu lisible des dernières lignes et permet d’exporter le journal complet local ou Pi vers un nouveau fichier sans écraser une copie existante ;
-- choisit les ports Minecraft habituels (Java 25565, Bedrock 19132) pour que les joueurs puissent entrer seulement l’adresse du serveur ; si un autre serveur occupe l’un d’eux, utilise l’alternative 25566 ou 19133 et affiche le numéro à saisir ; bloque l’installation si les deux ports d’une édition sont déjà utilisés ;
-- adapte automatiquement la mémoire et la portée de jeu aux ressources du Pi ; le profil compact accepte les Pi 3B+ et autres Pi ARM64 avec 1 Go, tandis que l’installation locale sur ordinateur garde son minimum de 2 Go ;
-- crée une archive complète du dossier serveur, avec empreinte SHA-256, sans remplacer une archive existante ; vérifie que les ports Minecraft configurés restent libres pendant la copie du monde ;
-- vérifie l’intégrité et les chemins d’une archive avant restauration, puis crée une nouvelle copie ; si son profil Monde Ensemble est reconnu et que ses ports sont libres, la charge automatiquement dans le tableau de bord ;
-- restaure une archive vers un Raspberry Pi déjà configuré en créant un dossier serveur neuf, en vérifiant l’empreinte, en adaptant Java à Linux ARM64 et à sa mémoire, puis en contrôlant la copie à distance ; l’ancien dossier reste disponible et la copie restaurée n’est pas démarrée automatiquement ;
-- recherche les Raspberry Pi qui annoncent SSH sur le réseau local et affiche leur modèle et leur adresse ;
-- repère en lecture seule les cartes SD dans les lecteurs intégrés et les supports USB externes sur Mac, Windows ou Linux pour préparer un futur parcours Pi vierge ;
-- bloque l’écriture d’un système Pi s’il détecte plusieurs supports externes, affiche l’identifiant du support choisi et demande une confirmation explicite de son effacement ;
-- lit le catalogue officiel Raspberry Pi pour choisir par défaut la version vérifiée la plus récente de Raspberry Pi OS Lite 64 bits compatible avec Pi 3, 4 et 5 ; le parcours expert peut choisir une autre image 64 bits du catalogue si elle prend en charge le démarrage automatisé, le modèle, la mémoire et la capacité du support ;
-- prépare une carte SD ou un SSD depuis l’application avec Raspberry Pi Imager officiel, téléchargé à la demande et vérifié par SHA-256 ; choisit Raspberry Pi OS Lite et configure l’accès sécurisé sans demander au débutant d’installer Imager séparément ;
-- utilise uniquement les options reconnues par la version vérifiée de Raspberry Pi Imager et masque les données Wi-Fi dans les journaux de diagnostic conservés par l’application ; la vérification de l’image et de l’écriture reste active ;
-- prépare Ethernet et le Wi-Fi saisi dans le format cloud-init officiel de Raspberry Pi Imager, crée une clé SSH dédiée dans l’espace privé de l’application sans lire ni modifier les clés SSH personnelles, puis attend le premier démarrage et lance l’installation du serveur ; pour cette première connexion, SSH n’essaie que la clé de l’application ;
-- affiche les modèles Pi compatibles avec cette image et compare la capacité des supports externes détectés à la place nécessaire au système et au serveur ;
-- choisit un profil compact sur les Pi 3B+ et les appareils disposant de moins de 2 Go : portée de jeu et nombre de joueurs réduits ; un Pi 4 ou 5 avec au moins 4 Go est recommandé pour plus de joueurs ou d’extensions ;
-- vérifie l’architecture, la mémoire, l’espace libre et les ports avant d’installer sur un Pi déjà configuré ;
-- transfère une version Linux ARM64 du serveur, la décompresse dans un nouveau dossier, démarre Minecraft et attend le signal « serveur prêt » dans le journal ;
-- affiche l’adresse et les ports à saisir dans Minecraft, avec le chemin du dossier et des journaux sur le Pi.
-- repère sur le Pi l’interface réseau utilisée pour l’adresse locale, affiche son adresse matérielle et guide la réservation DHCP permanente dans l’application Free ; les valeurs IP et matérielle sont copiables depuis le tableau de bord.
-- conserve le Pi installé dans l’application, revérifie son état et ses versions Minecraft à l’ouverture, affiche les dernières lignes du journal et peut relancer uniquement cette installation si ses ports sont libres ; l’installation ajoute aussi une tâche de redémarrage automatique si le service de planification du Pi est actif.
-- quand un serveur Pi géré est arrêté puis relancé depuis l’application, compare les catalogues Java/Bedrock et les builds Paper/Geyser/Floodgate ; si le profil et la configuration Geyser sont vérifiables et que le runtime Java reste compatible, met à jour ces composants et le transport NetherNet dans une transaction sauvegardée, puis vérifie Java TCP, Bedrock TCP/UDP et le démarrage ; en cas d’échec, restaure l’archive précédente ; chaque sauvegarde reste conservée sur le Pi. Un ancien réglage Geyser standard est migré automatiquement; une configuration personnalisée ou dont l’empreinte ne correspond plus est préservée et bloque le remplacement automatique.
-- permet d’arrêter proprement ce serveur Pi depuis son tableau de bord ; le processus n’est jamais forcé à quitter s’il ne s’arrête pas correctement.
+M.U.S. combines a Java server (Paper) with Geyser and Floodgate so compatible Bedrock clients can join the same world as Java players. It checks upstream component information when preparing or updating a managed server and verifies downloaded files before installation. Minecraft Java and Bedrock do not always use the same version number; compatibility depends on the versions supported by the selected Geyser build.
 
-Toutes les installations neuves et restaurations sont faites à côté des dossiers existants. Sur le Pi, l’application vérifie que les ports choisis sont libres et ne touche pas aux autres dossiers. L’acceptation de l’EULA est requise. La connexion SSH doit être déjà configurée sur cet ordinateur; aucune clé inconnue n’est approuvée automatiquement. Le compte choisi doit pouvoir écrire dans son dossier personnel.
+This does not guarantee compatibility with every mod, plugin, resource pack, console, Minecraft preview, or third-party client. Advanced changes can affect compatibility. The app blocks some updates when it detects unsupported customizations or cannot establish that the components work together. Review the release notes before updating an existing server.
 
-## Limites à connaître
+## Backups, updates and data safety
 
-- La préparation d’un Pi neuf est intégrée, mais l’écriture réelle sur carte/SSD et le premier démarrage doivent encore être validés sur chaque cible Mac, Windows et Linux, avec leurs appareils et supports physiques. Le paquet Mac local ne certifie pas les autres plateformes.
-- Le démarrage automatique après redémarrage dépend du service de planification déjà actif sur le Pi. L’application en vérifie la présence; sinon elle affiche que cette fonction n’est pas configurée.
-- L’application n’écrit pas dans la Freebox et ne peut donc pas confirmer elle-même le bail DHCP. Le tableau de bord fournit l’adresse IP et matérielle ainsi qu’un parcours guidé pour enregistrer le bail permanent dans l’application Free ; l’adresse ne devient durable qu’après cette confirmation dans la box.
-- La mise à jour coordonnée automatique est limitée aux serveurs locaux et Pi créés par Minecraft Universal Server. Le serveur doit être arrêté depuis l’application ; un mod, plugin non géré, pack de données, pack client, lien symbolique, runtime Java incompatible, espace insuffisant ou catalogue indisponible reporte la mise à jour et conserve la version actuelle.
-- Une mise à jour de Paper peut modifier les données de monde au premier démarrage. L’application conserve donc une archive complète avant lancement et ne valide la mise à jour qu’après le signal serveur prêt et l’ouverture des ports Java et Bedrock. Les sauvegardes automatiques s’accumulent et exigent de l’espace libre; l’application ne supprime pas les anciennes copies.
-- Les profils locaux antérieurs à 0.8.0 n’ont pas le contrôle RCON local nécessaire aux boutons de démarrage, d’arrêt et de mise à jour. Une copie mise à jour locale prend de l’espace supplémentaire : l’ancienne version et l’archive sont conservées, sans suppression automatique.
-- La gestion des joueurs est disponible sur les nouveaux serveurs locaux et Pi gérés. Les profils Pi plus anciens peuvent être préparés depuis le tableau de bord après arrêt du serveur; deux copies des réglages sont créées avant toute modification. Sur Bedrock, Floodgate exige que le joueur ait déjà rejoint un serveur Geyser avant que sa commande de liste d’accès puisse l’ajouter.
-- En mode avancé, l’ajout de plugin fonctionne sur un serveur local ou Pi géré : la version exacte annoncée pour Paper est revalidée, le fichier est contrôlé par SHA-512 et une archive complète ainsi qu’une nouvelle copie sont créées sans remplacer le serveur d’origine. La copie candidate doit être démarrée manuellement et vérifiée ; l’application permet de revenir à l’ancienne copie. Les dépendances obligatoires, plugins non gérés et mods présents bloquent l’opération.
-- L’ajout de pack Bedrock vérifie le format du manifeste et la version minimale déclarée, pas le rendu en jeu ni toutes les versions clientes. Geyser ne convertit pas automatiquement un pack Java en pack Bedrock ; les consoles peuvent avoir des contraintes propres. Un pack personnalisé bloque les mises à jour automatiques jusqu’à un contrôle de compatibilité séparé.
-- Le réglage Java ne téléverse pas le ZIP et ne vérifie pas que le lien public fonctionne. Le serveur requiert une URL directe accessible en HTTPS ; si l’option est exigée, les joueurs Java qui refusent le téléchargement sont déconnectés. Un pack Java ne devient pas un pack Bedrock.
-- Le paquet macOS est signé ad hoc pour sceller correctement l’application ; il n’est pas signé par un certificat Developer ID ni notarié. macOS peut afficher un avertissement à l’ouverture, ce qui doit encore être résolu pour une installation débutant sans manipulation de sécurité.
-- Le tableau de bord guide la redirection des ports Bedrock TCP/UDP et Java TCP dans l’application Freebox, sans écrire dans le routeur. Les voyants confirment les services sur l’hôte, pas leur accessibilité depuis Internet. Le filtrage opérateur, l’authentification Microsoft et la compatibilité de chaque appareil ne sont pas testés ; le diagnostic InitialConnection-149 reste partiel.
-- Le catalogue annonce les versions Paper/Minecraft et le côté serveur déclarés par l’éditeur ; cela ne garantit pas le fonctionnement réel ni la compatibilité avec Geyser et Bedrock. Les mises à jour coordonnées sont bloquées en présence de plugins ajoutés ; les sauvegardes d’ajout de plugin et leurs copies candidates sont conservées, sans nettoyage automatique.
-- Les consoles nécessitent parfois un relais d’accès; les mods Java côté client et les packs Java ne deviennent pas universels sur Bedrock.
-- Une compilation sur Mac ne valide pas les installateurs Windows ou Raspberry Pi. Il faut encore compiler et vérifier ces cibles sur leurs machines correspondantes.
+- Disk preparation is destructive. M.U.S. identifies the selected device and asks for confirmation before writing; never select a disk that contains data you need.
+- New server installs and restores use a new folder. Existing server folders and backups are not silently replaced.
+- Backup and restore operations validate the archive and its paths. Keep an additional copy of important worlds outside the server device.
+- Managed updates check component versions and server state before applying changes. When an update cannot be validated, it is blocked; where rollback is supported, the prior server copy is retained.
+- Downloads use HTTPS and integrity checks where upstream checksums are available. SSH management uses the app's key and requires host identity approval; do not share private keys or diagnostic logs containing secrets.
+- If you configure Wi-Fi for first boot, the password is present temporarily on the boot media. Prefer Ethernet if that is not acceptable for your setup.
 
-Ces limites sont affichées dans l’application afin de ne pas présenter les versions cataloguées comme une vérification complète du monde existant.
+These safeguards reduce accidental data loss; they do not replace a separate backup or make every hardware, network, and third-party failure impossible.
 
-## Compatibilité du profil neuf
+## Build from source
 
-Le profil utilise un serveur Java Paper avec les versions officielles de Geyser et Floodgate consultées au moment de la préparation. Il permet le jeu partagé Java/Bedrock pour les versions indiquées par le catalogue Geyser. Les versions Bedrock peuvent différer des versions Java. L’application ne prétend pas que les mods, packs, extensions ou consoles fonctionnent tous sans configuration.
-
-Pour les clients Bedrock récents, l’application impose un build Geyser compatible avec NetherNet, écrit explicitement `bedrock.transport: nethernet` aux nouvelles installations, aux migrations et aux mises à jour, puis vérifie la réponse de statut Java et le signalement Bedrock TCP depuis le Mac, ainsi que l’écoute du port Bedrock UDP sur le Pi. Aucune adresse de serveur de test ni ligne à ajouter manuellement par les joueurs n’est requise pour recréer le serveur. Ces contrôles ne réalisent pas une connexion de jeu complète depuis un iPad et ne garantissent pas l’absence d’un bug dans une version Minecraft, sur console ou dans un réseau extérieur.
-
-## Raspberry Pi
-
-Les serveurs Pi créés par cette version disposent d’une sauvegarde complète vers l’ordinateur, d’une restauration de sauvegarde vers un nouveau dossier Pi et d’une liste d’accès Java/Bedrock gérée depuis le tableau de bord. Le contrôle RCON reste limité à la boucle locale du Pi et chaque action passe par un tunnel SSH temporaire. Les installations Pi plus anciennes affichent un message dédié au lieu de modifier leur configuration en silence. La restauration vers Pi exige une archive contenant un profil Monde Ensemble reconnu et Paper, Geyser et Floodgate ; elle refuse les liens, les chemins dangereux, un serveur actif, une architecture non ARM64 ou un espace insuffisant. La copie restaurée reste arrêtée jusqu’à ce que l’utilisateur la démarre depuis le tableau de bord.
-
-Sur un Pi déjà démarré, choisis « Sur un Raspberry Pi », saisis le nom de son compte, puis sélectionne « Trouver mon Pi ». L’application cherche sur le réseau local; si plusieurs Pi répondent, choisis celui qui convient. Elle utilise uniquement une clé SSH déjà approuvée et refuse les connexions qui demandent un mot de passe ou une clé inconnue. Ensuite, confirme l’EULA et choisis « Installer et démarrer le serveur ». La confirmation indique l’adresse et les ports. Les clients du même réseau local utilisent cette adresse; l’accès depuis l’extérieur demande aussi un réglage du routeur. Le tableau du Pi indique son interface active, son IP et son adresse matérielle. Ouvre « Garder cette adresse sur la durée » et utilise les deux boutons de copie pour ajouter un bail statique ou permanent dans l’application Free : Mes équipements Freebox → Server internet → Paramètres réseau avancés → DHCP. Actualise le tableau après l’enregistrement pour relire l’adresse courante.
-
-Pour un Pi neuf sans stockage, la préparation commence sur l’ordinateur qui exécute l’application : branche la carte SD ou le SSD vide à cet ordinateur, détecte le support, relis son nom et sa capacité, puis confirme son effacement. Par défaut, l’application choisit dans le catalogue officiel l’image Raspberry Pi OS Lite 64 bits vérifiée la plus récente qui prend en charge Pi 3, 4 et 5, puis prépare Ethernet ou le Wi-Fi. Un parcours expert replié permet de choisir une autre image 64 bits du catalogue lorsqu’elle déclare le démarrage automatisé, le modèle est compatible, la mémoire est suffisante et le support a assez de place. Les URL et empreintes de l’image sont revérifiées juste avant l’écriture. Les images qui ne déclarent pas ces garanties ne sont pas proposées. Si tu saisis le mot de passe Wi-Fi, l’application le place temporairement dans un fichier de démarrage et programme la suppression de ce fichier au premier démarrage. Préfère le câble réseau si tu ne veux pas écrire le mot de passe sur la carte. Quand l’écriture est vérifiée, éteins le Pi avant d’y insérer la carte, connecte-le au même routeur, puis rallume-le. Le bouton de fin tente d’abord de joindre le nom unique inscrit sur la carte, puis recherche le service SSH sur le réseau local. Il affiche chaque tentative avant d’installer et de contrôler le serveur directement sur le Pi. Le modèle et la mémoire réels, les ports et l’espace libre sont vérifiés avant l’installation de Minecraft; si le modèle ne correspond pas au choix, l’installation s’arrête. L’ordinateur prépare la carte et pilote l’installation ; le Pi héberge le serveur.
-
-Sur Windows, l’installation de l’outil officiel peut déclencher la confirmation administrateur de Windows ; sur Mac/Linux, l’écriture du support demande l’autorisation du système. Cette étape est imposée par l’écriture d’un disque. L’application conserve la protection de Raspberry Pi Imager contre l’écriture sur le disque système.
-
-## Builds par plateforme
-
-Les icônes partent du master vectoriel `src-tauri/icon-source/logo_MUS.svg`. Le SVG dérivé place le logo sur un carré gris clair aux coins arrondis, avec un contour extérieur noir de 25 px sur l’icône 512 px. Les lettres M/U/S restent blanches. Le post-traitement `scripts/finish_mus_icons.py` recolore ces découpes blanches dans les PNG, puis dans les formats macOS `.icns` et Windows `.ico`; il harmonise aussi le fond de l’icône adaptative Android. Les ressources Linux, iOS et Android sont régénérées depuis le même dessin. Pour régénérer toutes les variantes, installe Pillow une fois (`python3 -m pip install Pillow`), puis lance :
-
-```sh
-npm run icons:generate
-```
-
-Les fichiers Android et iOS sont les ressources d’icône prêtes pour ces cibles; l’application actuelle ne dispose pas encore de projets mobiles Android/iOS initialisés.
-
-Le workflow GitHub Actions produit séparément des DMG et archives macOS Apple Silicon et Intel, un installateur Windows x64, puis des paquets Debian Linux x64 et ARM64. La compilation CI ne remplace pas une vérification interactive de chaque installateur sur son système cible. Le paquet ARM64 est destiné à un Linux graphique compatible avec les dépendances Tauri ; Raspberry Pi OS Lite est sans interface de bureau et ne lance pas cette application graphique.
-
-## Langues
-
-Le sélecteur de langue propose le français, l’anglais, le chinois simplifié, l’hindi, l’espagnol, l’arabe, le bengali, le portugais, le russe, l’ourdou et l’indonésien. La préférence est enregistrée localement. Cette première couverture localise la navigation, les pages d’entrée et les commandes de liste d’accès; les messages de diagnostic fournis par les serveurs tiers restent dans leur langue d’origine.
-
-## Compiler
-
-Prérequis : Node.js, Rust et les prérequis de compilation Tauri correspondant au système.
+The desktop app uses Tauri, Rust, React and TypeScript. Install Node.js, Rust, and the native build dependencies listed in the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your operating system. Then run:
 
 ```sh
 npm install
@@ -140,31 +72,130 @@ npm run build
 cd src-tauri && cargo check
 ```
 
-Pour ouvrir l’application pendant le développement ou produire un paquet local :
+To run the app during development or build a local package:
 
 ```sh
 npm run tauri dev
 npm run tauri build
 ```
 
-Le paquet Windows x64 est produit par compilation croisée depuis Mac, mais doit encore être lancé sur Windows pour valider son fonctionnement réel. La préparation d’un support Pi doit être vérifiée avec une carte/SSD de test et un Raspberry Pi physique ; le paquet ARM64 Linux ne valide pas Raspberry Pi OS Lite ni son premier démarrage.
+The project includes source artwork and platform icon assets. If you change the logo and want to regenerate the platform variants, install Pillow and run:
 
-Les paquets ne sont pas encore signés pour une distribution grand public : le paquet macOS local est signé ad hoc, Windows n’a pas de certificat éditeur et les paquets Linux ne sont pas signés par un dépôt. La publication des sources reste possible ; les binaires Windows/Linux seront marqués « à tester » jusqu’à validation sur ces systèmes. Voir [CONTRIBUTING.md](CONTRIBUTING.md) pour contribuer aux essais.
+```sh
+python3 -m pip install Pillow
+npm run icons:generate
+```
 
-## Principes de sécurité
+## Contributing and support
 
-- pas de remplacement de dossier lors d’une installation ou restauration ;
-- vérification HTTPS et SHA-256 des fichiers téléchargés ;
-- une sauvegarde n’est pas publiée si les ports Minecraft du serveur sont actifs au début ou à la fin de la copie ; sur Pi, l’archive temporaire est aussi relue avant son transfert ;
-- pas de mot de passe SSH enregistré ni de validation automatique de clé d’hôte ;
-- sauvegarde refusée si l’utilisateur ne confirme pas l’arrêt du serveur ;
-- restauration bloquée pour les liens et chemins d’archive dangereux ;
-- mise à jour Pi uniquement après contrôle de compatibilité et sauvegarde complète vérifiée ; en cas d’échec de démarrage, retour arrière à la sauvegarde précédente.
-- aucun remplacement d’un dossier existant lors d’une nouvelle installation ou d’une restauration.
+Bug reports, documentation improvements and platform testing are welcome. Please include the app version, operating system and version, computer architecture, steps to reproduce, expected and actual results, and relevant **redacted** logs. Never post Wi-Fi passwords, SSH private keys, access tokens, or unredacted server logs. Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a change and use [SECURITY.md](SECURITY.md) for private vulnerability reports.
 
-## Projet et aide
+- [Open an issue](https://github.com/djms66/Minecraft-Universal-Server/issues)
+- [Contributing and platform testing](CONTRIBUTING.md)
+- [Security policy](SECURITY.md)
+- [Third-party notices](THIRD_PARTY_NOTICES.md)
+- [Release history](https://github.com/djms66/Minecraft-Universal-Server/releases)
 
-- [Contribuer et tester une plateforme](CONTRIBUTING.md)
-- [Signaler une vulnérabilité](SECURITY.md)
-- [Licences et marques tierces](THIRD_PARTY_NOTICES.md)
+## License and trademarks
+
+The source code is distributed under the [MIT License](LICENSE). Third-party software, assets and trademarks retain their own licenses and terms. **Minecraft** is a trademark of Mojang Studios. Minecraft Universal Server is an independent project and is not affiliated with, endorsed by, or sponsored by Mojang Studios or Microsoft.
+
+---
+
+# Version française
+
+<p align="center"><strong>Un seul monde. Java + Bedrock. Tous les appareils.</strong></p>
+
+**Minecraft Universal Server (M.U.S.) t’aide à créer et gérer un monde Minecraft commun aux joueurs de Java Edition et Bedrock Edition.** L’application accompagne les débutants de la préparation d’un Raspberry Pi ou d’un ordinateur jusqu’à l’installation du serveur, à la gestion des joueurs, aux sauvegardes et à la maintenance.
+
+M.U.S. est une application de bureau indépendante pour **macOS, Windows et Linux**. Le serveur Minecraft peut fonctionner sur le même ordinateur que l’application ou sur un Raspberry Pi. L’application n’est pas un client Minecraft et ne fournit pas de relais public : les joueurs rejoignent ton serveur par le réseau local ou grâce aux réglages réseau que tu configures.
+
+[Télécharger une version](https://github.com/djms66/Minecraft-Universal-Server/releases) · [Parcourir le code source](https://github.com/djms66/Minecraft-Universal-Server) · [Signaler un problème](https://github.com/djms66/Minecraft-Universal-Server/issues)
+
+## Ce que tu peux faire
+
+- Créer un serveur commun Java/Bedrock avec Paper, Geyser et Floodgate.
+- Suivre une installation guidée sur ordinateur ou préparer un Raspberry Pi depuis une carte SD ou un SSD vierge. Le premier démarrage peut utiliser le Wi-Fi ou Ethernet.
+- Gérer le serveur, sa liste d’accès Java et Bedrock, son état et ses journaux depuis l’application.
+- Créer et restaurer des sauvegardes vérifiées sans écraser un dossier serveur ni une archive existante.
+- Vérifier les versions compatibles et appliquer des mises à jour coordonnées lorsque l’application peut en contrôler la compatibilité, avec une copie de retour arrière.
+- Utiliser les réglages avancés du serveur, des plugins pris en charge et des packs de ressources Bedrock.
+- Choisir parmi 11 langues pour les écrans actuellement traduits. La localisation reste incomplète ; les messages de Minecraft et des outils tiers restent dans leur langue d’origine.
+
+## Démarrage
+
+1. Ouvre la page [Releases](https://github.com/djms66/Minecraft-Universal-Server/releases) et choisis le paquet correspondant à ton ordinateur. Consulte les notes de version et l’état des plateformes avant de l’installer.
+2. Choisis **Cet ordinateur** pour héberger le serveur localement, ou **Raspberry Pi** pour préparer ou gérer un Pi.
+3. Pour un Pi neuf, branche sa carte SD ou son SSD vierge sur l’ordinateur qui exécute M.U.S. Choisis **Détecter le support**, vérifie son nom et sa capacité, puis confirme son effacement. L’image du système et les paramètres du premier démarrage seront écrits sur ce support. Les données présentes sur le support sélectionné seront effacées.
+4. Configure le Wi-Fi ou utilise Ethernet. En Wi-Fi, le Pi et l’ordinateur doivent rejoindre le même routeur. Pour permettre au Pi de se connecter, le mot de passe Wi-Fi est temporairement écrit sur le support de démarrage ; l’application programme sa suppression au premier démarrage. Choisis Ethernet si tu ne veux pas écrire le mot de passe sur la carte.
+5. Pi éteint, insère le support préparé, relie-le au même routeur, puis allume-le. Accepte la licence Minecraft dans l’application lorsqu’elle le demande. M.U.S. recherche le Pi, vérifie son identité SSH et son matériel, puis installe le serveur lorsqu’elle a confirmé la cible.
+6. Quand la préparation est terminée, utilise le tableau de bord pour démarrer le serveur, ajouter les noms de profil Java ou gamertags Bedrock autorisés, puis copier l’adresse affichée.
+
+Pour un serveur local, laisse l’ordinateur allumé pendant que le serveur fonctionne. Sur Pi, le serveur est hébergé par le Pi, qui doit rester allumé. Les joueurs du même réseau domestique utilisent l’adresse locale affichée. Pour inviter des joueurs depuis Internet, il peut être nécessaire de configurer le routeur et le pare-feu ; M.U.S. ne le fait pas à ta place.
+
+## Plateformes et état des versions
+
+Le projet vise des versions de bureau pour macOS (Apple silicon et Intel), Windows x64 et Linux x64/ARM64. Une compilation de CI ne prouve pas qu’un programme d’installation a été testé sur un ordinateur réel. Consulte la [version publiée](https://github.com/djms66/Minecraft-Universal-Server/releases) et le [workflow de compilation](https://github.com/djms66/Minecraft-Universal-Server/actions) pour connaître l’état actuel de chaque paquet.
+
+- **macOS :** les paquets ne sont pas notariés avec un certificat Apple Developer ID ; Gatekeeper peut afficher un avertissement.
+- **Windows :** les paquets ne sont pas signés avec un certificat d’éditeur ; SmartScreen peut afficher un avertissement.
+- **Linux :** les paquets nécessitent un bureau graphique compatible et les bibliothèques système Tauri/WebKit. Le paquet ARM64 est destiné à Linux de bureau ; il ne lance pas l’application graphique sur Raspberry Pi OS Lite.
+- **Raspberry Pi :** le Pi est une cible serveur gérée par l’application de bureau. Le profil serveur compact est conçu pour le Raspberry Pi 3B+ et les modèles ARM64 suivants. Le parcours guidé prépare une version 64 bits compatible de Raspberry Pi OS. Une image générée ou une compilation réussie ne remplace pas un essai du premier démarrage et du serveur sur le modèle de Pi et le support exacts.
+- **iOS, iPadOS et Android :** il n’existe pas de version mobile de l’application. Ces appareils peuvent utiliser Minecraft Bedrock comme clients si leur version de Minecraft et leur réseau peuvent joindre le serveur.
+
+Les paquets Windows et Linux doivent encore être testés sur leurs systèmes cibles. Tant que l’installation, le lancement, la préparation d’un support et la gestion d’un serveur n’ont pas été vérifiés sur ces systèmes, considère ces paquets comme des **versions de test**, pas comme des versions validées. Consulte [CONTRIBUTING.md](CONTRIBUTING.md) si tu peux aider.
+
+## Compatibilité Java et Bedrock
+
+M.U.S. associe un serveur Java (Paper) à Geyser et Floodgate pour que des clients Bedrock compatibles rejoignent le même monde que les joueurs Java. Lors de la préparation ou de la mise à jour d’un serveur géré, l’application consulte les informations des composants en amont et vérifie les fichiers téléchargés avant installation. Java et Bedrock n’utilisent pas toujours le même numéro de version ; la compatibilité dépend des versions prises en charge par la version de Geyser choisie.
+
+Cela ne garantit pas la compatibilité de chaque mod, plugin, pack de ressources, console, version d’essai Minecraft ou client tiers. Les modifications avancées peuvent changer la compatibilité. L’application bloque certaines mises à jour si elle détecte des personnalisations non prises en charge ou ne peut pas confirmer que les composants fonctionneront ensemble. Consulte les notes de version avant de mettre à jour un serveur existant.
+
+## Sauvegardes, mises à jour et protection des données
+
+- La préparation d’un support efface son contenu. M.U.S. identifie le support sélectionné et demande une confirmation avant l’écriture ; ne sélectionne jamais un disque contenant des données à conserver.
+- Les nouvelles installations et restaurations utilisent un nouveau dossier. Les dossiers serveur et sauvegardes existants ne sont pas remplacés sans confirmation.
+- Les opérations de sauvegarde et de restauration contrôlent l’archive et ses chemins. Conserve une copie supplémentaire des mondes importants en dehors du support serveur.
+- Les mises à jour gérées contrôlent les versions des composants et l’état du serveur. Si une mise à jour ne peut pas être validée, elle est bloquée ; lorsqu’un retour arrière est pris en charge, la copie précédente est conservée.
+- Les téléchargements utilisent HTTPS et des contrôles d’intégrité lorsque les sommes de contrôle sont disponibles en amont. La gestion SSH utilise la clé de l’application et exige l’approbation de l’identité de l’hôte ; ne partage ni clé privée ni journal de diagnostic contenant des secrets.
+- Si tu configures le Wi-Fi pour le premier démarrage, le mot de passe se trouve temporairement sur le support de démarrage. Préfère Ethernet si cela ne te convient pas.
+
+Ces protections réduisent les risques de perte accidentelle ; elles ne remplacent pas une sauvegarde séparée et ne peuvent empêcher toutes les défaillances matérielles, réseau ou tierces.
+
+## Compiler depuis les sources
+
+L’application de bureau utilise Tauri, Rust, React et TypeScript. Installe Node.js, Rust et les dépendances natives indiquées dans les [prérequis Tauri](https://v2.tauri.app/start/prerequisites/) pour ton système, puis lance :
+
+```sh
+npm install
+npm run build
+cd src-tauri && cargo check
+```
+
+Pour lancer l’application en développement ou créer un paquet local :
+
+```sh
+npm run tauri dev
+npm run tauri build
+```
+
+Le dépôt contient les illustrations sources et les icônes de plateformes. Si tu modifies le logo et veux régénérer les variantes, installe Pillow puis lance :
+
+```sh
+python3 -m pip install Pillow
+npm run icons:generate
+```
+
+## Contribuer et obtenir de l’aide
+
+Les signalements de bugs, améliorations de documentation et essais de plateformes sont les bienvenus. Indique la version de l’application, le système et sa version, l’architecture de l’ordinateur, les étapes de reproduction, le résultat attendu et obtenu, ainsi que des journaux **expurgés**. Ne publie jamais de mot de passe Wi-Fi, clé SSH privée, jeton d’accès ou journal serveur non expurgé. Lis [CONTRIBUTING.md](CONTRIBUTING.md) avant de proposer une modification et utilise [SECURITY.md](SECURITY.md) pour signaler une vulnérabilité en privé.
+
+- [Ouvrir un ticket](https://github.com/djms66/Minecraft-Universal-Server/issues)
+- [Contribuer et tester les plateformes](CONTRIBUTING.md)
+- [Politique de sécurité](SECURITY.md)
+- [Mentions des tiers](THIRD_PARTY_NOTICES.md)
 - [Historique des versions](https://github.com/djms66/Minecraft-Universal-Server/releases)
+
+## Licence et marques
+
+Le code source est distribué sous [licence MIT](LICENSE). Les logiciels, ressources et marques de tiers restent régis par leurs licences et conditions respectives. **Minecraft** est une marque de Mojang Studios. Minecraft Universal Server est un projet indépendant, sans affiliation, approbation ni parrainage de Mojang Studios ou de Microsoft.

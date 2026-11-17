@@ -122,7 +122,7 @@ def main() -> None:
     background_xml = ICON_DIR / "android" / "values" / "ic_launcher_background.xml"
     if background_xml.exists():
         text = background_xml.read_text()
-        background_xml.write_text(text.replace("#FFFFFF", "#E0E2E5").replace("#ffffff", "#E0E2E5"))
+        background_xml.write_text(text.replace("#FFFFFF", "#D3D6DA").replace("#ffffff", "#D3D6DA"))
     print(f"Colorized M/U/S in {len(pngs)} PNG assets and embedded macOS icon sizes.")
 
 

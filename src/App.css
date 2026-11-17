@@ -2759,6 +2759,7 @@ html[dir="rtl"] .sidebar { left: auto; right: 0; }
 }
 
 /* Beginner-first redesign: readable type, one obvious next action, details on demand. */
+/* Refonte orientée débutants : texte lisible, prochaine action évidente, détails à la demande. */
 :root {
   font-size: 16px;
   --ink: #202923;
@@ -2856,6 +2857,7 @@ button { min-height: 44px; }
 .footer { display: none; }
 .content-column { max-width: 100%; }
 
+/* Installation */
 /* Installation */
 .install-layout { display: block; max-width: 980px; }
 .install-layout:has(.pi-panel) { max-width: 1080px; }
@@ -3010,7 +3012,14 @@ button { min-height: 44px; }
 .pi-advanced-storage summary { min-height: 44px; padding: 12px 4px; color: #3f5947; font-size: 14px; font-weight: 650; }
 .pi-advanced-storage p { padding: 12px; font-size: 14px; line-height: 1.5; }
 .pi-detect-support { margin-top: 18px; padding-top: 16px; }
+.pi-detect-support { display: grid; gap: 12px; }
 .pi-detect-support .button { width: 100%; min-height: 54px; margin: 0; border-radius: 7px; font-size: 17px; font-weight: 700; }
+.pi-emergency-erase { border: 1px solid #e3c8bf; border-radius: 7px; background: #fffaf8; }
+.pi-emergency-erase summary { min-height: 44px; padding: 12px 15px; color: #754536; cursor: pointer; font-size: 14px; font-weight: 700; }
+.pi-emergency-erase-content { display: grid; gap: 12px; padding: 0 15px 15px; }
+.pi-emergency-erase-content p { margin: 0; color: #644f48; font-size: 14px; line-height: 1.5; }
+.pi-detect-support .pi-emergency-erase-button { width: auto; min-height: 42px; justify-self: start; padding: 9px 15px; border: 1px solid #a94d3c; border-radius: 6px; background: #fff; color: #8c382b; font-size: 14px; }
+.pi-detect-support .pi-emergency-erase-button:hover { background: #fbe8df; }
 .pi-detect-support .pi-scan-status, .pi-detect-support .pi-error, .pi-detect-support .pi-help { font-size: 14px; line-height: 1.5; }
 .pi-storage-list { gap: 10px; margin: 14px 0; }
 .pi-storage-list li { padding: 14px 15px; border-radius: 7px; }
@@ -3025,6 +3034,7 @@ button { min-height: 44px; }
 .eula-choice { font-size: 14px; }
 
 /* Keep server tools readable without making every detail compete for attention. */
+/* Garder les outils serveur lisibles sans mettre tous les détails au même niveau. */
 .operation-card, .action-panel, .release-summary { padding: 20px; border-radius: 8px; }
 .operation-card > p, .action-description { font-size: 14px; line-height: 1.55; }
 .path-note { font-size: 12px; line-height: 1.45; }
@@ -3084,6 +3094,7 @@ button { min-height: 44px; }
 }
 
 /* German labels are longer; wrap them instead of clipping the interface. */
+/* Les libellés allemands sont plus longs : les renvoyer à la ligne plutôt que les couper. */
 .app-shell:lang(de) .topbar { gap: 12px; padding-inline: 28px; }
 .app-shell:lang(de) .top-status { min-width: 0; }
 .app-shell:lang(de) .top-status > span {

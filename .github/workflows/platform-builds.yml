@@ -3,6 +3,7 @@ name: Platform builds
 on:
   push:
     branches: [main]
+    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
@@ -88,14 +89,14 @@ jobs:
         run: |
           version=$(node -p "require('./package.json').version")
           ditto -c -k --sequesterRsrc --keepParent \
-            "src-tauri/target/release/bundle/macos/Monde Ensemble.app" \
-            "src-tauri/target/release/bundle/macos/Monde-Ensemble-${version}-macOS-${ARCH}.zip"
+            "src-tauri/target/release/bundle/macos/Minecraft Universal Server.app" \
+            "src-tauri/target/release/bundle/macos/Minecraft-Universal-Server-${version}-macOS-${ARCH}.zip"
 
       - name: Upload macOS artifacts
         if: runner.os == 'macOS'
         uses: actions/upload-artifact@v4
         with:
-          name: monde-ensemble-${{ matrix.label }}
+          name: mus-${{ matrix.label }}
           path: |
             src-tauri/target/release/bundle/dmg/*.dmg
             src-tauri/target/release/bundle/macos/*.zip
@@ -106,7 +107,7 @@ jobs:
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v4
         with:
-          name: monde-ensemble-${{ matrix.label }}
+          name: mus-${{ matrix.label }}
           path: src-tauri/target/release/bundle/nsis/*.exe
           if-no-files-found: error
           retention-days: 14
@@ -115,7 +116,52 @@ jobs:
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: monde-ensemble-${{ matrix.label }}
+          name: mus-${{ matrix.label }}
           path: src-tauri/target/release/bundle/deb/*.deb
           if-no-files-found: error
           retention-days: 14
+
+  draft-release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Download all platform installers
+        uses: actions/download-artifact@v4
+        with:
+          pattern: mus-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Check release tag matches application version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          test "$GITHUB_REF_NAME" = "v$version"
+
+      - name: Create SHA-256 checksums
+        run: sha256sum release-assets/* > release-assets/SHA256SUMS.txt
+
+      - name: Create GitHub draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > release-notes.md <<'NOTES'
+          ## Test release
+
+          This release contains automated builds for macOS Apple Silicon and Intel, Windows x64, and Linux x64/ARM64.
+
+          **Windows and Linux packages have only been compiled in CI. They have not yet been interactively validated on those operating systems.** Please treat them as tester builds and report the OS version and results before relying on them for a new server installation.
+
+          macOS packages are not notarized with a Developer ID certificate. Windows packages are not signed with a publisher certificate. Do not treat these installers as a warning-free general release.
+
+          SHA-256 checksums for all attached installers are included in `SHA256SUMS.txt`.
+          NOTES
+          gh release create "$GITHUB_REF_NAME" release-assets/* \
+            --draft --prerelease \
+            --title "Minecraft Universal Server $GITHUB_REF_NAME" \
+            --notes-file release-notes.md

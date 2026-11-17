@@ -116,7 +116,11 @@ type PiFlashResult = {
 };
 
 const PI_FIRST_BOOT_WAIT_MS = 240_000;
-const PI_DISCOVERY_TIMEOUT_MS = 5 * 60_000;
+// A fresh Pi can take several minutes to finish cloud-init and join Wi-Fi.
+// Keep looking long enough for slow first boots instead of failing at five minutes.
+// Un Pi neuf peut mettre plusieurs minutes à terminer cloud-init et rejoindre le Wi-Fi.
+// La recherche reste active assez longtemps pour les premiers démarrages lents.
+const PI_DISCOVERY_TIMEOUT_MS = 12 * 60_000;
 type PiInstallation = {
   host: string;
   username: string;
@@ -221,10 +225,6 @@ function readSavedLocalInstallation(): LocalInstallation | null {
   }
 }
 
-function hasSavedServerRegistration() {
-  return Boolean(readSavedLocalInstallation() || readSavedPiInstallation());
-}
-
 function App() {
   const [locale, setLocale] = useState<Locale>(() => {
     const stored = localStorage.getItem("monde-ensemble.locale");
@@ -232,9 +232,7 @@ function App() {
       ? (stored as Locale)
       : "fr";
   });
-  const [page, setPage] = useState<Page>(() =>
-    hasSavedServerRegistration() ? "home" : "install",
-  );
+  const [page, setPage] = useState<Page>("install");
   const [advanced, setAdvanced] = useState(false);
   const [showExistingPiFlow, setShowExistingPiFlow] = useState(false);
   const [justInstalled, setJustInstalled] = useState(false);
@@ -262,8 +260,10 @@ function App() {
   const [piWifiSsid, setPiWifiSsid] = useState("");
   const [piWifiPassword, setPiWifiPassword] = useState("");
   const [piWifiCountry, setPiWifiCountry] = useState("FR");
-  // A verified card session is recovered from the app's write log on launch,
-  // so closing the app cannot strand a successfully prepared Raspberry Pi.
+  // A card is considered prepared only in the session that wrote and verified it.
+  // Historical logs cannot prove which card is currently connected.
+  // Une carte n’est prête que dans la session qui l’a écrite et vérifiée.
+  // Un ancien journal ne prouve pas quelle carte est branchée maintenant.
   const [piFlashResult, setPiFlashResult] = useState<PiFlashResult | null>(null);
   const [piFlashNeedsRecovery, setPiFlashNeedsRecovery] = useState(false);
   const [piFlashTargetAttempt, setPiFlashTargetAttempt] =
@@ -315,7 +315,16 @@ function App() {
   const [piPlayerMessage, setPiPlayerMessage] = useState("");
   const [localInstallation, setLocalInstallation] =
     useState<LocalInstallation | null>(readSavedLocalInstallation);
-  const hasManagedServer = Boolean(localInstallation || piInstallation);
+  const [verifiedLocalPath, setVerifiedLocalPath] = useState("");
+  const [verifiedPiInstallation, setVerifiedPiInstallation] = useState("");
+  const piInstallationKey = piInstallation
+    ? `${piInstallation.host}|${piInstallation.username}|${piInstallation.serverFolder}`
+    : "";
+  const hasManagedServer = Boolean(
+    (localInstallation && verifiedLocalPath === localInstallation.serverPath) ||
+      (piInstallation && verifiedPiInstallation === piInstallationKey),
+  );
+  const hasSavedServerProfile = Boolean(localInstallation || piInstallation);
   const visibleNav = hasManagedServer
     ? nav
     : [{ id: "install" as const, label: "Installer", icon: "＋" }];
@@ -387,27 +396,54 @@ function App() {
 
   useEffect(() => {
     let active = true;
-    localStorage.removeItem("monde-ensemble.pi-flash-session");
-    localStorage.removeItem("monde-ensemble.pi-force-fresh");
-    invoke<PiFlashResult | null>("recover_prepared_pi")
-      .then((result) => {
-        if (!active || !result) return;
-        setPiFlashResult(result);
-        setPiFlashExpectedModel("");
-        setPiFlashExpectedDevices(result.expected_devices);
-        setPiUser("minecraft");
-        setTarget("pi");
-        setPage("install");
-        setConnection("Carte déjà préparée · reprise de l’installation sans nouvel effacement");
-      })
-      .catch(() => {
-        // Recovery is best-effort; a missing or incomplete log leaves the
-        // normal first-install flow untouched.
-      });
+    const inspectSavedInstallations = async () => {
+      const checks: Promise<void>[] = [];
+      if (localInstallation) {
+        const installation = localInstallation;
+        checks.push(
+          invoke<LocalServerStatus>("inspect_local_server", {
+            serverPath: installation.serverPath,
+          }).then((status) => {
+            if (!active) return;
+            setLocalServerStatus(status);
+            setLocalStatusError("");
+            setVerifiedLocalPath(installation.serverPath);
+          }).catch(() => {
+            // Keep the saved path, but do not expose management until it exists.
+            // Conserve le chemin, mais masque la gestion tant que le dossier manque.
+          }),
+        );
+      }
+      if (piInstallation) {
+        const installation = piInstallation;
+        const key = `${installation.host}|${installation.username}|${installation.serverFolder}`;
+        checks.push(
+          invoke<PiServerStatus>("inspect_pi_server", {
+            host: installation.host,
+            username: installation.username,
+            serverFolder: installation.serverFolder,
+          }).then((status) => {
+            if (!active) return;
+            setPiServerStatus(status);
+            setPiStatusError("");
+            setVerifiedPiInstallation(key);
+          }).catch(() => {
+            // A Pi that is offline cannot confirm that its server is installed.
+            // Un Pi hors ligne ne peut pas confirmer que son serveur est installé.
+          }),
+        );
+      }
+      await Promise.all(checks);
+    };
+    void inspectSavedInstallations();
     return () => {
       active = false;
     };
-  }, []);
+  }, [localInstallation?.serverPath, piInstallationKey]);
+
+  useEffect(() => {
+    if (!hasManagedServer && page !== "install") setPage("install");
+  }, [hasManagedServer, page]);
 
   useEffect(() => {
     if (localInstallation) {
@@ -931,6 +967,9 @@ function App() {
     } finally {
       setBusy(false);
       setPiWriteCancelRequested(false);
+      // A completed write must not leave its cancel control visible during install.
+      // Une écriture terminée ne doit pas laisser son bouton d’arrêt pendant l’installation.
+      piFlashWritingStarted.current = false;
       piCardWriteStarted.current = false;
     }
   };
@@ -1026,15 +1065,10 @@ function App() {
       let device: DiscoveredPi | undefined;
       let lastError = "";
       const discoveryStartedAt = Date.now();
-      let attempt = 0;
       while (Date.now() - discoveryStartedAt < PI_DISCOVERY_TIMEOUT_MS) {
-        attempt += 1;
         const elapsed = Date.now() - discoveryStartedAt;
         setOperationProgress({
-          step:
-            attempt === 1
-              ? "Connexion au Pi préparé…"
-              : `Recherche du Pi · tentative ${attempt} · ${Math.floor(elapsed / 60_000)} min ${String(Math.floor((elapsed % 60_000) / 1000)).padStart(2, "0")} s`,
+          step: `Recherche du Pi sur le réseau · ${Math.floor(elapsed / 60_000)} min ${String(Math.floor((elapsed % 60_000) / 1000)).padStart(2, "0")} s écoulées`,
           percent: 0,
           indeterminate: true,
         });
@@ -1280,6 +1314,7 @@ function App() {
     if ((page === "home" || page === "advanced") && piInstallation)
       void refreshPiStatus(false);
     // A status check runs when the saved server dashboard is opened.
+    // Vérification d’état lancée à l’ouverture du tableau de bord serveur.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, piInstallation?.serverFolder]);
 
@@ -1386,6 +1421,7 @@ function App() {
     if ((page === "home" || page === "advanced") && localInstallation)
       void refreshLocalStatus();
     // The saved local path is the only input to this read-only status refresh.
+    // Le chemin local enregistré est l’unique cible de cette actualisation en lecture seule.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, localInstallation?.serverPath]);
 
@@ -1396,6 +1432,7 @@ function App() {
       setLocalWhitelistStatus(null);
     }
     // RCON refresh is read-only; the saved local path is its only target.
+    // L’actualisation RCON est en lecture seule ; seul le chemin local enregistré est ciblé.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [page, localServerStatus?.running, localInstallation?.serverPath]);
 
@@ -1747,8 +1784,10 @@ function App() {
     install: hasManagedServer
       ? serverConfirmedReady
         ? "Créer une installation séparée. Le serveur en ligne ne sera pas modifié."
-        : "Le profil enregistré est conservé. L’état du serveur n’est pas confirmé; la nouvelle installation reste séparée."
-      : "On avance ensemble, étape par étape, jusqu’à ta première connexion.",
+        : "L’installation a été détectée; son état sera vérifié quand le serveur sera accessible."
+      : hasSavedServerProfile
+        ? "Le profil précédent est conservé, mais son installation n’a pas pu être vérifiée. L’application ne la déclare pas prête sur la base d’un ancien journal."
+        : "On avance ensemble, étape par étape, jusqu’à ta première connexion.",
     compat:
       "Les règles qui rendront les mises à jour sûres, expliquées sans jargon.",
     backup:
@@ -1769,7 +1808,11 @@ function App() {
           />
         </div>
         <div className="side-label">
-          {hasManagedServer ? "TON SERVEUR" : "PREMIÈRE INSTALLATION"}
+          {hasManagedServer
+            ? "TON SERVEUR"
+            : hasSavedServerProfile
+              ? "PROFIL À VÉRIFIER"
+              : "PREMIÈRE INSTALLATION"}
         </div>
         <nav>
           {visibleNav.map((item) => (
@@ -1805,15 +1848,19 @@ function App() {
               {hasManagedServer
                 ? serverConfirmedReady
                   ? "Serveur prêt"
-                  : "Connexion enregistrée"
-                : "Aucun serveur installé"}
+                  : "Installation détectée"
+                : hasSavedServerProfile
+                  ? "Installation non vérifiée"
+                  : "Aucun serveur installé"}
             </strong>
             <small>
               {hasManagedServer
                 ? serverConfirmedReady
                   ? "État confirmé en ligne"
-                  : "Serveur non confirmé en ligne"
-                : "Le guide va partir de zéro"}
+                  : "Le serveur est conservé, état hors ligne ou à vérifier"
+                : hasSavedServerProfile
+                  ? "Profil conservé · connexion requise pour vérifier"
+                  : "Le guide va partir de zéro"}
             </small>
           </div>
         </div>
@@ -1848,7 +1895,9 @@ function App() {
                 ? serverConfirmedReady
                   ? "SERVEUR EN LIGNE · MONDE PROTÉGÉ"
                   : "CONNEXION ENREGISTRÉE · ÉTAT À VÉRIFIER"
-                : "ÉTAPE 1 · AUCUN SERVEUR INSTALLÉ"}
+                : hasSavedServerProfile
+                  ? "PROFIL CONSERVÉ · INSTALLATION À VÉRIFIER"
+                  : "ÉTAPE 1 · AUCUN SERVEUR INSTALLÉ"}
             </span>
             <div className="beginner-pill">
               <span>✦</span> MODE {advanced ? "AVANCÉ" : "DÉBUTANT"}
@@ -2445,7 +2494,7 @@ function App() {
                       )}
                       <div className="pi-detect-support">
                         <button
-                          className="button secondary"
+                          className="button primary"
                           onClick={() => {
                             setPiEmergencyEraseMode(false);
                             void findPiBootTargets();
@@ -2460,17 +2509,29 @@ function App() {
                             : "Détecter la carte SD ou le SSD"}
                         </button>
                         {system?.os === "macos" && (
-                          <button
-                            className="button destructive pi-emergency-erase-button"
-                            type="button"
-                            onClick={() => {
-                              setPiEmergencyEraseMode(true);
-                              void findPiBootTargets();
-                            }}
-                            disabled={busy || piBootScanState === "scanning"}
-                          >
-                            Effacer une carte SD ou une clé USB · urgence
-                          </button>
+                          <details className="pi-emergency-erase">
+                            <summary>La carte ne démarre pas ? Effacement d’urgence</summary>
+                            <div className="pi-emergency-erase-content">
+                              <p>
+                                Cette option reformate entièrement une carte SD
+                                ou une clé USB et supprime toutes ses données.
+                                Utilise-la seulement si le support doit être
+                                remis à blanc. Pour préparer une carte neuve,
+                                le bouton vert ci-dessus suffit.
+                              </p>
+                              <button
+                                className="button destructive pi-emergency-erase-button"
+                                type="button"
+                                onClick={() => {
+                                  setPiEmergencyEraseMode(true);
+                                  void findPiBootTargets();
+                                }}
+                                disabled={busy || piBootScanState === "scanning"}
+                              >
+                                Choisir un support à effacer…
+                              </button>
+                            </div>
+                          </details>
                         )}
                         {piEmergencyEraseMode && (
                           <p className="pi-emergency-erase-hint" role="status">
@@ -2643,15 +2704,15 @@ function App() {
                           <ol className="pi-first-boot-steps">
                             <li>Éteins le Raspberry Pi et insère la carte.</li>
                             <li>
-                              Relie-le au même routeur que ce Mac avec un câble
-                              Ethernet. Si tu as configuré le Wi-Fi plus haut,
-                              il se connectera au démarrage.
+                              {piWifiSsid.trim()
+                                ? "Le Wi-Fi configuré plus haut sera utilisé au démarrage. Aucun câble Ethernet n’est nécessaire."
+                                : "Avec le Wi-Fi laissé vide, relie le Pi au même routeur que ce Mac avec un câble Ethernet."}
                             </li>
                             <li>
                               Rallume le Pi et laisse-le allumé. Pour son
                               premier démarrage, l’application attendra 4 min
                               après l’acceptation du contrat, puis cherchera
-                              le Pi pendant jusqu’à 5 min et lancera
+                              le Pi pendant jusqu’à 12 min et lancera
                               l’installation dès qu’il sera confirmé.
                             </li>
                           </ol>
@@ -2712,7 +2773,7 @@ function App() {
                             }
                           >
                             {busy
-                              ? "Recherche du Pi (jusqu’à 5 min)…"
+                              ? "Recherche du Pi (jusqu’à 12 min)…"
                               : piBootWaitComplete
                                 ? "Réessayer la détection du Pi"
                                 : "Attendre le démarrage du Pi"}

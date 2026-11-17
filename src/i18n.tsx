@@ -704,6 +704,8 @@ const serverStateCatalogs: Record<
 
 // Texte du parcours de première installation. Les libellés restent courts
 // pour préserver les cartes et les étapes dans les langues plus longues.
+// First-installation flow text. Keep labels short so cards and steps remain clear
+// in languages that need more space.
 const installFlowCatalogs: Partial<Record<Locale, Record<string, string>>> = {
   en: {
     "Le profil enregistré est conservé. L’état du serveur n’est pas confirmé; la nouvelle installation reste séparée.": "The saved profile is kept. The server is not confirmed online; this setup stays separate.",
@@ -1152,6 +1154,7 @@ const wifiSetupCatalogs: Partial<Record<Locale, Record<string, string>>> = {
 
 // Gemeinsam verwendete Beschriftungen und Hilfetexte für Dashboard,
 // Kompatibilität, Sicherungen und Experteneinstellungen.
+// Shared labels and help text for the dashboard, compatibility, backups, and expert settings.
 const productUiCatalogs: Partial<Record<Locale, Record<string, string>>> = {
   de: {
     "Vérifie l’état du serveur et retrouve l’adresse à saisir dans Minecraft.": "Prüfe den Serverstatus und finde die Adresse für Minecraft.",

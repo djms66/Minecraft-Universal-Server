@@ -3,6 +3,9 @@
 //! The pinned official utility is downloaded on demand and checked against the
 //! SHA-256 published by Raspberry Pi. Its own removable-drive guard and image
 //! verification remain enabled for every write.
+//! L’outil officiel épinglé est téléchargé à la demande et comparé à l’empreinte
+//! SHA-256 publiée par Raspberry Pi. Sa protection des supports amovibles et la
+//! vérification de l’image restent actives pour chaque écriture.
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -59,6 +62,9 @@ pub struct PiFlashResult {
 /// Restores the latest completed first-boot card session after an application
 /// restart. Only the newest log is considered, so an older prepared card can
 /// never silently replace a newer failed or incomplete attempt.
+/// Restaure la session de préparation de carte la plus récente après le redémarrage
+/// de l’application. Seul le journal récent est pris en compte afin qu’une ancienne
+/// carte ne remplace pas silencieusement une tentative plus récente échouée.
 pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResult>, String> {
     let root = app_data.join("pi-first-boot");
     let entries = match fs::read_dir(&root) {
@@ -131,6 +137,8 @@ pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResul
         // The prepared image is app-owned and was validated against the
         // official Pi OS catalogue before writing. Hardware is checked again
         // against the Pi's reported model before any server files are copied.
+        // L’image préparée a été validée dans le catalogue officiel avant écriture.
+        // Vérifier le modèle réel du Pi avant d’y transférer les fichiers serveur.
         expected_devices: Vec::new(),
     }))
 }
@@ -138,6 +146,9 @@ pub fn recover_latest_prepared_pi(app_data: &Path) -> Result<Option<PiFlashResul
 /// Records that the user deliberately left a restored card-preparation flow.
 /// Keep the diagnostic logs; this marker only prevents an old successful log
 /// from trapping the next launch in the obsolete "card ready" screen.
+/// Enregistre que l’utilisateur a volontairement quitté la préparation restaurée.
+/// Conserver les journaux ; ce marqueur évite qu’un ancien succès bloque le prochain
+/// lancement sur l’écran obsolète de carte prête.
 pub fn clear_prepared_pi_recovery(app_data: &Path) -> Result<(), String> {
     let root = app_data.join("pi-first-boot");
     fs::create_dir_all(&root).map_err(io_error)?;
@@ -156,6 +167,8 @@ struct MountedImager {
 /// Confirms the pinned macOS Imager can launch before the user is asked to
 /// approve erasing a removable drive. Dropping the handle also releases any
 /// temporary mount created for this check.
+/// Vérifie que la version épinglée de Raspberry Pi Imager démarre avant de demander
+/// l’effacement d’un support amovible. La fermeture du handle libère tout montage temporaire.
 pub fn check_macos_writer(app_data: &Path) -> Result<String, String> {
     if std::env::consts::OS != "macos" {
         return Err("La vérification préalable est disponible sur macOS uniquement.".into());
@@ -200,6 +213,9 @@ impl Drop for MountedImager {
 /// Writes the current official 64-bit Lite image and provisions SSH plus
 /// DHCP networking. The caller must revalidate the selected removable disk
 /// and obtain explicit erase confirmation immediately before calling here.
+/// Écrit l’image Lite officielle 64 bits et configure SSH ainsi que le réseau DHCP.
+/// L’appelant revérifie le disque amovible et demande la confirmation d’effacement
+/// immédiatement avant cet appel.
 pub fn flash_pi_os(
     app_data: &Path,
     target_device: &str,
@@ -216,6 +232,8 @@ pub fn flash_pi_os(
 ) -> Result<PiFlashResult, String> {
     // The caller first validates this exact URL against the official Imager
     // catalog; keep HTTPS and SHA-256 checks here as defense in depth.
+    // L’appelant valide cette URL exacte dans le catalogue officiel ; garder aussi
+    // les contrôles HTTPS et SHA-256 ici comme protection supplémentaire.
     if !image_url.starts_with("https://")
         || !valid_sha256(image_sha256)
         || download_sha256.is_some_and(|hash| !valid_sha256(hash))
@@ -249,6 +267,8 @@ pub fn flash_pi_os(
     )?;
     // Downloading can take several minutes. Recheck the exact removable disk
     // after it finishes and immediately before the official writer opens it.
+    // Le téléchargement peut prendre plusieurs minutes. Revérifier le disque choisi
+    // après le téléchargement et juste avant que l’outil officiel l’ouvre.
     verify_target()?;
 
     let ssh_key = ensure_ssh_public_key(app_data)?;
@@ -292,6 +312,8 @@ pub fn flash_pi_os(
     run_imager(&tool, &args, &log_path, &redactions, &progress, &cancelled)?;
 
     // Sensitive cloud-init files are removed by the guard on success or error.
+    // Les fichiers cloud-init sensibles sont supprimés par la garde en cas de succès
+    // comme d’erreur.
     progress("Le système Raspberry Pi est écrit et vérifié.", 100);
     Ok(PiFlashResult {
         detail: format!("{image_name} écrit et vérifié sur {target_device}."),
@@ -331,6 +353,9 @@ fn imager_cli_args(
 /// Downloads Raspberry Pi OS before unmounting the card. When the manifest
 /// includes a compressed-file hash, it is checked here. Otherwise Imager
 /// verifies the extracted image against `image_sha256` while writing it.
+/// Télécharge Raspberry Pi OS avant de démonter la carte. Une empreinte du fichier
+/// compressé est vérifiée si le manifeste en fournit une ; sinon Imager compare
+/// l’image extraite à image_sha256 pendant l’écriture.
 pub fn download_pi_image(
     app_data: &Path,
     image_url: &str,
@@ -467,6 +492,8 @@ fn sensitive_log_values(
 
     // Debug logs may print these cloud-init values with JSON escaping. Keep
     // both the entered text and escaped forms out of the persistent log.
+    // Les journaux de débogage peuvent afficher ces valeurs cloud-init en JSON.
+    // Exclure du journal persistant le texte saisi et ses formes échappées.
     for value in [wifi_ssid, wifi_password] {
         if !value.is_empty() {
             if let Ok(encoded) = serde_json::to_string(value) {
@@ -770,6 +797,9 @@ fn run_imager(
     // The elevated process only writes to its inherited pipes. The ordinary
     // app process owns the log file and copies those bytes, so elevation never
     // follows a user-controlled log path.
+    // Le processus élevé n’écrit que dans ses canaux hérités. Le processus normal
+    // possède le journal et copie ces octets ; l’élévation ne suit donc aucun chemin
+    // de journal contrôlé par l’utilisateur.
     let log = Arc::new(Mutex::new(
         OpenOptions::new()
             .append(true)
@@ -791,6 +821,9 @@ fn run_imager(
         // The macOS Imager process is a direct child of the app. On Windows,
         // the elevated writer is spawned behind Start-Process and cannot be
         // safely stopped by killing its PowerShell parent.
+        // Sur macOS, Imager est un enfant direct de l’application. Sous Windows, le
+        // programme élevé est lancé par Start-Process et ne peut pas être arrêté en
+        // tuant de façon sûre son processus PowerShell parent.
         if std::env::consts::OS == "macos" && cancelled.load(Ordering::Acquire) {
             let _ = child.kill();
             let _ = child.wait();
@@ -955,6 +988,9 @@ fn write_redacted(input: &[u8], redactions: &[Vec<u8>], log: &Arc<Mutex<File>>) 
 /// Runs Imager as the signed-in user on macOS. Imager opens removable media
 /// through macOS authorization itself; wrapping the whole process in
 /// AppleScript elevation can stall device setup and buffers output until exit.
+/// Lance Imager avec le compte connecté sur macOS. L’outil ouvre les supports avec
+/// l’autorisation macOS ; l’élévation AppleScript peut bloquer la détection et retenir
+/// la sortie jusqu’à la fin du processus.
 fn spawn_macos_imager(tool: &MountedImager, args: &[String]) -> Result<Child, String> {
     Command::new(&tool.executable)
         .args(args)
@@ -1028,6 +1064,9 @@ fn update_write_progress(log_path: &Path, last_percent: &mut u8, progress: &impl
             // checks the downloaded image cache. Do not count that as SD
             // verification; only accept this phase after the card write hits
             // 100 percent.
+            // Imager journalise également « Verifying » pendant le contrôle de son
+            // cache. Ne pas confondre cela avec la vérification de la carte ; accepter
+            // cette phase uniquement après 100 % de l’écriture.
             latest_target_progress = Some((true, value));
         }
     }
@@ -1082,7 +1121,7 @@ fn network_config(ssid: &str, password: &str, country: &str) -> String {
     // Netplan v2 shape. Keep it aligned with Imager's own generator instead
     // of forcing a renderer that Raspberry Pi OS selects for itself.
     // La configuration réseau cloud-init suit le format Netplan v2 officiel.
-    // On laisse Raspberry Pi OS choisir son moteur réseau, comme Imager.
+    // Laissons Raspberry Pi OS choisir son moteur réseau, comme le fait Imager.
     let mut config = String::from(
         "network:\n  version: 2\n  ethernets:\n    eth0:\n      dhcp4: true\n      dhcp6: true\n      optional: true\n",
     );
@@ -1103,6 +1142,9 @@ fn user_data(public_key: &str, hostname: &str) -> String {
     // account. Keep its standard memberships while explicitly suppressing the
     // image's passwordless sudo policy; this account has no password and only
     // needs SSH access to run the server as an unprivileged user.
+    // Raspberry Pi OS fusionne user: avec le compte par défaut. Garder ses groupes
+    // habituels tout en désactivant explicitement sudo sans mot de passe ; ce compte
+    // sans mot de passe sert au SSH et au lancement du serveur sans privilèges.
     let cleanup = serde_json::to_string(
         r#"for d in /boot/firmware /boot /var/lib/cloud/instance /var/lib/cloud/instances; do find "$d" -maxdepth 2 -type f \( -name user-data -o -name network-config -o -name user-data.txt -o -name network-config.txt \) -delete 2>/dev/null || true; done"#,
     )
@@ -1110,6 +1152,9 @@ fn user_data(public_key: &str, hostname: &str) -> String {
     format!(
         // Cloud-init parses this as YAML; these must be real line breaks, not
         // the two-character sequence `\\n` (which makes the whole file invalid).
+        // Cloud-init lit ce contenu comme YAML : utiliser de vrais retours à la ligne,
+        // et non les deux caractères barre oblique inverse et n, qui invalideraient
+        // le fichier entier.
         "#cloud-config\nhostname: \"{hostname}\"\nmanage_etc_hosts: true\nuser:\n  name: \"minecraft\"\n  gecos: \"Monde Ensemble\"\n  shell: /bin/bash\n  lock_passwd: true\n  ssh_authorized_keys:\n    - {key}\n  sudo: null\nssh_pwauth: false\nruncmd:\n  - [systemctl, enable, --now, ssh]\n  - [bash, -lc, {cleanup}]\n"
     )
 }

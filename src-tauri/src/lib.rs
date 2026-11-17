@@ -13,6 +13,7 @@ mod engine;
 mod pi_imager;
 
 /// Hardware and operating-system facts used to choose a safe installation path.
+/// Informations matérielles et système utilisées pour choisir un parcours d’installation sûr.
 #[derive(Serialize)]
 struct SystemInfo {
     os: String,
@@ -27,6 +28,8 @@ struct SystemInfo {
 
 /// A storage device that can be considered for a future Pi OS installation.
 /// Discovery is read-only; no command in this flow writes to the device.
+/// Support de stockage pouvant servir à une future installation de Pi OS.
+/// La détection est en lecture seule ; aucune commande de ce parcours n’écrit dessus.
 #[derive(Serialize)]
 struct PiBootTarget {
     id: String,
@@ -98,6 +101,9 @@ async fn erase_removable_support(
         // against fresh read-only discovery immediately before the privileged
         // format. This keeps the administrator prompt from accepting a path
         // supplied directly by the webview.
+        // L’identifiant est limité au nom de disque et aux chiffres ASCII. Il est
+        // comparé à une nouvelle détection en lecture seule juste avant le formatage
+        // avec privilèges, afin que la fenêtre ne puisse pas imposer un autre chemin.
         let script = format!(
             "do shell script \"/usr/sbin/diskutil eraseDisk ExFAT MUS /dev/{} GPT\" with administrator privileges",
             target.id
@@ -152,6 +158,8 @@ fn inspect_system() -> SystemInfo {
 
 /// Tests an existing SSH setup without writing to the remote computer.
 /// Password prompts are disabled; host keys must already be trusted.
+/// Vérifie une configuration SSH existante sans rien écrire sur l’ordinateur distant.
+/// Les demandes de mot de passe sont désactivées ; les clés hôtes doivent déjà être fiables.
 #[tauri::command]
 fn probe_ssh(host: String, username: String) -> Result<String, String> {
     if !valid_host(&host) || !valid_username(&username) {
@@ -174,6 +182,8 @@ fn probe_ssh(host: String, username: String) -> Result<String, String> {
     if !output.status.success() {
         // Do not surface arbitrary remote stderr in beginner mode. It can contain
         // local paths or account names that are not useful to the user here.
+        // Ne pas afficher en mode débutant les erreurs distantes arbitraires. Elles
+        // peuvent contenir des chemins ou noms de comptes locaux inutiles ici.
         return Err("Connexion non vérifiée. Vérifie que le Pi est allumé, que son accès SSH est configuré et que sa clé est déjà approuvée sur cet ordinateur.".into());
     }
 
@@ -213,6 +223,9 @@ async fn discover_new_pi(expected_hostname: String) -> Result<Vec<engine::Discov
 /// Lists likely removable SD/USB media while excluding the host's system disk.
 /// The actual imaging step must repeat these safety checks immediately before
 /// it writes, and must keep Raspberry Pi Imager's system-drive protection on.
+/// Détecte les supports SD/USB probablement amovibles en excluant le disque système.
+/// L’écriture doit répéter ces contrôles juste avant l’opération et conserver la
+/// protection du disque système de Raspberry Pi Imager.
 #[tauri::command]
 async fn discover_pi_boot_targets() -> Result<Vec<PiBootTarget>, String> {
     tauri::async_runtime::spawn_blocking(discover_pi_boot_targets_sync)
@@ -383,6 +396,9 @@ fn discover_macos_boot_targets() -> Result<Vec<PiBootTarget>, String> {
             // moment before Disk Arbitration exposes its writable device.
             // Retry this read-only probe once instead of asking the user to
             // remove and reinsert a card that is already seated correctly.
+            // Le lecteur intégré peut signaler la carte à System Profiler avant que
+            // Disk Arbitration n’expose son disque inscriptible. Réessayer cette
+            // vérification en lecture seule plutôt que de faire retirer la carte.
             thread::sleep(Duration::from_millis(900));
             discover_macos_boot_targets_once()
         }
@@ -418,6 +434,10 @@ fn discover_macos_boot_targets_once() -> Result<Vec<PiBootTarget>, String> {
     // "internal, physical", so `diskutil list external physical` omits it.
     // Match the card to its exact physical-media name when newer System
     // Profiler schemas omit the BSD identifier; never admit all internal disks.
+    // macOS classe la carte du lecteur intégré comme « internal, physical » ; la
+    // commande diskutil pour les disques externes l’omet donc. L’associer au nom exact
+    // du support physique si System Profiler ne fournit pas l’identifiant BSD, sans
+    // jamais autoriser tous les disques internes.
     let mut built_in_card_seen = false;
     let mut built_in_card_mapped = false;
     if let Ok(output) = command_output_timeout(
@@ -468,6 +488,10 @@ fn discover_macos_boot_targets_once() -> Result<Vec<PiBootTarget>, String> {
                             // their inserted-card identity with diskutil's exact
                             // physical-media name instead of admitting every
                             // internal disk as a possible erase target.
+                            // Les nouvelles versions de macOS omettent bsd_name et
+                            // removable_media pour les lecteurs SD intégrés. Associer
+                            // l’identité de la carte insérée au nom exact de diskutil,
+                            // sans considérer tous les disques internes effaçables.
                             cards_without_device_id
                                 .push((name, product.unwrap_or_default().to_string()));
                         }
@@ -591,6 +615,8 @@ fn discover_macos_boot_targets_once() -> Result<Vec<PiBootTarget>, String> {
 
 /// Runs read-only device discovery commands with a hard deadline so the UI
 /// cannot remain in a permanent "searching" state if macOS stalls a probe.
+/// Exécute les commandes de détection en lecture seule avec une limite de durée afin
+/// que l’interface ne reste pas indéfiniment en recherche si macOS bloque une sonde.
 fn command_output_timeout(command: &mut Command, timeout: Duration) -> io::Result<Output> {
     let mut child = command
         .stdout(Stdio::piped())

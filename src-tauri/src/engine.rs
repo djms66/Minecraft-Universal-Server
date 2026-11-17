@@ -3,6 +3,9 @@
 //! The engine never replaces a running installation. New servers and restores
 //! are assembled in a sibling staging folder and become visible only after all
 //! downloads, checksums, archive paths and generated configuration pass checks.
+//! Le moteur ne remplace jamais une installation en cours. Les nouveaux serveurs
+//! et restaurations sont préparés dans un dossier voisin, puis publiés seulement
+//! après validation des téléchargements, empreintes, chemins et réglages.
 
 use chrono::Utc;
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
@@ -26,9 +29,12 @@ use uuid::Uuid;
 use walkdir::WalkDir;
 
 /// Minimum resources required by the shared Java/Bedrock server profile.
+/// Ressources minimales requises pour le profil partagé Java/Bedrock.
 pub const MINIMUM_SERVER_MEMORY_GB: f64 = 2.0;
 /// A Pi with 1 GB physical RAM reports about 0.9 GiB in /proc/meminfo.
 /// This is the lower bound for the automatically selected compact Pi profile.
+/// Un Pi avec 1 Go de RAM physique indique environ 0,9 Gio dans /proc/meminfo.
+/// C’est le minimum du profil Pi compact sélectionné automatiquement.
 const MINIMUM_PI_MEMORY_GB: f64 = 0.8;
 const COMPACT_PI_MEMORY_GB: f64 = 2.0;
 const COMPACT_PI_HEAP_MB: u16 = 512;
@@ -38,6 +44,8 @@ const JAVA_DEFAULT_PORT: u16 = 25565;
 const BEDROCK_DEFAULT_PORT: u16 = 19132;
 // GeyserMC announced NetherNet support beginning at build 1237; Bedrock 26.60+
 // requires this transport. Older builds are not safe for managed cross-play.
+// GeyserMC a annoncé NetherNet à partir du build 1237 ; Bedrock 26.60+ exige
+// ce transport. Les builds antérieurs ne garantissent pas le jeu croisé géré.
 const MIN_GEYSER_NETHERNET_BUILD: u64 = 1237;
 const JAVA_ALTERNATE_PORT: u16 = 25566;
 const BEDROCK_ALTERNATE_PORT: u16 = 19133;
@@ -53,12 +61,15 @@ const SSH_NULL_DEVICE: &str = "NUL";
 const SSH_NULL_DEVICE: &str = "/dev/null";
 
 /// Stores the app-owned location used for first-boot Raspberry Pi SSH access.
+/// Enregistre l’emplacement géré par l’application pour le SSH du premier démarrage du Pi.
 pub fn configure_app_data_directory(path: PathBuf) {
     let _ = APP_DATA_DIRECTORY.set(path);
 }
 
 /// Runs SSH with the app's Pi key when one has been provisioned. Existing
 /// OpenSSH identities remain available for Pi installations made earlier.
+/// Utilise la clé Pi de l’application lorsqu’elle a été configurée. Les identités
+/// OpenSSH existantes restent disponibles pour les Pi installés auparavant.
 pub fn ssh_command() -> Command {
     let mut command = Command::new("ssh");
     add_managed_identity(&mut command);
@@ -89,6 +100,8 @@ fn add_identity_file(command: &mut Command, identity: &Path) {
 /// macOS may have many unrelated identities loaded in ssh-agent; OpenSSH can
 /// otherwise exhaust the server's authentication attempts before trying this
 /// application-owned key.
+/// macOS peut charger de nombreuses clés sans rapport dans ssh-agent ; OpenSSH
+/// pourrait épuiser ses essais avant d’essayer la clé propre à l’application.
 fn add_managed_identity_only(command: &mut Command, identity: &Path) -> bool {
     if !identity.is_file() {
         return false;
@@ -119,6 +132,9 @@ fn available_game_port(primary: u16, alternate: u16, udp: bool) -> Result<u16, S
             // Bedrock on recent clients uses UDP for gameplay and TCP for
             // NetherNet signaling on the same port. Reserve only a port that
             // is available for both transports before creating the profile.
+            // Les clients Bedrock récents utilisent l’UDP pour jouer et le TCP pour
+            // la signalisation NetherNet sur le même port. Ne réserver qu’un port
+            // disponible pour les deux transports avant de créer le profil.
             UdpSocket::bind(("0.0.0.0", port)).is_ok()
                 && TcpListener::bind(("0.0.0.0", port)).is_ok()
         } else {
@@ -424,6 +440,8 @@ PYCODE"#
 
 /// Installs a Bedrock-format resource pack in Geyser's documented packs
 /// directory. This does not convert Java packs or claim client compatibility.
+/// Installe un pack Bedrock dans le dossier Geyser documenté. Cela ne convertit
+/// pas les packs Java et ne garantit pas la compatibilité des clients.
 pub fn install_local_bedrock_pack(
     server_dir: &Path,
     source: &Path,
@@ -482,6 +500,9 @@ pub fn install_local_bedrock_pack(
 /// Transfers a validated Bedrock pack to the existing Geyser packs directory
 /// on a managed Pi. A hidden staging file is checked and linked into place only
 /// after the transfer hash and stopped-server checks pass.
+/// Transfère un pack Bedrock validé dans le dossier Geyser existant d’un Pi géré.
+/// Le fichier temporaire masqué n’est mis en place qu’après contrôle de l’empreinte
+/// et confirmation que le serveur est arrêté.
 pub fn install_pi_bedrock_pack(
     host: &str,
     username: &str,
@@ -949,6 +970,9 @@ fn set_server_property_values(properties: &str, updates: &[(&str, &str)]) -> Str
 /// Gameplay options exposed in expert mode. Ports, authentication, RCON,
 /// whitelist and world identity remain app-managed because other controls rely
 /// on them for secure cross-play and safe updates.
+/// Les options de jeu du mode expert sont exposées ici. Les ports, l’authentification,
+/// RCON, la liste d’accès et l’identité du monde restent gérés par l’application,
+/// car les autres contrôles en dépendent pour le jeu croisé et les mises à jour.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct GameSettings {
     pub motd: String,
@@ -979,6 +1003,9 @@ pub struct LocalWhitelistStatus {
 /// A Modrinth Paper plugin release whose metadata exactly matches the
 /// currently managed Minecraft version. This is discovery only: metadata
 /// cannot prove runtime behavior or Bedrock client compatibility.
+/// Version de plugin Paper Modrinth dont les métadonnées correspondent exactement
+/// à Minecraft. La recherche seule ne prouve ni le comportement à l’exécution ni la
+/// compatibilité des clients Bedrock.
 #[derive(Serialize)]
 pub struct PaperPluginSuggestion {
     pub project_id: String,
@@ -1085,6 +1112,7 @@ struct Artifact {
 }
 
 /// Removes an in-progress archive on every early-return path.
+/// Supprime une archive incomplète sur chaque retour anticipé.
 struct RemoveFileOnDrop(PathBuf);
 
 impl Drop for RemoveFileOnDrop {
@@ -1152,6 +1180,9 @@ pub fn compatibility() -> Result<CompatibilityReport, String> {
 /// Reads official, verifiable 64-bit images that support unattended first boot.
 /// The default remains the newest Raspberry Pi OS Lite recommendation; expert
 /// options are limited to catalog entries compatible with Pi 3, 4, or 5.
+/// Lit les images officielles 64 bits vérifiables qui acceptent le premier démarrage
+/// automatisé. Par défaut, choisit la version Lite recommandée la plus récente ; le
+/// mode expert se limite aux images compatibles avec Pi 3, 4 ou 5.
 pub fn pi_os_catalog() -> Result<PiOsCatalog, String> {
     const MANIFEST_URL: &str = "https://downloads.raspberrypi.com/os_list_imagingutility_v4.json";
     let client = client()?;
@@ -1252,6 +1283,10 @@ pub fn pi_os_device_generation(device: &str) -> Option<u8> {
 /// server-side environment declaration. Required dependencies remain visible
 /// as a count so the UI can avoid implying that these releases are one-click
 /// installable.
+/// Recherche Modrinth sans modifier le serveur. Le résultat doit être un projet
+/// répertorié avec une version Minecraft exacte, un build Paper et une déclaration
+/// serveur. Les dépendances obligatoires restent visibles afin de ne pas présenter
+/// ces versions comme installables en un clic.
 pub fn search_paper_plugins(
     minecraft_version: &str,
     query: &str,
@@ -1403,6 +1438,9 @@ pub fn search_paper_plugins(
 /// Adds a Modrinth plugin to a complete sibling copy of a stopped, managed
 /// local server. The original folder is never changed. Only exact-version,
 /// listed Paper releases without required dependencies are accepted.
+/// Ajoute un plugin Modrinth à une copie complète voisine d’un serveur local géré
+/// et arrêté. Le dossier original reste intact ; seules les versions Paper exactes,
+/// répertoriées et sans dépendance obligatoire sont acceptées.
 pub fn install_paper_plugin_copy(
     server_dir: &Path,
     project_id: &str,
@@ -1768,6 +1806,9 @@ pub fn install_paper_plugin_copy(
 /// Adds one verified Paper plugin to a new managed Pi server folder. The
 /// original server is only read and archived; a new sibling profile is
 /// published after the full copy and plugin checksum have been verified.
+/// Ajoute un plugin Paper vérifié à un nouveau dossier de serveur géré sur le Pi.
+/// Le serveur d’origine est seulement lu et archivé ; le nouveau profil est publié
+/// après vérification de la copie complète et de l’empreinte du plugin.
 pub fn install_pi_paper_plugin_copy(
     host: &str,
     username: &str,
@@ -2478,6 +2519,8 @@ pub fn install_local(
     }
     // Keep enough memory for the operating system and the desktop. The cap is
     // deliberately conservative for a beginner-friendly shared server.
+    // Garder assez de mémoire pour le système et le bureau. La limite est
+    // volontairement prudente pour un serveur partagé accessible aux débutants.
     let heap_mb = (((memory_gb * 0.4).floor() as u16).clamp(1, 6)) * 1024;
     let java_port = available_game_port(JAVA_DEFAULT_PORT, JAVA_ALTERNATE_PORT, false)?;
     let bedrock_port = available_game_port(BEDROCK_DEFAULT_PORT, BEDROCK_ALTERNATE_PORT, true)?;
@@ -2693,6 +2736,8 @@ fn terminate_local_process(child: &mut std::process::Child) {
 
 /// Reads only a server profile created by this application and confirms the
 /// live process by authenticating to its loopback-only RCON endpoint.
+/// Ne lit que les profils créés par l’application et confirme le processus actif
+/// en s’authentifiant sur son point RCON limité à la boucle locale.
 pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, String> {
     let server_dir = server_dir
         .canonicalize()
@@ -2780,6 +2825,9 @@ pub fn inspect_local_server(server_dir: &Path) -> Result<LocalServerStatus, Stri
 /// Read-only compatibility gate for an application-managed local server.
 /// Unknown extensions, custom resource packs, modified Geyser configuration,
 /// links, or an unrecognized runtime prevent an automatic update.
+/// Contrôle de compatibilité en lecture seule pour un serveur géré par l’application.
+/// Les extensions inconnues, packs personnalisés, réglages Geyser modifiés, liens
+/// ou runtimes non reconnus bloquent les mises à jour automatiques.
 pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
     let server_dir = server_dir
         .canonicalize()
@@ -3090,6 +3138,9 @@ pub fn check_local_update(server_dir: &Path) -> Result<PiUpdateCheck, String> {
 
 /// Gracefully stops a managed local server with Minecraft's authenticated
 /// loopback RCON command. No process is killed if RCON cannot confirm identity.
+/// Arrête proprement un serveur local géré avec la commande RCON authentifiée de
+/// Minecraft sur la boucle locale. Aucun processus n’est tué si RCON ne confirme pas
+/// son identité.
 pub fn stop_local_server(server_dir: &Path) -> Result<String, String> {
     let server_dir = server_dir
         .canonicalize()
@@ -3657,6 +3708,8 @@ pub fn export_pi_server_log(
 
 /// Restarts only an application-managed local server and waits for its
 /// authenticated RCON endpoint, Java port, and startup log before reporting ready.
+/// Redémarre uniquement une installation locale gérée et attend le point RCON
+/// authentifié, le port Java et le journal de démarrage avant de la déclarer prête.
 pub fn start_local_server(
     server_dir: &Path,
     progress: impl Fn(&str, u8),
@@ -4292,6 +4345,8 @@ fn read_rcon_packet(stream: &mut TcpStream) -> Result<(i32, i32, String), String
 
 /// Installs a complete Linux ARM64 server on an already configured Raspberry Pi.
 /// It only creates a new, uniquely named folder under the SSH account's home.
+/// Installe un serveur Linux ARM64 complet sur un Raspberry Pi déjà configuré.
+/// Crée uniquement un nouveau dossier au nom unique dans le dossier personnel SSH.
 pub fn install_remote_pi(
     host: &str,
     username: &str,
@@ -4389,6 +4444,9 @@ pub fn install_remote_pi(
     // macOS may resolve a lowercase filename as though it were the expected
     // uppercase name. Inspect the archive's actual member names before sending
     // it to Linux, where those two paths are different files.
+    // macOS peut assimiler un nom en minuscules à son équivalent en majuscules.
+    // Inspecter les noms réels de l’archive avant l’envoi vers Linux, où ces chemins
+    // désignent des fichiers distincts.
     validate_pi_server_package(&package_path)?;
 
     #[cfg(unix)]
@@ -4430,6 +4488,9 @@ pub fn install_remote_pi(
     // A Pi 3B+ can take more than seven minutes on its first world generation
     // and Geyser bootstrap. Keep polling long enough for that real startup,
     // while still bounding a genuinely failed launch.
+    // Sur Pi 3B+, la première génération du monde et le lancement de Geyser peuvent
+    // dépasser sept minutes. Continuer à vérifier assez longtemps, tout en imposant
+    // une limite à un lancement réellement bloqué.
     let startup_attempts = if heap_mb <= COMPACT_PI_HEAP_MB {
         360
     } else {
@@ -4544,6 +4605,8 @@ pub fn install_remote_pi(
 
 /// Uses local DNS-SD to find SSH devices and confirms Raspberry Pi identity
 /// without writing to any device. A configured SSH key is required.
+/// Recherche les appareils SSH du réseau local par DNS-SD et vérifie l’identité du
+/// Raspberry Pi sans écrire sur aucun appareil. Une clé SSH configurée est requise.
 pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
     discover_pi_internal(username, None)
 }
@@ -4551,6 +4614,9 @@ pub fn discover_pi(username: &str) -> Result<Vec<DiscoveredPi>, String> {
 /// Finds only the Pi provisioned by the first-boot card workflow. Its SSH
 /// host key is accepted on first contact only for the unique hostname written
 /// to that card; ordinary Pi discovery keeps strict host-key checking.
+/// Ne recherche que le Pi préparé par le flux de création de la carte. À la première
+/// connexion, sa clé hôte n’est acceptée que pour le nom unique inscrit sur la carte ;
+/// la découverte ordinaire conserve un contrôle strict.
 pub fn discover_new_pi(
     username: &str,
     expected_hostname: &str,
@@ -4571,46 +4637,62 @@ fn discover_pi_internal(
     // First-boot setup gives this card a random, app-owned hostname. Try it
     // directly before waiting for DNS-SD; some home routers resolve `.local`
     // names but do not advertise the SSH service consistently.
+    // La carte reçoit un nom aléatoire géré par l’application. Le tester avant
+    // DNS-SD, car certains routeurs résolvent les noms .local sans annoncer SSH.
     if let Some(expected) = expected_hostname {
         let host = format!("{expected}.local");
-        if let Ok(output) = run_ssh_timeout_policy(
+        match run_ssh_timeout_policy(
             &format!("{username}@{host}"),
             &remote_probe_command(),
             3,
             true,
         ) {
-            if let Ok(facts) = parse_remote_facts(&output)
-                && facts.hostname.eq_ignore_ascii_case(expected)
-            {
-                // The prepared hostname can resolve unreliably on home
-                // routers. Once its SSH identity is confirmed, also verify
-                // the reported IPv4 address and pin that address with the
-                // same accept-new policy. Later install/status calls can use
-                // the stable IP while strict host-key checking stays enabled.
-                if !facts.ip.is_empty()
-                    && let Ok(ip_output) = run_ssh_timeout_policy(
-                        &format!("{username}@{}", facts.ip),
-                        &remote_probe_command(),
-                        3,
-                        true,
-                    )
-                    && let Ok(ip_facts) = parse_remote_facts(&ip_output)
-                    && ip_facts.hostname.eq_ignore_ascii_case(expected)
+            Ok(output) => {
+                if let Ok(facts) = parse_remote_facts(&output)
+                    && facts.hostname.eq_ignore_ascii_case(expected)
                 {
-                    return Ok(vec![DiscoveredPi {
-                        host: facts.ip.clone(),
-                        address: if ip_facts.ip.is_empty() {
-                            facts.ip
-                        } else {
-                            ip_facts.ip
-                        },
-                        model: ip_facts.model,
-                    }]);
+                    // The prepared hostname can resolve unreliably on home
+                    // routers. Once its SSH identity is confirmed, also verify
+                    // the reported IPv4 address and pin that address with the
+                    // same accept-new policy. Later install/status calls can use
+                    // the stable IP while strict host-key checking stays enabled.
+                    // Certains routeurs résolvent mal le nom préparé. Après confirmation
+                    // de l’identité SSH, vérifier l’adresse IPv4 annoncée puis l’épingler
+                    // avec la même règle. Les étapes suivantes peuvent utiliser cette IP
+                    // stable sans relâcher le contrôle strict de la clé hôte.
+                    if !facts.ip.is_empty()
+                        && let Ok(ip_output) = run_ssh_after_verified_pi_identity(
+                            &format!("{username}@{}", facts.ip),
+                            &remote_probe_command(),
+                            3,
+                        )
+                        && let Ok(ip_facts) = parse_remote_facts(&ip_output)
+                        && ip_facts.hostname.eq_ignore_ascii_case(expected)
+                    {
+                        return Ok(vec![DiscoveredPi {
+                            host: facts.ip.clone(),
+                            address: if ip_facts.ip.is_empty() {
+                                facts.ip
+                            } else {
+                                ip_facts.ip
+                            },
+                            model: ip_facts.model,
+                        }]);
+                    }
+                    // Do not hand the installer a hostname whose IP path has
+                    // already failed. Continue through DNS-SD and the bounded
+                    // local scan so the remaining SSH steps use a verified IP.
+                    // Ne pas transmettre à l’installation un nom dont le chemin IP a
+                    // déjà échoué. Continuer avec DNS-SD puis le balayage local limité
+                    // afin que les étapes SSH suivantes utilisent une IP vérifiée.
                 }
-                // Do not hand the installer a hostname whose IP path has
-                // already failed. Continue through DNS-SD and the bounded
-                // local scan so the remaining SSH steps use a verified IP.
             }
+            Err(error) if ssh_authentication_rejected(&error) => {
+                return Err(format!(
+                    "Le nom préparé « {expected}.local » répond bien en SSH, mais refuse la clé de cette installation. Le Pi est joignable; son premier démarrage n’a probablement pas appliqué le compte ou la clé SSH. Aucun serveur n’a été installé."
+                ));
+            }
+            Err(_) => {}
         }
     }
     let mdns = ServiceDaemon::new()
@@ -4656,6 +4738,9 @@ fn discover_pi_internal(
         // Probe the IPv4 address as well as its mDNS name. For a first-boot
         // card this safely trusts the same unique, random-hostname Pi and
         // records its SSH key under the IP used by subsequent operations.
+        // Vérifier l’adresse IPv4 en plus du nom mDNS. Pour une carte de premier
+        // démarrage, cela confirme le même Pi et enregistre sa clé SSH sous l’IP
+        // utilisée par les opérations suivantes.
         targets.push((address.clone(), address, true));
     }
     targets.sort();
@@ -4675,7 +4760,20 @@ fn discover_pi_internal(
         });
     }
     drop(sender);
-    let mut discovered = receiver
+    let responses = receiver.into_iter().collect::<Vec<_>>();
+    if let Some(expected) = expected_hostname
+        && responses.iter().any(|(_, _, _, result)| {
+            result
+                .as_ref()
+                .err()
+                .is_some_and(|error| ssh_authentication_rejected(error))
+        })
+    {
+        return Err(format!(
+            "Le Pi préparé « {expected} » est annoncé sur le réseau et répond en SSH, mais refuse la clé ou le compte « {username} » de cette installation. Son premier démarrage n’a probablement pas appliqué son accès SSH. Aucun serveur n’a été installé."
+        ));
+    }
+    let mut discovered = responses
         .into_iter()
         .filter_map(|(host, address, by_ip, result)| {
             if expected_hostname.is_some() && !by_ip {
@@ -4719,6 +4817,10 @@ fn discover_pi_internal(
 /// /23, probes only TCP/22, and authenticates only the expected card hostname.
 /// Host keys discovered by this one-time IP scan are held in a private temp
 /// file and removed afterward; normal SSH trust settings remain untouched.
+/// Secours pour les routeurs qui attribuent une adresse sans publier SSH par mDNS.
+/// Le balayage se limite aux sous-réseaux IPv4 directement connectés jusqu’à /23,
+/// teste TCP/22 et authentifie uniquement le nom attendu. Le fichier de clés temporaire
+/// est supprimé ensuite ; la configuration SSH habituelle reste intacte.
 fn discover_prepared_pi_by_local_scan(
     username: &str,
     expected_hostname: &str,
@@ -4759,6 +4861,7 @@ fn discover_prepared_pi_by_local_scan(
 
     let candidates = candidates.into_iter().collect::<Vec<_>>();
     let mut reachable = Vec::new();
+    let mut authentication_rejection_hosts = Vec::new();
     for batch in candidates.chunks(64) {
         let (sender, receiver) = std::sync::mpsc::channel();
         for candidate in batch.iter().copied() {
@@ -4811,22 +4914,27 @@ fn discover_prepared_pi_by_local_scan(
             &known_hosts,
         ) {
             Ok(output) => {
-                if let Ok(facts) = parse_remote_facts(&output) {
-                    if !facts.hostname.eq_ignore_ascii_case(expected_hostname) {
-                        authenticated_hosts.push(format!("{host} ({})", facts.hostname));
-                        continue;
-                    }
+                let facts = match parse_remote_facts(&output) {
+                    Ok(facts) => facts,
+                    Err(_) => continue,
+                };
+                if !facts.hostname.eq_ignore_ascii_case(expected_hostname) {
+                    authenticated_hosts.push(format!("{host} ({})", facts.hostname));
+                    continue;
                 }
                 // The temporary file above proves which Pi answered, but
                 // install_pi uses the user's normal strict SSH known-hosts
                 // store. Pin the already-verified IP there before returning
                 // so the following install can connect without weakening
                 // host-key checks or leaving a one-use key file behind.
-                if let Ok(pinned_output) = run_ssh_timeout_policy(
+                // Le fichier temporaire prouve quel Pi a répondu, mais install_pi
+                // utilise le fichier known_hosts strict habituel. Épingler l’IP vérifiée
+                // avant le retour pour permettre l’installation sans assouplir les
+                // contrôles ni conserver une clé temporaire.
+                if let Ok(pinned_output) = run_ssh_after_verified_pi_identity(
                     &format!("{username}@{host}"),
                     &remote_probe_command(),
                     3,
-                    true,
                 ) && let Ok(pinned_facts) = parse_remote_facts(&pinned_output)
                     && pinned_facts
                         .hostname
@@ -4845,8 +4953,9 @@ fn discover_prepared_pi_by_local_scan(
                 }
             }
             Err(error) => {
-                if error.to_ascii_lowercase().contains("permission denied") {
+                if ssh_authentication_rejected(&error) {
                     authentication_rejections += 1;
+                    authentication_rejection_hosts.push(host);
                 }
             }
         }
@@ -4862,8 +4971,9 @@ fn discover_prepared_pi_by_local_scan(
         ));
     }
     if authentication_rejections > 0 {
+        let responders = authentication_rejection_hosts.join(", ");
         return Err(format!(
-            "{} appareil(s) répondent en SSH sur le réseau, mais refusent la clé ou le compte « {username} » préparé par l’application. Cela indique que le premier démarrage n’a pas appliqué l’accès SSH de la carte, ou que ces appareils ne sont pas le Pi préparé. Vérifie que le Pi a bien démarré sur cette carte. Aucun serveur n’a été installé.",
+            "{} appareil(s) SSH non identifiés ({responders}) ont refusé la clé. L’application n’a pas confirmé que l’un d’eux est le Raspberry Pi préparé « {expected_hostname} »; ces réponses ne prouvent donc pas que le Pi a rejeté la configuration. Vérifie que le Pi a démarré sur cette carte et que son nom apparaît sur le réseau. Aucun serveur n’a été installé.",
             authentication_rejections
         ));
     }
@@ -4875,10 +4985,60 @@ fn discover_prepared_pi_by_local_scan(
     })
 }
 
+fn ssh_authentication_rejected(error: &str) -> bool {
+    // Do not confuse an unauthenticated LAN host with the card's Pi.
+    // Ne pas confondre un hôte SSH du réseau avec le Pi préparé.
+    error.to_ascii_lowercase().contains("permission denied")
+}
+
+/// Retries a changed IP host key only after a successful SSH probe has already
+/// confirmed the card's random hostname with this app's private key.
+/// N'autorise une nouvelle clé IP qu'après confirmation SSH du nom unique gravé
+/// sur la carte, avec la clé privée de l'application.
+fn run_ssh_after_verified_pi_identity(
+    destination: &str,
+    command: &str,
+    timeout_seconds: u8,
+) -> Result<String, String> {
+    match run_ssh_timeout_policy(destination, command, timeout_seconds, true) {
+        Ok(output) => Ok(output),
+        Err(error)
+            if error
+                .to_ascii_uppercase()
+                .contains("REMOTE HOST IDENTIFICATION HAS CHANGED") =>
+        {
+            let host = destination
+                .rsplit_once('@')
+                .map(|(_, host)| host)
+                .filter(|host| valid_remote_name(host))
+                .ok_or_else(|| "L’adresse du Pi vérifié n’est pas reconnue.".to_string())?;
+            let output = Command::new("ssh-keygen")
+                .args(["-R", host])
+                .output()
+                .map_err(|_| {
+                    "Impossible de renouveler la clé SSH périmée du Pi confirmé.".to_string()
+                })?;
+            if !output.status.success() {
+                let detail = String::from_utf8_lossy(&output.stderr).trim().to_string();
+                return Err(if detail.is_empty() {
+                    "Impossible de renouveler la clé SSH périmée du Pi confirmé.".into()
+                } else {
+                    format!("Impossible de renouveler la clé SSH périmée du Pi confirmé : {detail}")
+                });
+            }
+            run_ssh_timeout_policy(destination, command, timeout_seconds, true)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 /// Reads the saved installation's process, ports and recent log without
 /// changing anything on the Raspberry Pi.
 /// Keeps the app-managed reboot entry pointed at the selected server copy.
 /// Other entries in the user's crontab are preserved byte-for-byte by line.
+/// Lit le processus, les ports et le journal récent sans rien modifier sur le Pi.
+/// Maintient le démarrage automatique vers la copie sélectionnée ; les autres lignes
+/// de crontab de l’utilisateur sont préservées à l’identique.
 fn configure_pi_autostart(host: &str, username: &str, server_folder: &str) -> Result<bool, String> {
     if !valid_remote_name(host)
         || !valid_remote_name(username)
@@ -4892,6 +5052,110 @@ fn configure_pi_autostart(host: &str, username: &str, server_folder: &str) -> Re
     );
     let output = run_ssh(&destination, &command)?;
     Ok(output.lines().any(|line| line.trim() == "AUTOSTART=yes"))
+}
+
+/// Confirms that the Mac can complete Minecraft's Java status handshake with the Pi.
+/// Confirme que le Mac termine l’échange de statut Minecraft Java avec le Pi.
+fn java_status_reachable(address: &str, port: u16) -> bool {
+    use std::net::{IpAddr, SocketAddr};
+
+    fn write_varint(output: &mut Vec<u8>, mut value: u32) {
+        loop {
+            if value & !0x7f == 0 {
+                output.push(value as u8);
+                return;
+            }
+            output.push(((value & 0x7f) | 0x80) as u8);
+            value >>= 7;
+        }
+    }
+
+    fn read_varint(stream: &mut TcpStream) -> io::Result<u32> {
+        let mut result = 0u32;
+        for shift in (0..35).step_by(7) {
+            let mut byte = [0u8; 1];
+            stream.read_exact(&mut byte)?;
+            result |= u32::from(byte[0] & 0x7f) << shift;
+            if byte[0] & 0x80 == 0 {
+                return Ok(result);
+            }
+        }
+        Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Minecraft VarInt is too long",
+        ))
+    }
+
+    let Ok(ip) = address.parse::<IpAddr>() else {
+        return false;
+    };
+    let Ok(mut stream) =
+        TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_secs(2))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+
+    let address_bytes = address.as_bytes();
+    if address_bytes.len() > 255 {
+        return false;
+    }
+    let mut handshake = Vec::with_capacity(address_bytes.len() + 16);
+    write_varint(&mut handshake, 0); // Handshake packet ID / identifiant du paquet
+    write_varint(&mut handshake, 0); // Status-only protocol version / version de statut
+    write_varint(&mut handshake, address_bytes.len() as u32);
+    handshake.extend_from_slice(address_bytes);
+    handshake.extend_from_slice(&port.to_be_bytes());
+    write_varint(&mut handshake, 1); // Next state: status / état suivant : statut
+
+    let mut request = Vec::with_capacity(handshake.len() + 4);
+    write_varint(&mut request, handshake.len() as u32);
+    request.extend_from_slice(&handshake);
+    request.extend_from_slice(&[1, 0]); // One-byte status request / demande de statut
+    if stream.write_all(&request).is_err() {
+        return false;
+    }
+
+    let Ok(packet_length) = read_varint(&mut stream) else {
+        return false;
+    };
+    if packet_length == 0 || packet_length > 1024 * 1024 {
+        return false;
+    }
+    let Ok(packet_id) = read_varint(&mut stream) else {
+        return false;
+    };
+    let Ok(json_length) = read_varint(&mut stream) else {
+        return false;
+    };
+    if packet_id != 0 || json_length == 0 || json_length > packet_length {
+        return false;
+    }
+    let mut json = vec![0u8; json_length as usize];
+    if stream.read_exact(&mut json).is_err() {
+        return false;
+    }
+    serde_json::from_slice::<serde_json::Value>(&json)
+        .ok()
+        .and_then(|status| {
+            status
+                .get("version")?
+                .get("name")?
+                .as_str()
+                .map(str::to_owned)
+        })
+        .is_some_and(|version| !version.is_empty())
+}
+
+/// Checks that the Bedrock signaling TCP port is reachable from the Mac.
+/// Vérifie que le port TCP de signalement Bedrock est joignable depuis le Mac.
+fn tcp_service_reachable(address: &str, port: u16) -> bool {
+    use std::net::{IpAddr, SocketAddr};
+
+    address.parse::<IpAddr>().is_ok_and(|ip| {
+        TcpStream::connect_timeout(&SocketAddr::new(ip, port), Duration::from_secs(2)).is_ok()
+    })
 }
 
 pub fn inspect_pi_server(
@@ -4929,16 +5193,30 @@ pub fn inspect_pi_server(
             .unwrap_or_default()
             .trim()
     };
+    let address = get("IP=").to_string();
+    let java_port = profile
+        .get("java_port")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(JAVA_ALTERNATE_PORT as u64) as u16;
+    let bedrock_port = profile
+        .get("bedrock_port")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(BEDROCK_ALTERNATE_PORT as u64) as u16;
+    // A listening socket alone can look ready while clients still time out.
+    // Un simple port à l’écoute peut sembler prêt alors que les clients expirent.
+    let java_port_open = get("JAVA_PORT=") == "yes" && java_status_reachable(&address, java_port);
+    let bedrock_tcp_port_open =
+        get("BEDROCK_TCP=") == "yes" && tcp_service_reachable(&address, bedrock_port);
     Ok(PiServerStatus {
         running: get("RUNNING=") == "yes",
         ready: get("RUNNING=") == "yes"
             && get("READY=") == "yes"
-            && get("JAVA_PORT=") == "yes"
-            && get("BEDROCK_TCP=") == "yes"
+            && java_port_open
+            && bedrock_tcp_port_open
             && get("BEDROCK_PORT=") == "yes"
             && get("BEDROCK_NETHERNET=") == "yes",
-        java_port_open: get("JAVA_PORT=") == "yes",
-        bedrock_tcp_port_open: get("BEDROCK_TCP=") == "yes",
+        java_port_open,
+        bedrock_tcp_port_open,
         bedrock_port_open: get("BEDROCK_PORT=") == "yes",
         bedrock_nethernet_ready: get("BEDROCK_NETHERNET=") == "yes",
         autostart_configured: get("AUTOSTART=") == "yes",
@@ -4974,15 +5252,9 @@ pub fn inspect_pi_server(
             .get("floodgate_build_id")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or_default(),
-        java_port: profile
-            .get("java_port")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(JAVA_ALTERNATE_PORT as u64) as u16,
-        bedrock_port: profile
-            .get("bedrock_port")
-            .and_then(serde_json::Value::as_u64)
-            .unwrap_or(BEDROCK_ALTERNATE_PORT as u64) as u16,
-        address: get("IP=").to_string(),
+        java_port,
+        bedrock_port,
+        address,
         network_interface: get("NETWORK_INTERFACE=").to_string(),
         mac_address: get("MAC_ADDRESS=").to_string(),
         log: log.to_string(),
@@ -4992,6 +5264,9 @@ pub fn inspect_pi_server(
 /// Read-only update gate for a server created by Monde Ensemble. It only
 /// approves the managed Paper/Geyser/Floodgate stack; any unrecognized plugin,
 /// mod jar, symlink, or custom client pack blocks automatic updates.
+/// Contrôle en lecture seule des mises à jour d’un serveur créé par l’application.
+/// Seul l’ensemble Paper/Geyser/Floodgate géré est accepté ; tout plugin inconnu,
+/// JAR de mod, lien symbolique ou pack client personnalisé bloque la mise à jour.
 pub fn check_pi_update(
     host: &str,
     username: &str,
@@ -5220,6 +5495,9 @@ pub fn check_pi_update(
 /// Applies the newest official Paper/Geyser/Floodgate bundle to an idle,
 /// managed Pi server. The full server folder is archived before replacement;
 /// the new server must pass startup checks or the archive is restored.
+/// Applique les dernières versions officielles Paper/Geyser/Floodgate à un serveur
+/// Pi géré et inactif. Le dossier complet est archivé avant remplacement ; le nouveau
+/// serveur doit réussir ses contrôles de démarrage, sinon l’archive est restaurée.
 fn update_pi_server_if_ready(
     host: &str,
     username: &str,
@@ -5606,6 +5884,8 @@ exit 0"#
 
 /// Restarts only this app's saved installation, and only while both game
 /// ports are free. The existing log is kept so the user can inspect history.
+/// Redémarre uniquement l’installation enregistrée par l’application, si ses deux
+/// ports de jeu sont libres. Le journal est conservé pour garder l’historique.
 pub fn start_pi_server(
     host: &str,
     username: &str,
@@ -5719,6 +5999,8 @@ pub fn start_pi_server(
 
 /// Gracefully stops only the Paper process launched from the saved server
 /// directory. It never force-kills a process that does not exit cleanly.
+/// Arrête proprement le processus Paper lancé depuis le dossier enregistré. N’effectue
+/// jamais d’arrêt forcé si le processus ne se termine pas correctement.
 pub fn stop_pi_server(host: &str, username: &str, server_folder: &str) -> Result<String, String> {
     if !valid_remote_name(host)
         || !valid_remote_name(username)
@@ -5885,6 +6167,10 @@ fn run_ssh_timeout_policy(
     // For already-paired Pis, preserve the user's existing SSH behavior first.
     // Retry only OpenSSH's explicit agent-key exhaustion error, using the app
     // key alone; do not retry host-key or ordinary authentication failures.
+    // Pour les Pi déjà associés, conserver d’abord le comportement SSH existant.
+    // Réessayer uniquement après l’erreur explicite d’épuisement des clés de
+    // l’agent OpenSSH, avec la seule clé de l’application ; ne pas réessayer
+    // en cas d’erreur de clé hôte ou d’authentification ordinaire.
     if !accept_new_host_key
         && !output.status.success()
         && String::from_utf8_lossy(&output.stderr)
@@ -6012,6 +6298,8 @@ fn build_fresh_server(
         Artifact {
             // Linux is case-sensitive even when the build host's macOS
             // filesystem is not; keep canonical names in the package.
+            // Linux distingue les majuscules des minuscules, contrairement au système
+            // de fichiers macOS utilisé pour compiler. Conserver les noms canoniques.
             name: GEYSER_PLUGIN_JAR.into(),
             version: geyser.version.clone(),
             url: format!(
@@ -6083,6 +6371,9 @@ fn build_fresh_server(
 /// Paper's published matrix requires Java 25 for Minecraft 26.1 and later in
 /// the 26.x release line. Unknown versions are rejected rather than guessed;
 /// update this gate only after checking Paper's current requirements.
+/// La matrice publiée par Paper exige Java 25 pour Minecraft 26.1 et les versions
+/// ultérieures de la branche 26.x. Refuser les versions inconnues au lieu de deviner ;
+/// ne modifier ce contrôle qu’après vérification des exigences Paper actuelles.
 fn java_major_for(game_version: &str) -> Result<u8, String> {
     let mut parts = game_version.split('.');
     let major = parts.next().and_then(|part| part.parse::<u16>().ok());
@@ -6532,6 +6823,8 @@ pub fn create_backup(
     let checksum = hash_file(&staging)?;
     // A hard link in the same folder publishes the complete file atomically
     // and fails instead of replacing a file created concurrently.
+    // Un lien physique dans le même dossier publie le fichier complet atomiquement
+    // et échoue au lieu d’écraser un fichier créé simultanément.
     fs::hard_link(&staging, output_file).map_err(|error| {
         let _ = fs::remove_file(&staging);
         format!("Impossible de créer la sauvegarde sans écraser un fichier existant : {error}")
@@ -6570,6 +6863,8 @@ pub fn create_backup(
 
 /// A user checkbox cannot prove that a manually launched Minecraft process
 /// has stopped. Check the configured game ports immediately before copying.
+/// Une case cochée ne prouve pas qu’un processus Minecraft lancé manuellement est
+/// arrêté. Vérifier les ports de jeu configurés juste avant la copie.
 fn ensure_backup_ports_closed(server_dir: &Path) -> Result<(), String> {
     let profile_path = server_dir.join("monde-ensemble-profile.json");
     let profile = match fs::symlink_metadata(&profile_path) {
@@ -7044,6 +7339,8 @@ pub fn restore_backup(
 
 /// Restores a verified archive to a new sibling server on an already configured Pi.
 /// The existing installation is never replaced, and the restored server is not started.
+/// Restaure une archive vérifiée dans un nouveau dossier voisin sur un Pi configuré.
+/// L’installation existante n’est jamais remplacée et le serveur restauré reste arrêté.
 pub fn restore_pi_backup(
     host: &str,
     username: &str,
@@ -7424,6 +7721,9 @@ fn extract_validated(
             // Archives made by tar/append_dir_all commonly include an explicit
             // root `server/` directory. It is validated even though the
             // staging directory already exists and needs no extraction.
+            // Les archives tar/append_dir_all contiennent souvent un dossier racine
+            // server/ explicite. Le valider même si le dossier temporaire existe déjà
+            // et ne nécessite aucune extraction.
             extracted_count += 1;
             continue;
         }
@@ -7667,6 +7967,8 @@ fn download_verified(
 
 /// Fetch independent, checksum-pinned server components concurrently. Every
 /// artifact still passes the same HTTPS, SHA-256 and JAR validation as before.
+/// Télécharge en parallèle des composants indépendants dont les empreintes sont
+/// épinglées. Chaque fichier subit les contrôles HTTPS, SHA-256 et JAR habituels.
 fn download_artifacts_parallel(
     client: &Client,
     artifacts: &[Artifact],
@@ -7864,6 +8166,9 @@ fn hash_file_sha512(path: &Path) -> Option<String> {
 /// Current Geyser plugin JARs can omit `config.yml`: Geyser supplies the rest
 /// of its configuration from annotated defaults when it loads this file.
 /// Keep only the settings needed for the managed Java/Bedrock bridge here.
+/// Les JAR Geyser récents peuvent omettre config.yml : Geyser complète les réglages
+/// à partir de ses valeurs par défaut annotées. Ne conserver ici que les options
+/// nécessaires au pont Java/Bedrock géré.
 const GEYSER_CONFIG_FALLBACK: &str = "bedrock:\n  port: 19132\n  transport: nethernet\nremote:\n  address: auto\n  auth-type: online\n";
 
 fn geyser_config_from_archive<R: Read + Seek>(
@@ -7897,6 +8202,9 @@ fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value)
     // Older managed profiles did not record a config digest. Compare their
     // current config with the exact generated defaults from their installed
     // Geyser jar, so an untouched legacy install can still be recognized.
+    // Les anciens profils gérés n’enregistraient pas l’empreinte de configuration.
+    // Comparer leur fichier aux valeurs par défaut exactes du JAR Geyser installé
+    // pour reconnaître une ancienne installation restée intacte.
     let Some(bedrock_port) = profile
         .get("bedrock_port")
         .and_then(serde_json::Value::as_u64)
@@ -7925,6 +8233,9 @@ fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value)
     // Older managed profiles used the same official template without an
     // explicit transport. Recognize that exact default so an update can
     // migrate it transactionally instead of making the user edit YAML.
+    // Les anciens profils utilisaient le modèle officiel sans transport explicite.
+    // Reconnaître cette valeur exacte permet une migration transactionnelle sans
+    // demander à l’utilisateur de modifier le YAML.
     let legacy = set_yaml(&template, "bedrock", "port", &bedrock_port.to_string());
     let legacy = set_yaml(&legacy, "remote", "auth-type", "floodgate");
     format!("{:x}", Sha256::digest(legacy.as_bytes())) == actual_hash
@@ -7932,6 +8243,9 @@ fn geyser_config_matches_profile(server_dir: &Path, profile: &serde_json::Value)
 
 /// Migrates only an exact application-managed Geyser default during restore.
 /// Customized or unverifiable configurations are preserved byte-for-byte.
+/// Ne migre que la valeur par défaut exacte de Geyser gérée par l’application lors
+/// d’une restauration. Les configurations personnalisées ou invérifiables sont
+/// conservées octet pour octet.
 fn migrate_restored_geyser_config(
     server_dir: &Path,
     profile: &mut serde_json::Value,
@@ -7972,6 +8286,9 @@ fn migrate_restored_geyser_config(
     // An unchanged hash is not sufficient evidence that the file is the
     // standard template: require the exact prior app-generated configuration
     // before replacing it. Custom or unfamiliar YAML stays untouched.
+    // Une empreinte inchangée ne prouve pas à elle seule qu’il s’agit du modèle
+    // standard : exiger la configuration exacte générée auparavant par l’application
+    // avant tout remplacement. Le YAML personnalisé ou inconnu reste intact.
     let legacy = set_yaml(&template, "bedrock", "port", &port.to_string());
     let legacy = set_yaml(&legacy, "remote", "auth-type", "floodgate");
     if format!("{:x}", Sha256::digest(legacy.as_bytes())) != actual_hash {
@@ -8191,6 +8508,8 @@ mod tests {
         header.set_cksum();
         // The normal builder refuses traversal paths. Use a raw header here
         // to model an archive crafted outside this application.
+        // Le constructeur normal refuse les chemins qui sortent du dossier. Utiliser
+        // un en-tête brut pour représenter une archive créée hors de l’application.
         archive.append(&header, contents).unwrap();
         archive.finish().unwrap();
         archive.into_inner().unwrap().finish().unwrap();

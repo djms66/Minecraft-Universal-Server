@@ -25,6 +25,9 @@ MASTER = ICON_DIR / "icon.png"
 # Bounding boxes mapped from the supplied 512 x 512 app icon.  Each box is over
 # a colored face, so near-gray pixels inside it belong to the corresponding
 # negative-space letter rather than to the rounded tile.
+# Boîtes de délimitation reportées depuis l’icône fournie en 512 × 512. Chaque
+# boîte couvre une face colorée : les pixels presque gris sont donc les découpes
+# des lettres, et non le fond carré arrondi.
 GLYPH_BOXES_512 = (
     (90, 100, 220, 235),  # M
     (300, 100, 415, 235),  # U
@@ -60,6 +63,8 @@ def colorize_letters(image: Image.Image) -> Image.Image:
 
         # Extend one raster pixel beyond the solid tile-colored core to cover
         # the antialiased edge without leaving a gray halo around the glyph.
+        # Étendre d’un pixel raster au-delà du cœur uni du carré pour couvrir
+        # l’anticrénelage sans laisser de halo gris autour de la lettre.
         mask = white_core.filter(ImageFilter.MaxFilter(3)) if width >= 64 else white_core
         mask_data = mask.load()
         for y in range(crop.height):
